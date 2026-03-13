@@ -4,6 +4,40 @@
 
 #include <stdio.h>
 
+static void cpu_record_trace(Nes *nes, const Cpu6502 *cpu, uint16_t pc, uint8_t opcode) {
+    Cpu6502TraceEntry *entry = &nes->trace[nes->trace_head];
+
+    entry->instruction_index = nes->stats.instruction_count + 1;
+    entry->pc = pc;
+    entry->opcode = opcode;
+    entry->a = cpu->a;
+    entry->x = cpu->x;
+    entry->y = cpu->y;
+    entry->sp = cpu->sp;
+    entry->p = cpu->p;
+    entry->cpu_cycles = cpu->cycles;
+
+    nes->trace_head = (uint8_t)((nes->trace_head + 1u) % NES_TRACE_CAPACITY);
+    if (nes->trace_count < NES_TRACE_CAPACITY) {
+        ++nes->trace_count;
+    }
+}
+
+static void cpu_note_opcode(Nes *nes, uint16_t pc, uint8_t opcode) {
+    const Cpu6502OpcodeInfo *info = cpu6502_opcode_info(opcode);
+
+    if (nes->stats.opcode_counts[opcode]++ == 0) {
+        ++nes->stats.unique_opcodes;
+    }
+    if (nes->stop_info.reason == NES_STOP_NONE) {
+        nes->stop_info.pc = pc;
+        nes->stop_info.opcode = opcode;
+        nes->stop_info.opcode_is_official = info->official;
+        nes->stop_info.opcode_is_supported = info->supported;
+        nes->stop_info.instruction_index = nes->stats.instruction_count + 1;
+    }
+}
+
 static inline uint8_t cpu_read(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
     (void)cpu;
     return nes_cpu_bus_read(nes, addr);
@@ -243,24 +277,39 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
     uint16_t addr = 0;
     uint8_t value = 0;
     int8_t rel = 0;
+    uint16_t pc_before = cpu->pc;
+    const Cpu6502OpcodeInfo *opcode_info;
 
     if (cpu->jammed) {
+        if (nes->stop_info.reason == NES_STOP_NONE) {
+            nes->stop_info.reason = NES_STOP_CPU_JAMMED;
+            nes->stop_info.pc = cpu->pc;
+            nes->stop_info.opcode = cpu->last_opcode;
+            nes->stop_info.opcode_is_official = cpu6502_opcode_info(cpu->last_opcode)->official;
+            nes->stop_info.opcode_is_supported = cpu6502_opcode_info(cpu->last_opcode)->supported;
+            nes->stop_info.instruction_index = nes->stats.instruction_count;
+        }
         snprintf(nes->last_error, sizeof(nes->last_error), "CPU is jammed");
         return false;
     }
 
     if (nes->ppu.nmi_pending) {
         nes->ppu.nmi_pending = false;
+        ++nes->stats.nmi_count;
         cpu_service_interrupt(cpu, nes, 0xfffau, false);
         return true;
     }
 
     cpu->last_opcode = cpu_fetch8(cpu, nes);
+    opcode_info = cpu6502_opcode_info(cpu->last_opcode);
+    cpu_record_trace(nes, cpu, pc_before, cpu->last_opcode);
+    cpu_note_opcode(nes, pc_before, cpu->last_opcode);
 
     switch (cpu->last_opcode) {
     case 0x00:
         cpu->pc++;
         cpu_service_interrupt(cpu, nes, 0xfffeu, true);
+        ++nes->stats.instruction_count;
         return true;
 
     case 0x01:
@@ -369,6 +418,12 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
         cpu->a &= cpu_read(cpu, nes, cpu_addr_zp(cpu, nes));
         cpu_set_zn(cpu, cpu->a);
         cycles = 3;
+        break;
+    case 0x26:
+        addr = cpu_addr_zp(cpu, nes);
+        value = cpu_rol_value(cpu, cpu_read(cpu, nes, addr));
+        cpu_write(cpu, nes, addr, value);
+        cycles = 5;
         break;
     case 0x28:
         cpu->p = (uint8_t)((cpu_pop(cpu, nes) & (uint8_t)~CPU6502_FLAG_B) | CPU6502_FLAG_U);
@@ -549,6 +604,12 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
     case 0x65:
         cpu_adc(cpu, cpu_read(cpu, nes, cpu_addr_zp(cpu, nes)));
         cycles = 3;
+        break;
+    case 0x66:
+        addr = cpu_addr_zp(cpu, nes);
+        value = cpu_ror_value(cpu, cpu_read(cpu, nes, addr));
+        cpu_write(cpu, nes, addr, value);
+        cycles = 5;
         break;
     case 0x68:
         cpu->a = cpu_pop(cpu, nes);
@@ -1002,12 +1063,29 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
         cycles = 7;
         break;
     default:
+        if (nes->stop_info.reason == NES_STOP_NONE) {
+            nes->stop_info.reason = opcode_info->official ? NES_STOP_UNSUPPORTED_OPCODE : NES_STOP_ILLEGAL_OPCODE;
+            nes->stop_info.pc = pc_before;
+            nes->stop_info.opcode = cpu->last_opcode;
+            nes->stop_info.opcode_is_official = opcode_info->official;
+            nes->stop_info.opcode_is_supported = opcode_info->supported;
+            nes->stop_info.instruction_index = nes->stats.instruction_count + 1;
+        }
         snprintf(
             nes->last_error,
             sizeof(nes->last_error),
-            "unsupported opcode $%02x at PC=$%04x",
+            "%s opcode $%02x (%s %s) at PC=$%04x A=%02x X=%02x Y=%02x SP=%02x P=%02x instr=%llu",
+            opcode_info->official ? "unsupported" : "illegal",
             cpu->last_opcode,
-            (uint16_t)(cpu->pc - 1u)
+            opcode_info->mnemonic,
+            opcode_info->addressing_mode,
+            pc_before,
+            cpu->a,
+            cpu->x,
+            cpu->y,
+            cpu->sp,
+            cpu->p,
+            (unsigned long long)(nes->stats.instruction_count + 1)
         );
         cpu->jammed = true;
         return false;
@@ -1015,6 +1093,7 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
 
     cpu->p |= CPU6502_FLAG_U;
     cpu->cycles += cycles;
+    ++nes->stats.instruction_count;
     apu_step(&nes->apu, cycles);
     ppu_step_cycles(&nes->ppu, &nes->cartridge, cycles * 3u);
     return true;

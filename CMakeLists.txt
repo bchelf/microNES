@@ -18,6 +18,7 @@ set(SMB2350_COMMON_SOURCES
     src/common/apu.c
     src/common/cart.c
     src/common/cpu6502.c
+    src/common/cpu6502_opcode.c
     src/common/input.c
     src/common/nes.c
     src/common/nrom.c

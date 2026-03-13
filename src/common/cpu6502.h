@@ -29,6 +29,18 @@ typedef struct {
     bool jammed;
 } Cpu6502;
 
+typedef struct {
+    uint64_t instruction_index;
+    uint16_t pc;
+    uint8_t opcode;
+    uint8_t a;
+    uint8_t x;
+    uint8_t y;
+    uint8_t sp;
+    uint8_t p;
+    uint64_t cpu_cycles;
+} Cpu6502TraceEntry;
+
 void cpu6502_init(Cpu6502 *cpu);
 void cpu6502_reset(Cpu6502 *cpu, struct Nes *nes);
 bool cpu6502_step(Cpu6502 *cpu, struct Nes *nes);
