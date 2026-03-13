@@ -26,6 +26,36 @@ typedef struct {
     bool opaque;
 } PpuPixelSample;
 
+static uint64_t ppu_hash_framebuffer(const NesFrameBuffer *frame_buffer) {
+    uint64_t hash = 1469598103934665603ull;
+
+    for (uint32_t i = 0; i < NES_FRAME_WIDTH * NES_FRAME_HEIGHT; ++i) {
+        hash ^= frame_buffer->pixels[i];
+        hash *= 1099511628211ull;
+    }
+
+    return hash;
+}
+
+static void ppu_finalize_frame(Ppu *ppu) {
+    uint32_t nonzero_pixels = 0;
+
+    for (uint32_t i = 0; i < NES_FRAME_WIDTH * NES_FRAME_HEIGHT; ++i) {
+        if (ppu->frame_buffer.pixels[i] != 0) {
+            ++nonzero_pixels;
+        }
+    }
+
+    ++ppu->completed_frame_count;
+    ppu->completed_frame_ready = true;
+    ppu->last_completed_nonzero_pixels = nonzero_pixels;
+    ppu->last_completed_frame_hash = ppu_hash_framebuffer(&ppu->frame_buffer);
+    if (nonzero_pixels != 0 && ppu->first_nonblank_frame_index == 0) {
+        ppu->first_nonblank_frame_index = ppu->completed_frame_count;
+        ppu->first_nonblank_frame_hash = ppu->last_completed_frame_hash;
+    }
+}
+
 static uint16_t ppu_palette_index(uint16_t addr) {
     uint16_t index = addr & 0x1fu;
     if (index == 0x10u) index = 0x00u;
@@ -259,6 +289,12 @@ void ppu_reset(Ppu *ppu) {
     ppu->frame_ready = false;
     ppu->scanline_ready = false;
     ppu->nmi_pending = false;
+    ppu->completed_frame_count = 0;
+    ppu->completed_frame_ready = false;
+    ppu->last_completed_frame_hash = 0;
+    ppu->last_completed_nonzero_pixels = 0;
+    ppu->first_nonblank_frame_index = 0;
+    ppu->first_nonblank_frame_hash = 0;
     ppu->sprite0_hit_ever = false;
     ppu->sprite0_hit_count = 0;
     ppu->sprite0_opaque_pixel_count = 0;
@@ -285,6 +321,7 @@ void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
         ++ppu->cycle;
 
         if (ppu->scanline == 241 && ppu->cycle == 1) {
+            ppu_finalize_frame(ppu);
             ppu->status |= PPU_STATUS_VBLANK;
             ppu->frame_ready = true;
             if (ppu->ctrl & 0x80u) {
@@ -293,6 +330,7 @@ void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
         } else if (ppu->scanline == 261 && ppu->cycle == 1) {
             ppu->status &= (uint8_t)~(PPU_STATUS_VBLANK | PPU_STATUS_SPRITE0_HIT);
             ppu->frame_ready = false;
+            ppu->completed_frame_ready = false;
             ppu->scanline_ready = false;
             ppu->scanline_buffer.ready = false;
         }

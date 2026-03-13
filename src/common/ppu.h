@@ -29,6 +29,12 @@ typedef struct {
     bool frame_ready;
     bool scanline_ready;
     bool nmi_pending;
+    uint64_t completed_frame_count;
+    bool completed_frame_ready;
+    uint64_t last_completed_frame_hash;
+    uint32_t last_completed_nonzero_pixels;
+    uint64_t first_nonblank_frame_index;
+    uint64_t first_nonblank_frame_hash;
     bool sprite0_hit_ever;
     uint64_t sprite0_hit_count;
     uint64_t sprite0_opaque_pixel_count;

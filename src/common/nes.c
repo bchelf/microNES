@@ -183,6 +183,12 @@ uint64_t nes_state_hash(const Nes *nes) {
     HASH_BYTE(nes->cpu.pc & 0xffu);
     HASH_BYTE(nes->cpu.pc >> 8);
     HASH_U64(nes->ppu.frame_count);
+    HASH_U64(nes->ppu.completed_frame_count);
+    HASH_U64(nes->ppu.completed_frame_ready ? 1u : 0u);
+    HASH_U64(nes->ppu.last_completed_frame_hash);
+    HASH_U64(nes->ppu.last_completed_nonzero_pixels);
+    HASH_U64(nes->ppu.first_nonblank_frame_index);
+    HASH_U64(nes->ppu.first_nonblank_frame_hash);
     HASH_U64((uint64_t)(uint32_t)nes->ppu.scanline);
     HASH_U64(nes->stats.nmi_count);
     HASH_U64(nes->ppu.sprite0_hit_count);

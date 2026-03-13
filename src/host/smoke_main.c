@@ -16,6 +16,11 @@ typedef struct {
     uint64_t nmi_count;
     uint64_t frames;
     int scanline;
+    uint64_t completed_frames;
+    uint64_t last_completed_frame_hash;
+    uint32_t last_completed_nonzero_pixels;
+    uint64_t first_nonblank_frame_index;
+    uint64_t first_nonblank_frame_hash;
     bool sprite0_hit_occurred;
     uint64_t sprite0_hit_count;
     uint64_t first_sprite0_hit_frame;
@@ -28,6 +33,22 @@ typedef struct {
     NesStopInfo stop_info;
     NesExecutionStats stats;
 } SmokeRunResult;
+
+static bool dump_framebuffer_pgm(const char *path, const NesFrameBuffer *framebuffer) {
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        return false;
+    }
+
+    fprintf(file, "P5\n%d %d\n255\n", NES_FRAME_WIDTH, NES_FRAME_HEIGHT);
+    if (fwrite(framebuffer->pixels, 1, sizeof(framebuffer->pixels), file) != sizeof(framebuffer->pixels)) {
+        fclose(file);
+        return false;
+    }
+
+    fclose(file);
+    return true;
+}
 
 static void print_cpu_state(const Cpu6502 *cpu) {
     printf(
@@ -178,7 +199,13 @@ static void print_stop_summary(const Nes *nes) {
     }
 }
 
-static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunResult *result, bool verbose) {
+static bool run_smoke_pass(
+    const char *rom_path,
+    uint64_t step_limit,
+    const char *dump_frame_path,
+    SmokeRunResult *result,
+    bool verbose
+) {
     Nes nes;
     bool ok = true;
     bool entered_old_wait_loop = false;
@@ -240,6 +267,11 @@ static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunRe
     result->nmi_count = nes.stats.nmi_count;
     result->frames = nes_frame_count(&nes);
     result->scanline = nes_scanline(&nes);
+    result->completed_frames = nes.ppu.completed_frame_count;
+    result->last_completed_frame_hash = nes.ppu.last_completed_frame_hash;
+    result->last_completed_nonzero_pixels = nes.ppu.last_completed_nonzero_pixels;
+    result->first_nonblank_frame_index = nes.ppu.first_nonblank_frame_index;
+    result->first_nonblank_frame_hash = nes.ppu.first_nonblank_frame_hash;
     result->sprite0_hit_occurred = nes.ppu.sprite0_hit_ever;
     result->sprite0_hit_count = nes.ppu.sprite0_hit_count;
     result->first_sprite0_hit_frame = nes.ppu.first_sprite0_hit_frame;
@@ -256,6 +288,20 @@ static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunRe
         printf("Instructions executed: %" PRIu64 "\n", nes.stats.instruction_count);
         printf("Unique opcodes executed: %" PRIu32 "\n", nes.stats.unique_opcodes);
         printf("NMI count: %" PRIu64 "\n", nes.stats.nmi_count);
+        printf(
+            "Completed frames=%" PRIu64 " last_frame_hash=0x%016" PRIx64 " last_nonzero_pixels=%" PRIu32,
+            nes.ppu.completed_frame_count,
+            nes.ppu.last_completed_frame_hash,
+            nes.ppu.last_completed_nonzero_pixels
+        );
+        if (nes.ppu.first_nonblank_frame_index != 0) {
+            printf(
+                " first_nonblank_frame=%" PRIu64 " first_nonblank_hash=0x%016" PRIx64,
+                nes.ppu.first_nonblank_frame_index,
+                nes.ppu.first_nonblank_frame_hash
+            );
+        }
+        printf("\n");
         printf(
             "Sprite-0 hit: %s count=%" PRIu64,
             nes.ppu.sprite0_hit_ever ? "yes" : "no",
@@ -319,6 +365,13 @@ static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunRe
         print_trace_window(&nes);
         printf("State hash: 0x%016" PRIx64 "\n", nes_state_hash(&nes));
         printf("Coverage hash: 0x%016" PRIx64 "\n", hash_opcode_coverage(&nes.stats));
+        if (dump_frame_path != NULL) {
+            if (dump_framebuffer_pgm(dump_frame_path, &nes.ppu.frame_buffer)) {
+                printf("Frame dump: %s (PGM)\n", dump_frame_path);
+            } else {
+                printf("Frame dump failed: %s\n", dump_frame_path);
+            }
+        }
     }
 
     nes_destroy(&nes);
@@ -333,6 +386,11 @@ static bool compare_runs(const SmokeRunResult *a, const SmokeRunResult *b) {
     if (a->unique_opcodes != b->unique_opcodes) return false;
     if (a->nmi_count != b->nmi_count) return false;
     if (a->frames != b->frames || a->scanline != b->scanline) return false;
+    if (a->completed_frames != b->completed_frames) return false;
+    if (a->last_completed_frame_hash != b->last_completed_frame_hash) return false;
+    if (a->last_completed_nonzero_pixels != b->last_completed_nonzero_pixels) return false;
+    if (a->first_nonblank_frame_index != b->first_nonblank_frame_index) return false;
+    if (a->first_nonblank_frame_hash != b->first_nonblank_frame_hash) return false;
     if (a->sprite0_hit_occurred != b->sprite0_hit_occurred) return false;
     if (a->sprite0_hit_count != b->sprite0_hit_count) return false;
     if (a->first_sprite0_hit_frame != b->first_sprite0_hit_frame) return false;
@@ -350,17 +408,18 @@ static bool compare_runs(const SmokeRunResult *a, const SmokeRunResult *b) {
 int main(int argc, char **argv) {
     const char *rom_path = (argc > 1) ? argv[1] : "roms/smb1.nes";
     uint64_t step_limit = (argc > 2) ? strtoull(argv[2], NULL, 10) : 1000000ull;
+    const char *dump_frame_path = (argc > 3) ? argv[3] : NULL;
     SmokeRunResult run1;
     SmokeRunResult run2;
 
     memset(&run1, 0, sizeof(run1));
     memset(&run2, 0, sizeof(run2));
 
-    if (!run_smoke_pass(rom_path, step_limit, &run1, true)) {
+    if (!run_smoke_pass(rom_path, step_limit, dump_frame_path, &run1, true)) {
         return 1;
     }
 
-    if (!run_smoke_pass(rom_path, step_limit, &run2, false)) {
+    if (!run_smoke_pass(rom_path, step_limit, NULL, &run2, false)) {
         fprintf(stderr, "Determinism rerun failed unexpectedly\n");
         return 2;
     }
