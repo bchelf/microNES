@@ -1,4 +1,5 @@
 #include "nes.h"
+#include "png_write.h"
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -33,22 +34,6 @@ typedef struct {
     NesStopInfo stop_info;
     NesExecutionStats stats;
 } SmokeRunResult;
-
-static bool dump_framebuffer_pgm(const char *path, const NesFrameBuffer *framebuffer) {
-    FILE *file = fopen(path, "wb");
-    if (file == NULL) {
-        return false;
-    }
-
-    fprintf(file, "P5\n%d %d\n255\n", NES_FRAME_WIDTH, NES_FRAME_HEIGHT);
-    if (fwrite(framebuffer->pixels, 1, sizeof(framebuffer->pixels), file) != sizeof(framebuffer->pixels)) {
-        fclose(file);
-        return false;
-    }
-
-    fclose(file);
-    return true;
-}
 
 static void print_cpu_state(const Cpu6502 *cpu) {
     printf(
@@ -366,8 +351,14 @@ static bool run_smoke_pass(
         printf("State hash: 0x%016" PRIx64 "\n", nes_state_hash(&nes));
         printf("Coverage hash: 0x%016" PRIx64 "\n", hash_opcode_coverage(&nes.stats));
         if (dump_frame_path != NULL) {
-            if (dump_framebuffer_pgm(dump_frame_path, &nes.ppu.frame_buffer)) {
-                printf("Frame dump: %s (PGM)\n", dump_frame_path);
+            if (host_write_png_gray8(
+                    dump_frame_path,
+                    nes.ppu.frame_buffer.pixels,
+                    NES_FRAME_WIDTH,
+                    NES_FRAME_HEIGHT,
+                    NES_FRAME_WIDTH
+                )) {
+                printf("Frame dump: %s (PNG)\n", dump_frame_path);
             } else {
                 printf("Frame dump failed: %s\n", dump_frame_path);
             }

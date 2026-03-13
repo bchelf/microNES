@@ -35,6 +35,7 @@ target_include_directories(smb2350_core PUBLIC
 
 if (SMB2350_PLATFORM STREQUAL "host")
     add_executable(smb2350_smoke
+        src/host/png_write.c
         src/host/smoke_main.c
     )
 
