@@ -54,6 +54,178 @@ static uint64_t ppu_hash_framebuffer(const NesFrameBuffer *frame_buffer) {
     return hash;
 }
 
+static bool ppu_sprite0_diag_collect_this_frame(const Ppu *ppu) {
+    return (ppu->sprite0_diag.enabled &&
+            ppu->frame_count >= ppu->sprite0_diag.frame_start &&
+            ppu->frame_count <= ppu->sprite0_diag.frame_end) ||
+           !ppu->sprite0_diag.first_hit_frame_valid;
+}
+
+static void ppu_sprite0_diag_add_example(PpuSprite0FrameDiag *diag, uint8_t reason, int x, int y) {
+    if (!diag->valid || diag->example_count >= PPU_SPRITE0_DIAG_MAX_EXAMPLES) {
+        return;
+    }
+
+    diag->examples[diag->example_count].reason = reason;
+    diag->examples[diag->example_count].x = (uint16_t)x;
+    diag->examples[diag->example_count].y = (uint16_t)y;
+    ++diag->example_count;
+}
+
+static void ppu_sprite0_diag_begin_frame(Ppu *ppu) {
+    PpuSprite0FrameDiag *diag = &ppu->sprite0_diag.current_frame;
+
+    memset(diag, 0, sizeof(*diag));
+    diag->first_hit_x = -1;
+    diag->first_hit_y = -1;
+    diag->first_raw_overlap_x = -1;
+    diag->first_raw_overlap_y = -1;
+    diag->first_effective_overlap_x = -1;
+    diag->first_effective_overlap_y = -1;
+
+    if (!ppu_sprite0_diag_collect_this_frame(ppu)) {
+        return;
+    }
+
+    diag->valid = true;
+    diag->completed = false;
+    diag->render_frame_index = ppu->frame_count;
+    diag->completed_frame_index = ppu->completed_frame_count;
+    diag->sprite_y = ppu->oam[0];
+    diag->sprite_tile = ppu->oam[1];
+    diag->sprite_attributes = ppu->oam[2];
+    diag->sprite_x = ppu->oam[3];
+    diag->ctrl = ppu->ctrl;
+    diag->mask = ppu->mask;
+    diag->status = ppu->status;
+    diag->scroll_x = ppu->scroll_x;
+    diag->scroll_y = ppu->scroll_y;
+    diag->render_scroll_x = ppu->render_scroll_x;
+    diag->render_scroll_y = ppu->render_scroll_y;
+    diag->render_base_nametable = ppu->render_base_nametable;
+    diag->vram_addr = ppu->vram_addr;
+    diag->temp_addr = ppu->temp_addr;
+    diag->fine_x = ppu->fine_x;
+    diag->show_bg = (ppu->mask & PPU_MASK_SHOW_BG) != 0;
+    diag->show_sprites = (ppu->mask & PPU_MASK_SHOW_SPRITES) != 0;
+    diag->show_bg_left = (ppu->mask & PPU_MASK_SHOW_BG_LEFT) != 0;
+    diag->show_sprites_left = (ppu->mask & PPU_MASK_SHOW_SPRITES_LEFT) != 0;
+    diag->last_sprite0_oam_update_render_frame = ppu->sprite0_diag.last_sprite0_oam_update_render_frame;
+    diag->last_sprite0_oam_update_scanline = ppu->sprite0_diag.last_sprite0_oam_update_scanline;
+    diag->last_sprite0_oam_update_cycle = ppu->sprite0_diag.last_sprite0_oam_update_cycle;
+    diag->last_sprite0_oam_update_source = ppu->sprite0_diag.last_sprite0_oam_update_source;
+}
+
+static void ppu_sprite0_diag_commit_frame(Ppu *ppu) {
+    PpuSprite0FrameDiag *diag = &ppu->sprite0_diag.current_frame;
+
+    if (!diag->valid) {
+        return;
+    }
+
+    diag->completed = true;
+    diag->completed_frame_index = ppu->completed_frame_count;
+    diag->status = ppu->status;
+    diag->ctrl = ppu->ctrl;
+    diag->mask = ppu->mask;
+    diag->scroll_x = ppu->scroll_x;
+    diag->scroll_y = ppu->scroll_y;
+    diag->render_scroll_x = ppu->render_scroll_x;
+    diag->render_scroll_y = ppu->render_scroll_y;
+    diag->render_base_nametable = ppu->render_base_nametable;
+    diag->vram_addr = ppu->vram_addr;
+    diag->temp_addr = ppu->temp_addr;
+    diag->fine_x = ppu->fine_x;
+
+    if (diag->sprite0_hit_set_this_frame && !ppu->sprite0_diag.first_hit_frame_valid) {
+        ppu->sprite0_diag.first_hit_frame = *diag;
+        ppu->sprite0_diag.first_hit_frame_valid = true;
+    }
+
+    if (ppu->sprite0_diag.enabled &&
+        diag->render_frame_index >= ppu->sprite0_diag.frame_start &&
+        diag->render_frame_index <= ppu->sprite0_diag.frame_end &&
+        ppu->sprite0_diag.frame_count < PPU_SPRITE0_DIAG_MAX_FRAMES) {
+        ppu->sprite0_diag.frames[ppu->sprite0_diag.frame_count++] = *diag;
+    }
+}
+
+static void ppu_record_sprite0_status_set(Ppu *ppu, int x, int y) {
+    PpuSprite0FrameDiag *diag = &ppu->sprite0_diag.current_frame;
+
+    ++ppu->sprite0_diag.total_status_set_count;
+    ppu->sprite0_diag.last_status_set_render_frame = ppu->frame_count;
+    ppu->sprite0_diag.last_status_set_scanline = ppu->scanline;
+    ppu->sprite0_diag.last_status_set_cycle = ppu->cycle;
+
+    if (!diag->valid) {
+        return;
+    }
+    ++diag->sprite0_hit_set_count;
+    diag->sprite0_hit_set_this_frame = true;
+    if (diag->first_hit_x < 0) {
+        diag->first_hit_x = x;
+        diag->first_hit_y = y;
+    }
+}
+
+static void ppu_record_sprite0_status_clear(Ppu *ppu, bool expected) {
+    ++ppu->sprite0_diag.total_status_clear_count;
+    ppu->sprite0_diag.last_status_clear_render_frame = ppu->frame_count;
+    ppu->sprite0_diag.last_status_clear_scanline = ppu->scanline;
+    ppu->sprite0_diag.last_status_clear_cycle = ppu->cycle;
+    if (!expected) {
+        ++ppu->sprite0_diag.suspicious_status_clear_count;
+    }
+}
+
+static void ppu_latch_render_state(Ppu *ppu) {
+    uint16_t v = ppu->vram_addr;
+    uint16_t coarse_x = v & 0x001fu;
+    uint16_t coarse_y = (v >> 5) & 0x001fu;
+    uint16_t fine_y = (v >> 12) & 0x0007u;
+
+    ppu->render_vram_addr = v;
+    ppu->render_scroll_x = (uint8_t)(((coarse_x << 3) | ppu->fine_x) & 0xffu);
+    ppu->render_scroll_y = (uint8_t)(((coarse_y << 3) | fine_y) & 0xffu);
+    ppu->render_base_nametable = (uint8_t)((v >> 10) & 0x03u);
+}
+
+static bool ppu_rendering_enabled(const Ppu *ppu) {
+    return (ppu->mask & (PPU_MASK_SHOW_BG | PPU_MASK_SHOW_SPRITES)) != 0;
+}
+
+static void ppu_copy_horizontal_bits_from_temp(Ppu *ppu) {
+    ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x041fu) | (ppu->temp_addr & 0x041fu));
+}
+
+static void ppu_copy_vertical_bits_from_temp(Ppu *ppu) {
+    ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x7be0u) | (ppu->temp_addr & 0x7be0u));
+}
+
+static void ppu_increment_vertical_v(Ppu *ppu) {
+    if ((ppu->vram_addr & 0x7000u) != 0x7000u) {
+        ppu->vram_addr += 0x1000u;
+        return;
+    }
+
+    ppu->vram_addr &= (uint16_t)~0x7000u;
+    {
+        uint16_t coarse_y = (ppu->vram_addr & 0x03e0u) >> 5;
+
+        if (coarse_y == 29u) {
+            coarse_y = 0u;
+            ppu->vram_addr ^= 0x0800u;
+        } else if (coarse_y == 31u) {
+            coarse_y = 0u;
+        } else {
+            ++coarse_y;
+        }
+
+        ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x03e0u) | (coarse_y << 5));
+    }
+}
+
 static void ppu_finalize_frame(Ppu *ppu) {
     uint32_t nonzero_pixels = 0;
     uint32_t sprite_pixels = 0;
@@ -134,25 +306,23 @@ static void ppu_vram_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uin
 
 static PpuPixelSample ppu_background_pixel(const Ppu *ppu, const NesCartridge *cartridge, int x, int y) {
     PpuPixelSample sample;
-    int scrolled_x = (x + ppu->scroll_x) & 0x1ff;
-    int scrolled_y = (y + ppu->scroll_y) & 0x1ff;
-    uint16_t base_nametable = (uint16_t)(ppu->ctrl & 0x03u);
-    uint16_t name_table_x = (uint16_t)((scrolled_x >> 8) & 0x01u);
-    uint16_t name_table_y = (uint16_t)(scrolled_y >= NES_FRAME_HEIGHT ? 0x02u : 0x00u);
-    uint16_t effective_nametable = (uint16_t)(base_nametable ^ name_table_x ^ name_table_y);
+    uint16_t base_v = ppu->render_vram_addr;
+    uint16_t total_x = (uint16_t)(ppu->fine_x + x);
+    uint16_t coarse_x = (uint16_t)((base_v & 0x001fu) + (total_x >> 3));
+    uint16_t coarse_y = (base_v >> 5) & 0x001fu;
+    uint16_t effective_nametable = (uint16_t)(((base_v >> 10) & 0x0003u) ^ ((coarse_x >> 5) & 0x0001u));
+    coarse_x &= 0x001fu;
     uint16_t name_table = (uint16_t)(effective_nametable * 0x0400u);
-    uint16_t coarse_x = (uint16_t)((scrolled_x & 0xff) >> 3);
-    uint16_t coarse_y = (uint16_t)(((uint32_t)scrolled_y % NES_FRAME_HEIGHT) >> 3);
+    uint16_t row = (base_v >> 12) & 0x0007u;
     uint16_t tile_index_addr = (uint16_t)(0x2000u + name_table + coarse_y * 32u + coarse_x);
     uint16_t attr_addr = (uint16_t)(0x23c0u + name_table + ((coarse_y >> 2) * 8u) + (coarse_x >> 2));
     uint8_t tile = ppu->nametables[ppu_nametable_index(cartridge, tile_index_addr)];
     uint8_t attr = ppu->nametables[ppu_nametable_index(cartridge, attr_addr)];
     uint16_t pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
-    uint16_t row = (uint16_t)(scrolled_y & 0x07);
     uint16_t pattern_addr = (uint16_t)(pattern_base + tile * 16u + row);
     uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
     uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
-    uint8_t bit = (uint8_t)(7 - (scrolled_x & 0x07));
+    uint8_t bit = (uint8_t)(7 - (total_x & 0x07u));
     uint8_t color_low = (low >> bit) & 0x01u;
     uint8_t color_high = (high >> bit) & 0x01u;
     uint8_t palette_select = (attr >> ((((coarse_y & 0x02u) << 1) | (coarse_x & 0x02u)))) & 0x03u;
@@ -208,12 +378,13 @@ static uint8_t ppu_collect_scanline_sprites(const Ppu *ppu, int y, PpuScanlineSp
     return count;
 }
 
-static PpuSpritePixelSample ppu_sample_sprite_pixel(
+static PpuSpritePixelSample ppu_sample_sprite_pixel_internal(
     const Ppu *ppu,
     const NesCartridge *cartridge,
     const PpuScanlineSprite *sprite,
     int x,
-    int y
+    int y,
+    bool apply_left_mask
 ) {
     PpuSpritePixelSample sample = { 0, false, false, false };
     int sprite_height = ppu_sprite_height(ppu);
@@ -228,7 +399,7 @@ static PpuSpritePixelSample ppu_sample_sprite_pixel(
     if (x < sprite->x || x >= sprite->x + 8) {
         return sample;
     }
-    if (x < 8 && ((ppu->mask & PPU_MASK_SHOW_SPRITES_LEFT) == 0)) {
+    if (apply_left_mask && x < 8 && ((ppu->mask & PPU_MASK_SHOW_SPRITES_LEFT) == 0)) {
         return sample;
     }
 
@@ -271,6 +442,16 @@ static PpuSpritePixelSample ppu_sample_sprite_pixel(
     return sample;
 }
 
+static PpuSpritePixelSample ppu_sample_sprite_pixel(
+    const Ppu *ppu,
+    const NesCartridge *cartridge,
+    const PpuScanlineSprite *sprite,
+    int x,
+    int y
+) {
+    return ppu_sample_sprite_pixel_internal(ppu, cartridge, sprite, x, y, true);
+}
+
 static PpuSpritePixelSample ppu_visible_sprite_pixel(
     const Ppu *ppu,
     const NesCartridge *cartridge,
@@ -289,12 +470,115 @@ static PpuSpritePixelSample ppu_visible_sprite_pixel(
     return (PpuSpritePixelSample){ 0, false, false, false };
 }
 
+static void ppu_diag_note_sprite0_pixel(
+    Ppu *ppu,
+    const NesCartridge *cartridge,
+    const PpuScanlineSprite *selected_sprites,
+    uint8_t selected_sprite_count,
+    const PpuSpritePixelSample *winning_sprite,
+    int x,
+    int y
+) {
+    PpuSprite0FrameDiag *diag = &ppu->sprite0_diag.current_frame;
+    PpuScanlineSprite sprite0;
+    PpuSpritePixelSample sprite0_raw;
+    PpuPixelSample background_raw;
+    bool sprite0_selected = false;
+
+    if (!diag->valid) {
+        return;
+    }
+
+    sprite0.oam_index = 0;
+    sprite0.y = ppu->oam[0];
+    sprite0.tile = ppu->oam[1];
+    sprite0.attributes = ppu->oam[2];
+    sprite0.x = ppu->oam[3];
+
+    if (!ppu_sprite_intersects_scanline(&sprite0, y, ppu_sprite_height(ppu))) {
+        return;
+    }
+    if (x < sprite0.x || x >= sprite0.x + 8) {
+        return;
+    }
+
+    diag->sprite0_intersects_visible = true;
+    ++diag->visible_candidate_pixels;
+
+    sprite0_raw = ppu_sample_sprite_pixel_internal(ppu, cartridge, &sprite0, x, y, false);
+    background_raw = ppu_background_pixel(ppu, cartridge, x, y);
+    if (background_raw.opaque) {
+        ++diag->bg_opaque_pixels_in_sprite_bounds;
+    }
+
+    if (!diag->show_bg || !diag->show_sprites) {
+        ++diag->reject_render_disabled;
+        ppu_sprite0_diag_add_example(diag, PPU_SPRITE0_REJECT_RENDER_DISABLED, x, y);
+        return;
+    }
+    if (x < 8 && (!diag->show_bg_left || !diag->show_sprites_left)) {
+        ++diag->reject_left_mask;
+        ppu_sprite0_diag_add_example(diag, PPU_SPRITE0_REJECT_LEFT_MASK, x, y);
+        return;
+    }
+    if (!sprite0_raw.opaque) {
+        ++diag->reject_sprite_transparent;
+        ppu_sprite0_diag_add_example(diag, PPU_SPRITE0_REJECT_SPRITE_TRANSPARENT, x, y);
+        return;
+    }
+
+    ++diag->sprite0_opaque_pixels_raw;
+    if (!background_raw.opaque) {
+        ++diag->reject_bg_transparent;
+        ppu_sprite0_diag_add_example(diag, PPU_SPRITE0_REJECT_BG_TRANSPARENT, x, y);
+        return;
+    }
+
+    ++diag->raw_overlap_pixels;
+    if (!diag->first_raw_overlap_valid) {
+        diag->first_raw_overlap_valid = true;
+        diag->first_raw_overlap_x = x;
+        diag->first_raw_overlap_y = y;
+    }
+
+    if (x >= 255) {
+        ++diag->reject_x255;
+        ppu_sprite0_diag_add_example(diag, PPU_SPRITE0_REJECT_X255, x, y);
+        return;
+    }
+
+    for (uint8_t i = 0; i < selected_sprite_count; ++i) {
+        if (selected_sprites[i].oam_index == 0) {
+            sprite0_selected = true;
+            break;
+        }
+    }
+    if (!sprite0_selected) {
+        ++diag->reject_not_in_scanline_selection;
+        ppu_sprite0_diag_add_example(diag, PPU_SPRITE0_REJECT_NOT_IN_SCANLINE_SELECTION, x, y);
+        return;
+    }
+    if (winning_sprite->opaque && !winning_sprite->sprite0) {
+        ++diag->reject_occluded_by_earlier_sprite;
+        ppu_sprite0_diag_add_example(diag, PPU_SPRITE0_REJECT_OCCLUDED_BY_EARLIER_SPRITE, x, y);
+        return;
+    }
+
+    ++diag->effective_overlap_pixels;
+    if (!diag->first_effective_overlap_valid) {
+        diag->first_effective_overlap_valid = true;
+        diag->first_effective_overlap_x = x;
+        diag->first_effective_overlap_y = y;
+    }
+}
+
 static void ppu_note_sprite0_hit(Ppu *ppu, int x, int y) {
     if (ppu->status & PPU_STATUS_SPRITE0_HIT) {
         return;
     }
 
     ppu->status |= PPU_STATUS_SPRITE0_HIT;
+    ppu_record_sprite0_status_set(ppu, x, y);
     ++ppu->sprite0_hit_count;
     if (!ppu->sprite0_hit_ever) {
         ppu->sprite0_hit_ever = true;
@@ -317,9 +601,32 @@ static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
     uint8_t *dst = nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);
     PpuScanlineSprite sprites[PPU_MAX_SCANLINE_SPRITES];
     uint8_t sprite_count = ppu_collect_scanline_sprites(ppu, y, sprites);
+    PpuScanlineSprite sprite0;
+    bool sprite0_visible_on_scanline;
+    bool sprite0_selected_on_scanline = false;
+
+    sprite0.oam_index = 0;
+    sprite0.y = ppu->oam[0];
+    sprite0.tile = ppu->oam[1];
+    sprite0.attributes = ppu->oam[2];
+    sprite0.x = ppu->oam[3];
+    sprite0_visible_on_scanline = ppu_sprite_intersects_scanline(&sprite0, y, ppu_sprite_height(ppu));
 
     if (sprite_count > ppu->max_scanline_sprite_count) {
         ppu->max_scanline_sprite_count = sprite_count;
+    }
+
+    if (ppu->sprite0_diag.current_frame.valid && sprite0_visible_on_scanline) {
+        ++ppu->sprite0_diag.current_frame.sprite0_visible_scanline_count;
+    }
+    for (uint8_t i = 0; i < sprite_count; ++i) {
+        if (sprites[i].oam_index == 0) {
+            sprite0_selected_on_scanline = true;
+            break;
+        }
+    }
+    if (ppu->sprite0_diag.current_frame.valid && sprite0_selected_on_scanline) {
+        ++ppu->sprite0_diag.current_frame.sprite0_selected_scanline_count;
     }
 
     for (int x = 0; x < NES_FRAME_WIDTH; ++x) {
@@ -332,6 +639,7 @@ static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
             background = ppu_background_pixel(ppu, cartridge, x, y);
         }
         sprite = ppu_visible_sprite_pixel(ppu, cartridge, sprites, sprite_count, x, y);
+        ppu_diag_note_sprite0_pixel(ppu, cartridge, sprites, sprite_count, &sprite, x, y);
         if (sprite.opaque && sprite.sprite0) {
             ppu_note_sprite0_opaque(ppu, x, y);
         }
@@ -367,6 +675,10 @@ void ppu_init(Ppu *ppu) {
 }
 
 void ppu_reset(Ppu *ppu) {
+    bool diag_enabled = ppu->sprite0_diag.enabled;
+    uint64_t diag_start = ppu->sprite0_diag.frame_start;
+    uint64_t diag_end = ppu->sprite0_diag.frame_end;
+
     ppu->ctrl = 0;
     ppu->mask = 0;
     ppu->status = 0;
@@ -378,6 +690,10 @@ void ppu_reset(Ppu *ppu) {
     ppu->write_toggle = false;
     ppu->scroll_x = 0;
     ppu->scroll_y = 0;
+    ppu->render_vram_addr = 0;
+    ppu->render_scroll_x = 0;
+    ppu->render_scroll_y = 0;
+    ppu->render_base_nametable = 0;
     ppu->scanline = 261;
     ppu->cycle = 0;
     ppu->frame_count = 0;
@@ -405,6 +721,10 @@ void ppu_reset(Ppu *ppu) {
     ppu->last_completed_sprite_pixels = 0;
     ppu->first_frame_with_sprite_pixels = 0;
     ppu->max_scanline_sprite_count = 0;
+    memset(&ppu->sprite0_diag, 0, sizeof(ppu->sprite0_diag));
+    ppu->sprite0_diag.enabled = diag_enabled;
+    ppu->sprite0_diag.frame_start = diag_start;
+    ppu->sprite0_diag.frame_end = diag_end;
     ppu->frame_buffer.frame_index = 0;
     ppu->scanline_buffer.frame_index = 0;
     ppu->scanline_buffer.y = 0;
@@ -416,18 +736,64 @@ void ppu_reset(Ppu *ppu) {
     memset(ppu->scanline_buffer.pixels, 0, sizeof(ppu->scanline_buffer.pixels));
 }
 
+void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_end) {
+    memset(&ppu->sprite0_diag, 0, sizeof(ppu->sprite0_diag));
+    ppu->sprite0_diag.enabled = frame_end >= frame_start;
+    ppu->sprite0_diag.frame_start = frame_start;
+    ppu->sprite0_diag.frame_end = frame_end;
+}
+
+void ppu_oam_write_byte(Ppu *ppu, uint8_t index, uint8_t value, bool via_dma) {
+    ppu->oam[index] = value;
+
+    if (index >= 4u) {
+        return;
+    }
+
+    ppu->sprite0_diag.current_frame.sprite0_oam_changed_mask |= (uint8_t)(1u << index);
+    ppu->sprite0_diag.current_frame.last_sprite0_oam_update_render_frame = ppu->frame_count;
+    ppu->sprite0_diag.current_frame.last_sprite0_oam_update_scanline = ppu->scanline;
+    ppu->sprite0_diag.current_frame.last_sprite0_oam_update_cycle = ppu->cycle;
+    ppu->sprite0_diag.current_frame.last_sprite0_oam_update_source =
+        via_dma ? PPU_OAM_UPDATE_DMA : PPU_OAM_UPDATE_OAMDATA;
+    ppu->sprite0_diag.last_sprite0_oam_update_render_frame = ppu->frame_count;
+    ppu->sprite0_diag.last_sprite0_oam_update_scanline = ppu->scanline;
+    ppu->sprite0_diag.last_sprite0_oam_update_cycle = ppu->cycle;
+    ppu->sprite0_diag.last_sprite0_oam_update_source =
+        via_dma ? PPU_OAM_UPDATE_DMA : PPU_OAM_UPDATE_OAMDATA;
+
+    if (ppu->sprite0_diag.current_frame.valid) {
+        ppu->sprite0_diag.current_frame.sprite_y = ppu->oam[0];
+        ppu->sprite0_diag.current_frame.sprite_tile = ppu->oam[1];
+        ppu->sprite0_diag.current_frame.sprite_attributes = ppu->oam[2];
+        ppu->sprite0_diag.current_frame.sprite_x = ppu->oam[3];
+    }
+}
+
 void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
     for (uint32_t i = 0; i < cycles; ++i) {
         ++ppu->cycle;
 
+        if (ppu->cycle == 1 && ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
+            if (ppu_rendering_enabled(ppu)) {
+                if (ppu->scanline == 0) {
+                    ppu_copy_vertical_bits_from_temp(ppu);
+                }
+                ppu_copy_horizontal_bits_from_temp(ppu);
+            }
+            ppu_latch_render_state(ppu);
+        }
+
         if (ppu->scanline == 241 && ppu->cycle == 1) {
             ppu_finalize_frame(ppu);
+            ppu_sprite0_diag_commit_frame(ppu);
             ppu->status |= PPU_STATUS_VBLANK;
             ppu->frame_ready = true;
             if (ppu->ctrl & 0x80u) {
                 ppu->nmi_pending = true;
             }
         } else if (ppu->scanline == 261 && ppu->cycle == 1) {
+            ppu_record_sprite0_status_clear(ppu, true);
             ppu->status &= (uint8_t)~(PPU_STATUS_VBLANK | PPU_STATUS_SPRITE0_HIT);
             ppu->frame_ready = false;
             ppu->completed_frame_ready = false;
@@ -440,6 +806,10 @@ void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
 
             if (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
                 ppu_render_scanline(ppu, cartridge, ppu->scanline);
+                if (ppu_rendering_enabled(ppu)) {
+                    ppu_increment_vertical_v(ppu);
+                    ppu_copy_horizontal_bits_from_temp(ppu);
+                }
             }
 
             ++ppu->scanline;
@@ -448,6 +818,8 @@ void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
                 ++ppu->frame_count;
                 ppu->sprite_composited_pixel_count = 0;
                 ppu->frame_buffer.frame_index = ppu->frame_count;
+                ppu_latch_render_state(ppu);
+                ppu_sprite0_diag_begin_frame(ppu);
             }
         }
     }
@@ -492,6 +864,7 @@ void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t val
     switch (reg) {
     case PPU_REG_PPUCTRL:
         ppu->ctrl = value;
+        ppu->temp_addr = (uint16_t)((ppu->temp_addr & (uint16_t)~0x0c00u) | (((uint16_t)value & 0x03u) << 10));
         break;
     case PPU_REG_PPUMASK:
         ppu->mask = value;
@@ -500,19 +873,26 @@ void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t val
         ppu->oam_addr = value;
         break;
     case PPU_REG_OAMDATA:
-        ppu->oam[ppu->oam_addr++] = value;
+        ppu_oam_write_byte(ppu, ppu->oam_addr++, value, false);
         break;
     case PPU_REG_PPUSCROLL:
         if (!ppu->write_toggle) {
             ppu->scroll_x = value;
+            ppu->fine_x = value & 0x07u;
+            ppu->temp_addr = (uint16_t)((ppu->temp_addr & (uint16_t)~0x001fu) | ((uint16_t)value >> 3));
         } else {
             ppu->scroll_y = value;
+            ppu->temp_addr = (uint16_t)(
+                (ppu->temp_addr & (uint16_t)~0x73e0u) |
+                (((uint16_t)value & 0x07u) << 12) |
+                (((uint16_t)value & 0xf8u) << 2)
+            );
         }
         ppu->write_toggle = !ppu->write_toggle;
         break;
     case PPU_REG_PPUADDR:
         if (!ppu->write_toggle) {
-            ppu->temp_addr = (uint16_t)((value & 0x3fu) << 8);
+            ppu->temp_addr = (uint16_t)((ppu->temp_addr & 0x00ffu) | (((uint16_t)value & 0x3fu) << 8));
         } else {
             ppu->temp_addr = (uint16_t)((ppu->temp_addr & 0xff00u) | value);
             ppu->vram_addr = ppu->temp_addr;
@@ -534,4 +914,8 @@ const NesFrameBuffer *ppu_framebuffer(const Ppu *ppu) {
 
 const NesScanline *ppu_scanline(const Ppu *ppu) {
     return &ppu->scanline_buffer;
+}
+
+const PpuSprite0Diag *ppu_sprite0_diag(const Ppu *ppu) {
+    return &ppu->sprite0_diag;
 }

@@ -71,6 +71,10 @@ void nes_set_controller_state(Nes *nes, unsigned controller_index, NesController
     }
 }
 
+void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_end) {
+    ppu_set_sprite0_diag_window(&nes->ppu, frame_start, frame_end);
+}
+
 bool nes_step_instruction(Nes *nes) {
     if (!nes_has_cartridge(nes)) {
         if (nes->stop_info.reason == NES_STOP_NONE) {
@@ -190,6 +194,14 @@ uint64_t nes_state_hash(const Nes *nes) {
     HASH_U64(nes->ppu.first_nonblank_frame_index);
     HASH_U64(nes->ppu.first_nonblank_frame_hash);
     HASH_U64((uint64_t)(uint32_t)nes->ppu.scanline);
+    HASH_U64(nes->ppu.vram_addr);
+    HASH_U64(nes->ppu.temp_addr);
+    HASH_U64(nes->ppu.fine_x);
+    HASH_U64(nes->ppu.write_toggle ? 1u : 0u);
+    HASH_U64(nes->ppu.render_vram_addr);
+    HASH_U64(nes->ppu.render_scroll_x);
+    HASH_U64(nes->ppu.render_scroll_y);
+    HASH_U64(nes->ppu.render_base_nametable);
     HASH_U64(nes->stats.nmi_count);
     HASH_U64(nes->ppu.sprite0_hit_count);
     HASH_U64(nes->ppu.sprite0_opaque_pixel_count);
@@ -273,7 +285,12 @@ void nes_cpu_bus_write(Nes *nes, uint16_t addr, uint8_t value) {
     if (addr == 0x4014u) {
         uint16_t base = (uint16_t)value << 8;
         for (uint16_t i = 0; i < 256u; ++i) {
-            nes->ppu.oam[(uint8_t)(nes->ppu.oam_addr + i)] = nes_cpu_bus_read(nes, (uint16_t)(base + i));
+            ppu_oam_write_byte(
+                &nes->ppu,
+                (uint8_t)(nes->ppu.oam_addr + i),
+                nes_cpu_bus_read(nes, (uint16_t)(base + i)),
+                true
+            );
         }
         return;
     }

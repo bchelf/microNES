@@ -61,6 +61,7 @@ void nes_destroy(Nes *nes);
 bool nes_load_cartridge_file(Nes *nes, const char *path);
 void nes_reset(Nes *nes);
 void nes_set_controller_state(Nes *nes, unsigned controller_index, NesControllerState state);
+void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_end);
 bool nes_step_instruction(Nes *nes);
 bool nes_step_scanline(Nes *nes);
 bool nes_step_frame(Nes *nes);

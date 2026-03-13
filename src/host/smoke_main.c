@@ -1,4 +1,5 @@
 #include "nes.h"
+#include "nrom.h"
 #include "png_write.h"
 #include "video_capture.h"
 
@@ -7,6 +8,83 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+typedef struct {
+    const char *rom_path;
+    uint64_t step_limit;
+    const char *dump_frame_path;
+    const char *video_out_path;
+} SmokeOptions;
+
+enum {
+    HOST_VIDEO_FPS = 60,
+    HOST_SPRITE0_DIAG_FRAME_START = 760,
+    HOST_SPRITE0_DIAG_FRAME_END = 805,
+    HOST_PC_RING_CAPACITY = 256,
+    HOST_TOP_PC_COUNT = 4,
+    HOST_STALL_NO_EVENT_INSTRUCTIONS = 200000,
+    HOST_STALL_STATIC_FRAME_THRESHOLD = 480,
+    HOST_STALL_PC_DOMINANCE_THRESHOLD = 224,
+    HOST_CODE_REGION_BYTES = 12,
+};
+
+typedef struct {
+    uint16_t pc;
+    uint32_t count;
+} HostPcCount;
+
+typedef struct {
+    uint16_t pcs[HOST_PC_RING_CAPACITY];
+    size_t count;
+    size_t head;
+    uint16_t previous_pc;
+    uint64_t same_pc_streak;
+} HostPcWindow;
+
+typedef struct {
+    bool triggered;
+    uint64_t instruction_index;
+    uint64_t frame_index;
+    uint64_t video_frame_index;
+    uint64_t nmi_count;
+    uint64_t sprite0_hit_count;
+    uint16_t pc;
+    uint8_t opcode;
+    uint64_t same_pc_streak;
+    uint64_t instructions_since_last_completed_frame;
+    uint64_t instructions_since_last_frame_hash_change;
+    uint64_t instructions_since_last_nmi;
+    uint64_t instructions_since_last_sprite0_hit;
+    uint64_t repeated_frame_hash_frames;
+    uint64_t current_frame_hash;
+    uint64_t last_changed_frame_hash;
+    uint64_t last_changed_frame_index;
+    uint64_t last_changed_frame_instruction;
+    uint16_t dominant_pcs[HOST_TOP_PC_COUNT];
+    uint32_t dominant_pc_counts[HOST_TOP_PC_COUNT];
+    uint16_t code_region_start;
+    uint8_t code_region_bytes[HOST_CODE_REGION_BYTES];
+    bool code_region_valid;
+    char classification[96];
+    PpuSprite0FrameDiag sprite0_frame_diag;
+    bool sprite0_first_hit_diag_valid;
+    PpuSprite0FrameDiag sprite0_first_hit_diag;
+} StallDiagnosis;
+
+typedef struct {
+    HostPcWindow pc_window;
+    uint64_t last_completed_frame_instruction;
+    uint64_t last_nmi_instruction;
+    uint64_t last_sprite0_hit_instruction;
+    uint64_t last_frame_hash_change_instruction;
+    uint64_t last_frame_hash_change_frame;
+    uint64_t last_changed_frame_hash;
+    uint64_t repeated_frame_hash_frames;
+    uint64_t observed_completed_frames;
+    uint64_t observed_nmi_count;
+    uint64_t observed_sprite0_hit_count;
+    StallDiagnosis stall;
+} ProgressTracker;
 
 typedef struct {
     bool completed;
@@ -38,18 +116,42 @@ typedef struct {
     Cpu6502 cpu;
     NesStopInfo stop_info;
     NesExecutionStats stats;
+    StallDiagnosis stall;
 } SmokeRunResult;
 
-typedef struct {
-    const char *rom_path;
-    uint64_t step_limit;
-    const char *dump_frame_path;
-    const char *video_out_path;
-} SmokeOptions;
+static const char *sprite0_reject_reason_name(uint8_t reason) {
+    switch (reason) {
+    case PPU_SPRITE0_REJECT_RENDER_DISABLED:
+        return "render-disabled";
+    case PPU_SPRITE0_REJECT_LEFT_MASK:
+        return "left-mask";
+    case PPU_SPRITE0_REJECT_SPRITE_TRANSPARENT:
+        return "sprite-transparent";
+    case PPU_SPRITE0_REJECT_BG_TRANSPARENT:
+        return "bg-transparent";
+    case PPU_SPRITE0_REJECT_X255:
+        return "x255";
+    case PPU_SPRITE0_REJECT_NOT_IN_SCANLINE_SELECTION:
+        return "sprite0-not-selected";
+    case PPU_SPRITE0_REJECT_OCCLUDED_BY_EARLIER_SPRITE:
+        return "occluded-by-earlier-sprite";
+    default:
+        return "unknown";
+    }
+}
 
-enum {
-    HOST_VIDEO_FPS = 60,
-};
+static const char *oam_update_source_name(uint8_t source) {
+    switch (source) {
+    case PPU_OAM_UPDATE_OAMDATA:
+        return "oamdata";
+    case PPU_OAM_UPDATE_DMA:
+        return "dma";
+    default:
+        return "none";
+    }
+}
+
+static void print_sprite0_frame_diag(const char *label, const PpuSprite0FrameDiag *frame);
 
 static void print_usage(const char *argv0) {
     printf(
@@ -134,6 +236,361 @@ static bool parse_args(int argc, char **argv, SmokeOptions *options) {
     return true;
 }
 
+static void host_pc_window_record(HostPcWindow *window, uint16_t pc) {
+    if (window->count != 0 && window->previous_pc == pc) {
+        ++window->same_pc_streak;
+    } else {
+        window->same_pc_streak = 1;
+    }
+    window->previous_pc = pc;
+
+    window->pcs[window->head] = pc;
+    window->head = (window->head + 1u) % HOST_PC_RING_CAPACITY;
+    if (window->count < HOST_PC_RING_CAPACITY) {
+        ++window->count;
+    }
+}
+
+static void host_record_top_pc(HostPcCount *top, uint16_t pc, uint32_t count) {
+    for (size_t slot = 0; slot < HOST_TOP_PC_COUNT; ++slot) {
+        if (count > top[slot].count) {
+            for (size_t move = HOST_TOP_PC_COUNT - 1; move > slot; --move) {
+                top[move] = top[move - 1];
+            }
+            top[slot].pc = pc;
+            top[slot].count = count;
+            return;
+        }
+    }
+}
+
+static void host_pc_window_analyze(const HostPcWindow *window, HostPcCount *top) {
+    HostPcCount counts[HOST_PC_RING_CAPACITY];
+    size_t unique = 0;
+
+    memset(top, 0, sizeof(HostPcCount) * HOST_TOP_PC_COUNT);
+    memset(counts, 0, sizeof(counts));
+
+    for (size_t i = 0; i < window->count; ++i) {
+        uint16_t pc = window->pcs[i];
+        bool found = false;
+
+        for (size_t j = 0; j < unique; ++j) {
+            if (counts[j].pc == pc) {
+                ++counts[j].count;
+                found = true;
+                break;
+            }
+        }
+        if (!found && unique < HOST_PC_RING_CAPACITY) {
+            counts[unique].pc = pc;
+            counts[unique].count = 1;
+            ++unique;
+        }
+    }
+
+    for (size_t i = 0; i < unique; ++i) {
+        host_record_top_pc(top, counts[i].pc, counts[i].count);
+    }
+}
+
+static bool host_safe_code_peek(const Nes *nes, uint16_t addr, uint8_t *value_out) {
+    if (addr < 0x2000u) {
+        *value_out = nes->cpu_ram[addr & 0x07ffu];
+        return true;
+    }
+    if (addr >= 0x8000u) {
+        *value_out = nrom_cpu_read(&nes->cartridge, addr);
+        return true;
+    }
+    return false;
+}
+
+static void host_capture_code_region(const Nes *nes, uint16_t pc, StallDiagnosis *stall) {
+    stall->code_region_valid = false;
+    stall->code_region_start = pc;
+    memset(stall->code_region_bytes, 0, sizeof(stall->code_region_bytes));
+
+    if (pc < 4u) {
+        return;
+    }
+
+    stall->code_region_start = (uint16_t)(pc - 4u);
+    for (size_t i = 0; i < HOST_CODE_REGION_BYTES; ++i) {
+        if (!host_safe_code_peek(nes, (uint16_t)(stall->code_region_start + i), &stall->code_region_bytes[i])) {
+            return;
+        }
+    }
+    stall->code_region_valid = true;
+}
+
+static const char *host_classify_stall(const Nes *nes, const StallDiagnosis *stall) {
+    uint8_t op0 = 0;
+    uint8_t op1 = 0;
+    uint8_t op2 = 0;
+    uint8_t op3 = 0;
+    uint8_t op4 = 0;
+    uint8_t op5 = 0;
+    uint16_t jmp_target = 0;
+
+    if (host_safe_code_peek(nes, stall->pc, &op0) &&
+        host_safe_code_peek(nes, (uint16_t)(stall->pc + 1u), &op1) &&
+        host_safe_code_peek(nes, (uint16_t)(stall->pc + 2u), &op2) &&
+        host_safe_code_peek(nes, (uint16_t)(stall->pc + 3u), &op3) &&
+        host_safe_code_peek(nes, (uint16_t)(stall->pc + 4u), &op4) &&
+        host_safe_code_peek(nes, (uint16_t)(stall->pc + 5u), &op5)) {
+        if (op0 == 0xadu && op1 == 0x02u && op2 == 0x20u && op3 == 0x29u && op4 == 0x40u && op5 == 0xf0u) {
+            return "waiting for sprite-0 hit";
+        }
+        if (op0 == 0xadu && op1 == 0x02u && op2 == 0x20u && op3 == 0x29u && op4 == 0x80u &&
+            (op5 == 0xf0u || op5 == 0xd0u)) {
+            return "waiting on PPUSTATUS vblank";
+        }
+    }
+
+    if (op0 == 0x4cu &&
+        host_safe_code_peek(nes, (uint16_t)(stall->pc + 1u), &op1) &&
+        host_safe_code_peek(nes, (uint16_t)(stall->pc + 2u), &op2)) {
+        jmp_target = (uint16_t)(op1 | ((uint16_t)op2 << 8));
+        if (jmp_target == stall->pc) {
+            if (stall->instructions_since_last_nmi < HOST_STALL_NO_EVENT_INSTRUCTIONS / 4 &&
+                stall->instructions_since_last_completed_frame < HOST_STALL_NO_EVENT_INSTRUCTIONS / 4) {
+                return "main-thread idle spin; NMI/frame cadence still alive";
+            }
+            return "tight self-jump loop";
+        }
+    }
+
+    if (stall->instructions_since_last_completed_frame >= HOST_STALL_NO_EVENT_INSTRUCTIONS) {
+        return "PPU/frame progress stalled";
+    }
+    if (stall->instructions_since_last_nmi >= HOST_STALL_NO_EVENT_INSTRUCTIONS) {
+        return "NMI generation stalled";
+    }
+    if (stall->repeated_frame_hash_frames >= HOST_STALL_STATIC_FRAME_THRESHOLD) {
+        return "rendering continues but framebuffer is frozen";
+    }
+
+    return "unknown tight loop";
+}
+
+static bool host_should_report_stall(const ProgressTracker *tracker) {
+    HostPcCount top[HOST_TOP_PC_COUNT];
+    bool tight_pc_window;
+    bool repeated_static_frame;
+    bool no_frame_progress;
+    bool no_nmi_progress;
+
+    if (tracker->stall.triggered || tracker->pc_window.count < HOST_PC_RING_CAPACITY) {
+        return false;
+    }
+
+    host_pc_window_analyze(&tracker->pc_window, top);
+    tight_pc_window = top[0].count >= HOST_STALL_PC_DOMINANCE_THRESHOLD;
+    repeated_static_frame = tracker->repeated_frame_hash_frames >= HOST_STALL_STATIC_FRAME_THRESHOLD;
+    no_frame_progress =
+        tracker->stall.instructions_since_last_completed_frame >= HOST_STALL_NO_EVENT_INSTRUCTIONS;
+    no_nmi_progress =
+        tracker->stall.instructions_since_last_nmi >= HOST_STALL_NO_EVENT_INSTRUCTIONS;
+
+    return no_frame_progress || no_nmi_progress || (tight_pc_window && repeated_static_frame);
+}
+
+static void host_capture_stall(
+    ProgressTracker *tracker,
+    const Nes *nes,
+    uint64_t video_frames_written
+) {
+    HostPcCount top[HOST_TOP_PC_COUNT];
+
+    memset(&tracker->stall, 0, sizeof(tracker->stall));
+    tracker->stall.triggered = true;
+    tracker->stall.instruction_index = nes->stats.instruction_count;
+    tracker->stall.frame_index = nes->ppu.completed_frame_count;
+    tracker->stall.video_frame_index = video_frames_written;
+    tracker->stall.nmi_count = nes->stats.nmi_count;
+    tracker->stall.sprite0_hit_count = nes->ppu.sprite0_hit_count;
+    tracker->stall.pc = nes->cpu.pc;
+    tracker->stall.opcode = nes->cpu.last_opcode;
+    tracker->stall.same_pc_streak = tracker->pc_window.same_pc_streak;
+    tracker->stall.instructions_since_last_completed_frame =
+        nes->stats.instruction_count - tracker->last_completed_frame_instruction;
+    tracker->stall.instructions_since_last_frame_hash_change =
+        nes->stats.instruction_count - tracker->last_frame_hash_change_instruction;
+    tracker->stall.instructions_since_last_nmi =
+        nes->stats.instruction_count - tracker->last_nmi_instruction;
+    tracker->stall.instructions_since_last_sprite0_hit =
+        nes->stats.instruction_count - tracker->last_sprite0_hit_instruction;
+    tracker->stall.repeated_frame_hash_frames = tracker->repeated_frame_hash_frames;
+    tracker->stall.current_frame_hash = nes->ppu.last_completed_frame_hash;
+    tracker->stall.last_changed_frame_hash = tracker->last_changed_frame_hash;
+    tracker->stall.last_changed_frame_index = tracker->last_frame_hash_change_frame;
+    tracker->stall.last_changed_frame_instruction = tracker->last_frame_hash_change_instruction;
+
+    host_pc_window_analyze(&tracker->pc_window, top);
+    for (size_t i = 0; i < HOST_TOP_PC_COUNT; ++i) {
+        tracker->stall.dominant_pcs[i] = top[i].pc;
+        tracker->stall.dominant_pc_counts[i] = top[i].count;
+    }
+
+    host_capture_code_region(nes, nes->cpu.pc, &tracker->stall);
+    tracker->stall.sprite0_frame_diag = nes->ppu.sprite0_diag.current_frame;
+    tracker->stall.sprite0_first_hit_diag_valid = nes->ppu.sprite0_diag.first_hit_frame_valid;
+    tracker->stall.sprite0_first_hit_diag = nes->ppu.sprite0_diag.first_hit_frame;
+    snprintf(
+        tracker->stall.classification,
+        sizeof(tracker->stall.classification),
+        "%s",
+        host_classify_stall(nes, &tracker->stall)
+    );
+}
+
+static void print_code_region(const StallDiagnosis *stall) {
+    if (!stall->code_region_valid) {
+        printf("Code region: unavailable for PC=%04X\n", stall->pc);
+        return;
+    }
+
+    printf("Code region around PC=%04X:\n", stall->pc);
+    printf("  %04X:", stall->code_region_start);
+    for (size_t i = 0; i < HOST_CODE_REGION_BYTES; ++i) {
+        printf(" %02X", stall->code_region_bytes[i]);
+    }
+    printf("\n");
+}
+
+static void print_stall_summary(const Nes *nes, const StallDiagnosis *stall) {
+    const Cpu6502OpcodeInfo *info = cpu6502_opcode_info(stall->opcode);
+
+    if (!stall->triggered) {
+        return;
+    }
+
+    printf("Suspected stalled progress detected:\n");
+    printf("  classification: %s\n", stall->classification);
+    printf(
+        "  instruction=%" PRIu64 " frame=%" PRIu64 " video_frame=%" PRIu64 " pc=%04X opcode=%02X %-3s %-7s\n",
+        stall->instruction_index,
+        stall->frame_index,
+        stall->video_frame_index,
+        stall->pc,
+        stall->opcode,
+        info->mnemonic,
+        info->addressing_mode
+    );
+    printf(
+        "  NMI=%" PRIu64 " sprite0_hits=%" PRIu64 " same_pc_streak=%" PRIu64 "\n",
+        stall->nmi_count,
+        stall->sprite0_hit_count,
+        stall->same_pc_streak
+    );
+    printf(
+        "  since_frame=%" PRIu64 " since_frame_hash_change=%" PRIu64 " since_nmi=%" PRIu64 " since_sprite0=%" PRIu64 "\n",
+        stall->instructions_since_last_completed_frame,
+        stall->instructions_since_last_frame_hash_change,
+        stall->instructions_since_last_nmi,
+        stall->instructions_since_last_sprite0_hit
+    );
+    printf(
+        "  frame_hash=0x%016" PRIx64 " last_changed_hash=0x%016" PRIx64 " last_changed_frame=%" PRIu64 " repeated_same_hash_frames=%" PRIu64 "\n",
+        stall->current_frame_hash,
+        stall->last_changed_frame_hash,
+        stall->last_changed_frame_index,
+        stall->repeated_frame_hash_frames
+    );
+    printf("  dominant PCs in recent window:\n");
+    for (size_t i = 0; i < HOST_TOP_PC_COUNT && stall->dominant_pc_counts[i] != 0; ++i) {
+        printf("    %zu. %04X x%u\n", i + 1, stall->dominant_pcs[i], stall->dominant_pc_counts[i]);
+    }
+    printf(
+        "  PPU ctrl=%02X mask=%02X status=%02X frame=%" PRIu64 " scanline=%d cycle=%d\n",
+        nes->ppu.ctrl,
+        nes->ppu.mask,
+        nes->ppu.status,
+        nes->ppu.completed_frame_count,
+        nes->ppu.scanline,
+        nes->ppu.cycle
+    );
+    print_code_region(stall);
+    print_sprite0_frame_diag("Sprite0 failing-frame snapshot", &stall->sprite0_frame_diag);
+    if (stall->sprite0_first_hit_diag_valid) {
+        print_sprite0_frame_diag("Sprite0 known-good first-hit frame", &stall->sprite0_first_hit_diag);
+    }
+}
+
+static void print_sprite0_diag_window_summary(const PpuSprite0Diag *diag) {
+    uint64_t first_raw_without_effective = 0;
+    uint64_t first_no_raw_overlap = 0;
+    uint64_t first_post_779_raw_overlap = 0;
+    uint64_t first_post_779_effective_overlap = 0;
+    uint64_t last_frame_with_hit = 0;
+    uint64_t last_frame_with_raw_overlap = 0;
+    uint64_t last_frame_with_effective_overlap = 0;
+
+    if (!diag->enabled || diag->frame_count == 0) {
+        return;
+    }
+
+    for (uint8_t i = 0; i < diag->frame_count; ++i) {
+        const PpuSprite0FrameDiag *frame = &diag->frames[i];
+
+        if (frame->raw_overlap_pixels != 0) {
+            last_frame_with_raw_overlap = frame->render_frame_index;
+            if (frame->render_frame_index > 779 && first_post_779_raw_overlap == 0) {
+                first_post_779_raw_overlap = frame->render_frame_index;
+            }
+        } else if (first_no_raw_overlap == 0) {
+            first_no_raw_overlap = frame->render_frame_index;
+        }
+        if (frame->effective_overlap_pixels != 0) {
+            last_frame_with_effective_overlap = frame->render_frame_index;
+            if (frame->render_frame_index > 779 && first_post_779_effective_overlap == 0) {
+                first_post_779_effective_overlap = frame->render_frame_index;
+            }
+        } else if (frame->raw_overlap_pixels != 0 && first_raw_without_effective == 0) {
+            first_raw_without_effective = frame->render_frame_index;
+        }
+        if (frame->sprite0_hit_set_this_frame) {
+            last_frame_with_hit = frame->render_frame_index;
+        }
+    }
+
+    printf(
+        "Sprite0 diag window %" PRIu64 "..%" PRIu64 ": stored=%u last_hit_frame=%" PRIu64 " last_raw_overlap_frame=%" PRIu64 " last_effective_overlap_frame=%" PRIu64,
+        diag->frame_start,
+        diag->frame_end,
+        (unsigned)diag->frame_count,
+        last_frame_with_hit,
+        last_frame_with_raw_overlap,
+        last_frame_with_effective_overlap
+    );
+    if (first_raw_without_effective != 0) {
+        printf(" first_raw_without_effective=%" PRIu64, first_raw_without_effective);
+    }
+    if (first_no_raw_overlap != 0) {
+        printf(" first_no_raw_overlap=%" PRIu64, first_no_raw_overlap);
+    }
+    if (first_post_779_raw_overlap != 0) {
+        printf(" first_post_779_raw_overlap=%" PRIu64, first_post_779_raw_overlap);
+    }
+    if (first_post_779_effective_overlap != 0) {
+        printf(" first_post_779_effective_overlap=%" PRIu64, first_post_779_effective_overlap);
+    }
+    printf("\n");
+    printf(
+        "Sprite0 status lifecycle: total_sets=%" PRIu64 " total_clears=%" PRIu64 " suspicious_clears=%" PRIu64 " last_set=(frame=%" PRIu64 " scanline=%d cycle=%d) last_clear=(frame=%" PRIu64 " scanline=%d cycle=%d)\n",
+        diag->total_status_set_count,
+        diag->total_status_clear_count,
+        diag->suspicious_status_clear_count,
+        diag->last_status_set_render_frame,
+        diag->last_status_set_scanline,
+        diag->last_status_set_cycle,
+        diag->last_status_clear_render_frame,
+        diag->last_status_clear_scanline,
+        diag->last_status_clear_cycle
+    );
+}
+
 static void print_cpu_state(const Cpu6502 *cpu) {
     printf(
         "PC=%04X A=%02X X=%02X Y=%02X P=%02X SP=%02X CYC=%llu OPC=%02X\n",
@@ -146,6 +603,108 @@ static void print_cpu_state(const Cpu6502 *cpu) {
         (unsigned long long)cpu->cycles,
         cpu->last_opcode
     );
+}
+
+static const PpuSprite0FrameDiag *find_sprite0_diag_frame(const PpuSprite0Diag *diag, uint64_t render_frame_index) {
+    for (uint8_t i = 0; i < diag->frame_count; ++i) {
+        if (diag->frames[i].valid && diag->frames[i].render_frame_index == render_frame_index) {
+            return &diag->frames[i];
+        }
+    }
+    return NULL;
+}
+
+static void print_sprite0_frame_diag(const char *label, const PpuSprite0FrameDiag *frame) {
+    if (frame == NULL || !frame->valid) {
+        printf("%s: unavailable\n", label);
+        return;
+    }
+
+    printf(
+        "%s: render_frame=%" PRIu64 " completed_frame=%" PRIu64 " sprite0=[y=%u tile=%u attr=%02X x=%u]\n",
+        label,
+        frame->render_frame_index,
+        frame->completed_frame_index,
+        frame->sprite_y,
+        frame->sprite_tile,
+        frame->sprite_attributes,
+        frame->sprite_x
+    );
+    printf(
+        "  regs: ctrl=%02X mask=%02X status=%02X scroll=(%u,%u) render_scroll=(%u,%u) nt=%u v=%04X t=%04X fine_x=%u\n",
+        frame->ctrl,
+        frame->mask,
+        frame->status,
+        frame->scroll_x,
+        frame->scroll_y,
+        frame->render_scroll_x,
+        frame->render_scroll_y,
+        frame->render_base_nametable,
+        frame->vram_addr,
+        frame->temp_addr,
+        frame->fine_x
+    );
+    printf(
+        "  mask bits: bg=%d sprites=%d bg_left=%d sprites_left=%d intersects_visible=%d visible_scanlines=%u selected_scanlines=%u\n",
+        frame->show_bg ? 1 : 0,
+        frame->show_sprites ? 1 : 0,
+        frame->show_bg_left ? 1 : 0,
+        frame->show_sprites_left ? 1 : 0,
+        frame->sprite0_intersects_visible ? 1 : 0,
+        frame->sprite0_visible_scanline_count,
+        frame->sprite0_selected_scanline_count
+    );
+    printf(
+        "  pixels: candidates=%" PRIu32 " sprite0_raw=%" PRIu32 " bg_in_bounds=%" PRIu32 " raw_overlap=%" PRIu32 " effective_overlap=%" PRIu32 "\n",
+        frame->visible_candidate_pixels,
+        frame->sprite0_opaque_pixels_raw,
+        frame->bg_opaque_pixels_in_sprite_bounds,
+        frame->raw_overlap_pixels,
+        frame->effective_overlap_pixels
+    );
+    printf(
+        "  rejects: render_disabled=%" PRIu32 " left_mask=%" PRIu32 " sprite_transparent=%" PRIu32 " bg_transparent=%" PRIu32 " x255=%" PRIu32 " not_selected=%" PRIu32 " occluded=%" PRIu32 "\n",
+        frame->reject_render_disabled,
+        frame->reject_left_mask,
+        frame->reject_sprite_transparent,
+        frame->reject_bg_transparent,
+        frame->reject_x255,
+        frame->reject_not_in_scanline_selection,
+        frame->reject_occluded_by_earlier_sprite
+    );
+    if (frame->first_raw_overlap_valid) {
+        printf("  first_raw_overlap=(%d,%d)\n", frame->first_raw_overlap_x, frame->first_raw_overlap_y);
+    }
+    if (frame->first_effective_overlap_valid) {
+        printf("  first_effective_overlap=(%d,%d)\n", frame->first_effective_overlap_x, frame->first_effective_overlap_y);
+    }
+    printf(
+        "  hit lifecycle: set_this_frame=%d set_count=%u first_hit=(%d,%d)\n",
+        frame->sprite0_hit_set_this_frame ? 1 : 0,
+        frame->sprite0_hit_set_count,
+        frame->first_hit_x,
+        frame->first_hit_y
+    );
+    printf(
+        "  sprite0 oam updates: mask=%02X last_update_frame=%" PRIu64 " last_update_scanline=%d cycle=%d source=%s\n",
+        frame->sprite0_oam_changed_mask,
+        frame->last_sprite0_oam_update_render_frame,
+        frame->last_sprite0_oam_update_scanline,
+        frame->last_sprite0_oam_update_cycle,
+        oam_update_source_name(frame->last_sprite0_oam_update_source)
+    );
+    if (frame->example_count != 0) {
+        printf("  example rejections:\n");
+        for (uint8_t i = 0; i < frame->example_count; ++i) {
+            printf(
+                "    %u. (%u,%u) %s\n",
+                (unsigned)(i + 1),
+                frame->examples[i].x,
+                frame->examples[i].y,
+                sprite0_reject_reason_name(frame->examples[i].reason)
+            );
+        }
+    }
 }
 
 static uint64_t hash_opcode_coverage(const NesExecutionStats *stats) {
@@ -292,6 +851,7 @@ static bool run_smoke_pass(
     bool verbose
 ) {
     Nes nes;
+    ProgressTracker tracker;
     bool ok = true;
     bool entered_old_wait_loop = false;
     bool exited_old_wait_loop_after_sprite0_hit = false;
@@ -300,6 +860,7 @@ static bool run_smoke_pass(
     uint64_t video_frames_written = 0;
 
     nes_init(&nes);
+    memset(&tracker, 0, sizeof(tracker));
 
     if (!nes_load_cartridge_file(&nes, rom_path)) {
         fprintf(stderr, "ROM load failed: %s\n", nes_last_error(&nes));
@@ -308,6 +869,8 @@ static bool run_smoke_pass(
     }
 
     nes_reset(&nes);
+    nes_set_sprite0_diag_window(&nes, HOST_SPRITE0_DIAG_FRAME_START, HOST_SPRITE0_DIAG_FRAME_END);
+    tracker.pc_window.previous_pc = nes.cpu.pc;
 
     if (verbose) {
         printf("ROM: %s\n", rom_path);
@@ -334,6 +897,8 @@ static bool run_smoke_pass(
     }
 
     while (nes_execution_stats(&nes)->instruction_count < step_limit) {
+        bool check_for_stall = false;
+
         if (nes.cpu.pc >= 0x8150u && nes.cpu.pc <= 0x8155u) {
             entered_old_wait_loop = true;
         } else if (entered_old_wait_loop && nes.ppu.sprite0_hit_ever && !exited_old_wait_loop_after_sprite0_hit) {
@@ -344,6 +909,49 @@ static bool run_smoke_pass(
         if (!nes_step_instruction(&nes)) {
             ok = false;
             break;
+        }
+
+        host_pc_window_record(&tracker.pc_window, nes.cpu.pc);
+
+        if (nes.ppu.completed_frame_count != tracker.observed_completed_frames) {
+            check_for_stall = true;
+            tracker.last_completed_frame_instruction = nes.stats.instruction_count;
+            if (nes.ppu.last_completed_frame_hash != tracker.last_changed_frame_hash) {
+                tracker.last_changed_frame_hash = nes.ppu.last_completed_frame_hash;
+                tracker.last_frame_hash_change_frame = nes.ppu.completed_frame_count;
+                tracker.last_frame_hash_change_instruction = nes.stats.instruction_count;
+                tracker.repeated_frame_hash_frames = 0;
+            } else {
+                ++tracker.repeated_frame_hash_frames;
+            }
+            tracker.observed_completed_frames = nes.ppu.completed_frame_count;
+        }
+        if (nes.stats.nmi_count != tracker.observed_nmi_count) {
+            tracker.observed_nmi_count = nes.stats.nmi_count;
+            tracker.last_nmi_instruction = nes.stats.instruction_count;
+        }
+        if (nes.ppu.sprite0_hit_count != tracker.observed_sprite0_hit_count) {
+            tracker.observed_sprite0_hit_count = nes.ppu.sprite0_hit_count;
+            tracker.last_sprite0_hit_instruction = nes.stats.instruction_count;
+        }
+
+        tracker.stall.instructions_since_last_completed_frame =
+            nes.stats.instruction_count - tracker.last_completed_frame_instruction;
+        tracker.stall.instructions_since_last_nmi =
+            nes.stats.instruction_count - tracker.last_nmi_instruction;
+        tracker.stall.instructions_since_last_sprite0_hit =
+            nes.stats.instruction_count - tracker.last_sprite0_hit_instruction;
+
+        if ((nes.stats.instruction_count & 0x0fffu) == 0u) {
+            check_for_stall = true;
+        }
+
+        if (check_for_stall && host_should_report_stall(&tracker)) {
+            host_capture_stall(&tracker, &nes, video_frames_written);
+            if (verbose) {
+                print_stall_summary(&nes, &tracker.stall);
+                print_trace_window(&nes);
+            }
         }
 
         if (video_capture != NULL && nes.ppu.completed_frame_count > video_frames_written) {
@@ -395,6 +1003,7 @@ static bool run_smoke_pass(
     result->cpu = nes.cpu;
     result->stop_info = nes.stop_info;
     result->stats = nes.stats;
+    result->stall = tracker.stall;
 
     if (verbose) {
         printf("Instructions executed: %" PRIu64 "\n", nes.stats.instruction_count);
@@ -490,6 +1099,21 @@ static bool run_smoke_pass(
         print_trace_window(&nes);
         printf("State hash: 0x%016" PRIx64 "\n", nes_state_hash(&nes));
         printf("Coverage hash: 0x%016" PRIx64 "\n", hash_opcode_coverage(&nes.stats));
+        printf(
+            "Frame progress: last_changed_frame=%" PRIu64 " last_changed_hash=0x%016" PRIx64 " repeated_same_hash_frames=%" PRIu64 "\n",
+            tracker.last_frame_hash_change_frame,
+            tracker.last_changed_frame_hash,
+            tracker.repeated_frame_hash_frames
+        );
+        print_sprite0_diag_window_summary(&nes.ppu.sprite0_diag);
+        if (tracker.stall.triggered) {
+            const PpuSprite0FrameDiag *last_changed =
+                find_sprite0_diag_frame(&nes.ppu.sprite0_diag, tracker.last_frame_hash_change_frame);
+            const PpuSprite0FrameDiag *failed_completed =
+                find_sprite0_diag_frame(&nes.ppu.sprite0_diag, tracker.stall.frame_index);
+            print_sprite0_frame_diag("Sprite0 last frame with changed framebuffer", last_changed);
+            print_sprite0_frame_diag("Sprite0 last completed frame before stall", failed_completed);
+        }
         if (video_out_path != NULL) {
             printf(
                 "Video frames written: %" PRIu64 " (~%.2f seconds at %d fps)\n",
@@ -546,6 +1170,29 @@ static bool compare_runs(const SmokeRunResult *a, const SmokeRunResult *b) {
     if (a->entered_old_wait_loop != b->entered_old_wait_loop) return false;
     if (a->exited_old_wait_loop_after_sprite0_hit != b->exited_old_wait_loop_after_sprite0_hit) return false;
     if (a->first_pc_after_wait_loop != b->first_pc_after_wait_loop) return false;
+    if (a->stall.triggered != b->stall.triggered) return false;
+    if (a->stall.instruction_index != b->stall.instruction_index) return false;
+    if (a->stall.frame_index != b->stall.frame_index) return false;
+    if (a->stall.pc != b->stall.pc) return false;
+    if (a->stall.opcode != b->stall.opcode) return false;
+    if (a->stall.nmi_count != b->stall.nmi_count) return false;
+    if (a->stall.sprite0_hit_count != b->stall.sprite0_hit_count) return false;
+    if (a->stall.same_pc_streak != b->stall.same_pc_streak) return false;
+    if (a->stall.instructions_since_last_completed_frame != b->stall.instructions_since_last_completed_frame) return false;
+    if (a->stall.instructions_since_last_frame_hash_change != b->stall.instructions_since_last_frame_hash_change) return false;
+    if (a->stall.instructions_since_last_nmi != b->stall.instructions_since_last_nmi) return false;
+    if (a->stall.instructions_since_last_sprite0_hit != b->stall.instructions_since_last_sprite0_hit) return false;
+    if (a->stall.repeated_frame_hash_frames != b->stall.repeated_frame_hash_frames) return false;
+    if (a->stall.current_frame_hash != b->stall.current_frame_hash) return false;
+    if (a->stall.last_changed_frame_hash != b->stall.last_changed_frame_hash) return false;
+    if (a->stall.last_changed_frame_index != b->stall.last_changed_frame_index) return false;
+    if (a->stall.last_changed_frame_instruction != b->stall.last_changed_frame_instruction) return false;
+    if (memcmp(a->stall.dominant_pcs, b->stall.dominant_pcs, sizeof(a->stall.dominant_pcs)) != 0) return false;
+    if (memcmp(a->stall.dominant_pc_counts, b->stall.dominant_pc_counts, sizeof(a->stall.dominant_pc_counts)) != 0) return false;
+    if (strcmp(a->stall.classification, b->stall.classification) != 0) return false;
+    if (memcmp(&a->stall.sprite0_frame_diag, &b->stall.sprite0_frame_diag, sizeof(a->stall.sprite0_frame_diag)) != 0) return false;
+    if (a->stall.sprite0_first_hit_diag_valid != b->stall.sprite0_first_hit_diag_valid) return false;
+    if (memcmp(&a->stall.sprite0_first_hit_diag, &b->stall.sprite0_first_hit_diag, sizeof(a->stall.sprite0_first_hit_diag)) != 0) return false;
     if (a->state_hash != b->state_hash) return false;
     if (a->coverage_hash != b->coverage_hash) return false;
     if (memcmp(&a->stats.opcode_counts, &b->stats.opcode_counts, sizeof(a->stats.opcode_counts)) != 0) return false;
