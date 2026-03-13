@@ -1,0 +1,11 @@
+.program video_ntsc
+
+; One 2-bit sample is shifted to GP0..GP1 each PIO clock.
+; Sample encoding with the resistor DAC wiring:
+;   0b00 = sync
+;   0b01 = black / blank
+;   0b11 = white
+
+.wrap_target
+    out pins, 2
+.wrap
