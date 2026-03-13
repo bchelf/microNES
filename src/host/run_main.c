@@ -17,6 +17,7 @@ enum {
     HOST_FPS_SAMPLE_MS = 1000,
     HOST_COARSE_SLEEP_THRESHOLD_NS = 2000000,
     HOST_COARSE_SLEEP_GUARD_NS = 250000,
+    HOST_INPUT_POLL_INSTRUCTION_INTERVAL = 32,
 };
 
 typedef struct {
@@ -399,11 +400,26 @@ static void host_update_button_state(HostInputState *input, SDL_Scancode scancod
 
 static NesControllerState host_build_controller_state(const HostInputState *input) {
     NesControllerState state = { 0 };
+    bool up_down;
+    bool down_down;
+    bool left_down;
+    bool right_down;
 
     for (int i = 0; i < 8; ++i) {
         if (input->counts[i] > 0) {
             state.buttons |= host_button_mask_for_index(i);
         }
+    }
+
+    up_down = (state.buttons & NES_BUTTON_UP) != 0;
+    down_down = (state.buttons & NES_BUTTON_DOWN) != 0;
+    left_down = (state.buttons & NES_BUTTON_LEFT) != 0;
+    right_down = (state.buttons & NES_BUTTON_RIGHT) != 0;
+    if (up_down && down_down) {
+        state.buttons &= (uint8_t)~(NES_BUTTON_UP | NES_BUTTON_DOWN);
+    }
+    if (left_down && right_down) {
+        state.buttons &= (uint8_t)~(NES_BUTTON_LEFT | NES_BUTTON_RIGHT);
     }
 
     return state;
@@ -536,6 +552,7 @@ int main(int argc, char **argv) {
     while (running) {
         uint64_t target_completed_frame = nes.ppu.completed_frame_count + 1;
         char title[128];
+        uint32_t instructions_until_input_poll = HOST_INPUT_POLL_INSTRUCTION_INTERVAL;
 
         if (!host_process_events(&running, &input)) {
             break;
@@ -547,6 +564,13 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Emulation stopped: %s\n", nes_last_error(&nes));
                 running = false;
                 break;
+            }
+            if (--instructions_until_input_poll == 0) {
+                if (!host_process_events(&running, &input)) {
+                    break;
+                }
+                nes_set_controller_state(&nes, 0, host_build_controller_state(&input));
+                instructions_until_input_poll = HOST_INPUT_POLL_INSTRUCTION_INTERVAL;
             }
         }
         if (!running) {
