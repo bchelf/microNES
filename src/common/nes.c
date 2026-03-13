@@ -185,6 +185,16 @@ uint64_t nes_state_hash(const Nes *nes) {
     HASH_U64(nes->ppu.frame_count);
     HASH_U64((uint64_t)(uint32_t)nes->ppu.scanline);
     HASH_U64(nes->stats.nmi_count);
+    HASH_U64(nes->ppu.sprite0_hit_count);
+    HASH_U64(nes->ppu.sprite0_opaque_pixel_count);
+    HASH_U64(nes->ppu.sprite0_background_overlap_count);
+    HASH_U64(nes->ppu.sprite0_hit_ever ? 1u : 0u);
+    HASH_U64(nes->ppu.first_sprite0_hit_frame);
+    HASH_U64((uint64_t)(uint32_t)(nes->ppu.first_sprite0_hit_scanline + 1));
+    HASH_U64((uint64_t)(uint32_t)(nes->ppu.first_sprite0_hit_x + 1));
+    HASH_U64(nes->ppu.first_sprite0_opaque_frame);
+    HASH_U64((uint64_t)(uint32_t)(nes->ppu.first_sprite0_opaque_scanline + 1));
+    HASH_U64((uint64_t)(uint32_t)(nes->ppu.first_sprite0_opaque_x + 1));
     HASH_U64(nes->stats.unique_opcodes);
     HASH_U64(nes->stop_info.reason);
     HASH_U64(nes->stop_info.pc);

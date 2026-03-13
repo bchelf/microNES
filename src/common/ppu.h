@@ -29,6 +29,16 @@ typedef struct {
     bool frame_ready;
     bool scanline_ready;
     bool nmi_pending;
+    bool sprite0_hit_ever;
+    uint64_t sprite0_hit_count;
+    uint64_t sprite0_opaque_pixel_count;
+    uint64_t sprite0_background_overlap_count;
+    uint64_t first_sprite0_hit_frame;
+    int first_sprite0_hit_scanline;
+    int first_sprite0_hit_x;
+    uint64_t first_sprite0_opaque_frame;
+    int first_sprite0_opaque_scanline;
+    int first_sprite0_opaque_x;
     NesFrameBuffer frame_buffer;
     NesScanline scanline_buffer;
 } Ppu;

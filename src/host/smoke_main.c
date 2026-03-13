@@ -16,6 +16,14 @@ typedef struct {
     uint64_t nmi_count;
     uint64_t frames;
     int scanline;
+    bool sprite0_hit_occurred;
+    uint64_t sprite0_hit_count;
+    uint64_t first_sprite0_hit_frame;
+    int first_sprite0_hit_scanline;
+    int first_sprite0_hit_x;
+    bool entered_old_wait_loop;
+    bool exited_old_wait_loop_after_sprite0_hit;
+    uint16_t first_pc_after_wait_loop;
     Cpu6502 cpu;
     NesStopInfo stop_info;
     NesExecutionStats stats;
@@ -173,6 +181,9 @@ static void print_stop_summary(const Nes *nes) {
 static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunResult *result, bool verbose) {
     Nes nes;
     bool ok = true;
+    bool entered_old_wait_loop = false;
+    bool exited_old_wait_loop_after_sprite0_hit = false;
+    uint16_t first_pc_after_wait_loop = 0;
 
     nes_init(&nes);
 
@@ -198,6 +209,13 @@ static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunRe
     }
 
     while (nes_execution_stats(&nes)->instruction_count < step_limit) {
+        if (nes.cpu.pc >= 0x8150u && nes.cpu.pc <= 0x8155u) {
+            entered_old_wait_loop = true;
+        } else if (entered_old_wait_loop && nes.ppu.sprite0_hit_ever && !exited_old_wait_loop_after_sprite0_hit) {
+            exited_old_wait_loop_after_sprite0_hit = true;
+            first_pc_after_wait_loop = nes.cpu.pc;
+        }
+
         if (!nes_step_instruction(&nes)) {
             ok = false;
             break;
@@ -222,6 +240,14 @@ static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunRe
     result->nmi_count = nes.stats.nmi_count;
     result->frames = nes_frame_count(&nes);
     result->scanline = nes_scanline(&nes);
+    result->sprite0_hit_occurred = nes.ppu.sprite0_hit_ever;
+    result->sprite0_hit_count = nes.ppu.sprite0_hit_count;
+    result->first_sprite0_hit_frame = nes.ppu.first_sprite0_hit_frame;
+    result->first_sprite0_hit_scanline = nes.ppu.first_sprite0_hit_scanline;
+    result->first_sprite0_hit_x = nes.ppu.first_sprite0_hit_x;
+    result->entered_old_wait_loop = entered_old_wait_loop;
+    result->exited_old_wait_loop_after_sprite0_hit = exited_old_wait_loop_after_sprite0_hit;
+    result->first_pc_after_wait_loop = first_pc_after_wait_loop;
     result->cpu = nes.cpu;
     result->stop_info = nes.stop_info;
     result->stats = nes.stats;
@@ -230,6 +256,43 @@ static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunRe
         printf("Instructions executed: %" PRIu64 "\n", nes.stats.instruction_count);
         printf("Unique opcodes executed: %" PRIu32 "\n", nes.stats.unique_opcodes);
         printf("NMI count: %" PRIu64 "\n", nes.stats.nmi_count);
+        printf(
+            "Sprite-0 hit: %s count=%" PRIu64,
+            nes.ppu.sprite0_hit_ever ? "yes" : "no",
+            nes.ppu.sprite0_hit_count
+        );
+        if (nes.ppu.sprite0_hit_ever) {
+            printf(
+                " first_frame=%" PRIu64 " first_scanline=%d first_x=%d",
+                nes.ppu.first_sprite0_hit_frame,
+                nes.ppu.first_sprite0_hit_scanline,
+                nes.ppu.first_sprite0_hit_x
+            );
+        }
+        printf("\n");
+        printf(
+            "Sprite-0 opaque pixels=%" PRIu64 " bg-overlap-pixels=%" PRIu64,
+            nes.ppu.sprite0_opaque_pixel_count,
+            nes.ppu.sprite0_background_overlap_count
+        );
+        if (nes.ppu.first_sprite0_opaque_scanline >= 0) {
+            printf(
+                " first_opaque_frame=%" PRIu64 " first_opaque_scanline=%d first_opaque_x=%d",
+                nes.ppu.first_sprite0_opaque_frame,
+                nes.ppu.first_sprite0_opaque_scanline,
+                nes.ppu.first_sprite0_opaque_x
+            );
+        }
+        printf("\n");
+        printf(
+            "Old wait loop entered=%d exited_after_sprite0_hit=%d",
+            entered_old_wait_loop ? 1 : 0,
+            exited_old_wait_loop_after_sprite0_hit ? 1 : 0
+        );
+        if (exited_old_wait_loop_after_sprite0_hit) {
+            printf(" first_pc_after_exit=%04X", first_pc_after_wait_loop);
+        }
+        printf("\n");
         printf("Final CPU state:\n");
         print_cpu_state(&nes.cpu);
         printf(
@@ -237,6 +300,18 @@ static bool run_smoke_pass(const char *rom_path, uint64_t step_limit, SmokeRunRe
             nes_frame_count(&nes),
             nes_scanline(&nes),
             nes_scanline_buffer(&nes)->ready ? 1 : 0
+        );
+        printf(
+            "PPU ctrl=%02X mask=%02X status=%02X scroll=(%u,%u) sprite0=[y=%u tile=%u attr=%02X x=%u]\n",
+            nes.ppu.ctrl,
+            nes.ppu.mask,
+            nes.ppu.status,
+            nes.ppu.scroll_x,
+            nes.ppu.scroll_y,
+            nes.ppu.oam[0],
+            nes.ppu.oam[1],
+            nes.ppu.oam[2],
+            nes.ppu.oam[3]
         );
         print_stop_summary(&nes);
         print_top_opcodes(&nes.stats, 10);
@@ -258,6 +333,14 @@ static bool compare_runs(const SmokeRunResult *a, const SmokeRunResult *b) {
     if (a->unique_opcodes != b->unique_opcodes) return false;
     if (a->nmi_count != b->nmi_count) return false;
     if (a->frames != b->frames || a->scanline != b->scanline) return false;
+    if (a->sprite0_hit_occurred != b->sprite0_hit_occurred) return false;
+    if (a->sprite0_hit_count != b->sprite0_hit_count) return false;
+    if (a->first_sprite0_hit_frame != b->first_sprite0_hit_frame) return false;
+    if (a->first_sprite0_hit_scanline != b->first_sprite0_hit_scanline) return false;
+    if (a->first_sprite0_hit_x != b->first_sprite0_hit_x) return false;
+    if (a->entered_old_wait_loop != b->entered_old_wait_loop) return false;
+    if (a->exited_old_wait_loop_after_sprite0_hit != b->exited_old_wait_loop_after_sprite0_hit) return false;
+    if (a->first_pc_after_wait_loop != b->first_pc_after_wait_loop) return false;
     if (a->state_hash != b->state_hash) return false;
     if (a->coverage_hash != b->coverage_hash) return false;
     if (memcmp(&a->stats.opcode_counts, &b->stats.opcode_counts, sizeof(a->stats.opcode_counts)) != 0) return false;
