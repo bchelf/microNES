@@ -12,11 +12,12 @@ struct HostSdlWindow {
     SDL_Window *window;
     SDL_Renderer *renderer;
     SDL_Texture *texture;
-    uint32_t *rgba_pixels;
+    uint8_t *rgba_pixels;
     int rgba_pitch_bytes;
 };
 
 static char g_host_sdl_window_last_error[256];
+static const float k_host_sdl_brightness_scale = 1.5f;
 
 static void host_sdl_set_error(const char *message) {
     if (message == NULL) {
@@ -85,7 +86,7 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
 
     window->texture = SDL_CreateTexture(
         window->renderer,
-        SDL_PIXELFORMAT_RGBA8888,
+        SDL_PIXELFORMAT_RGBA32,
         SDL_TEXTUREACCESS_STREAMING,
         NES_FRAME_WIDTH,
         NES_FRAME_HEIGHT
@@ -102,8 +103,8 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
 
-    window->rgba_pitch_bytes = NES_FRAME_WIDTH * (int)sizeof(uint32_t);
-    window->rgba_pixels = (uint32_t *)malloc((size_t)NES_FRAME_WIDTH * NES_FRAME_HEIGHT * sizeof(uint32_t));
+    window->rgba_pitch_bytes = NES_FRAME_WIDTH * 4;
+    window->rgba_pixels = (uint8_t *)malloc((size_t)NES_FRAME_WIDTH * NES_FRAME_HEIGHT * 4u);
     if (window->rgba_pixels == NULL) {
         host_sdl_set_error("malloc failed");
         host_sdl_window_destroy(window);
@@ -133,9 +134,6 @@ void host_sdl_window_destroy(HostSdlWindow *window) {
 }
 
 bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, int width, int height) {
-    void *texture_pixels = NULL;
-    int texture_pitch = 0;
-
     if (window == NULL || pixels == NULL || width != NES_FRAME_WIDTH || height != NES_FRAME_HEIGHT) {
         host_sdl_set_error("invalid frame upload parameters");
         return false;
@@ -143,23 +141,19 @@ bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, 
 
     for (int i = 0; i < width * height; ++i) {
         uint8_t gray = pixels[i];
-        window->rgba_pixels[i] = 0xff000000u | ((uint32_t)gray << 16) | ((uint32_t)gray << 8) | gray;
+        uint32_t brightened = (uint32_t)((float)gray * k_host_sdl_brightness_scale);
+        uint8_t out = (uint8_t)(brightened > 255u ? 255u : brightened);
+
+        window->rgba_pixels[i * 4 + 0] = out;
+        window->rgba_pixels[i * 4 + 1] = out;
+        window->rgba_pixels[i * 4 + 2] = out;
+        window->rgba_pixels[i * 4 + 3] = 0xffu;
     }
 
-    if (!SDL_LockTexture(window->texture, NULL, &texture_pixels, &texture_pitch)) {
-        host_sdl_set_sdl_error("SDL_LockTexture failed");
+    if (!SDL_UpdateTexture(window->texture, NULL, window->rgba_pixels, window->rgba_pitch_bytes)) {
+        host_sdl_set_sdl_error("SDL_UpdateTexture failed");
         return false;
     }
-
-    for (int y = 0; y < height; ++y) {
-        memcpy(
-            (uint8_t *)texture_pixels + (size_t)y * texture_pitch,
-            (const uint8_t *)window->rgba_pixels + (size_t)y * window->rgba_pitch_bytes,
-            (size_t)window->rgba_pitch_bytes
-        );
-    }
-
-    SDL_UnlockTexture(window->texture);
     return true;
 }
 
