@@ -14,10 +14,34 @@ struct HostSdlWindow {
     SDL_Texture *texture;
     uint8_t *rgba_pixels;
     int rgba_pitch_bytes;
+    bool enable_color;
 };
 
 static char g_host_sdl_window_last_error[256];
 static const float k_host_sdl_brightness_scale = 1.5f;
+static const float k_host_sdl_color_brightness_scale = 1.08f;
+
+static const uint8_t k_host_nes_palette[64][3] = {
+    { 0x7c, 0x7c, 0x7c }, { 0x00, 0x00, 0xfc }, { 0x00, 0x00, 0xbc }, { 0x44, 0x28, 0xbc },
+    { 0x94, 0x00, 0x84 }, { 0xa8, 0x00, 0x20 }, { 0xa8, 0x10, 0x00 }, { 0x88, 0x14, 0x00 },
+    { 0x50, 0x30, 0x00 }, { 0x00, 0x78, 0x00 }, { 0x00, 0x68, 0x00 }, { 0x00, 0x58, 0x00 },
+    { 0x00, 0x40, 0x58 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+
+    { 0xbc, 0xbc, 0xbc }, { 0x00, 0x78, 0xf8 }, { 0x00, 0x58, 0xf8 }, { 0x68, 0x44, 0xfc },
+    { 0xd8, 0x00, 0xcc }, { 0xe4, 0x00, 0x58 }, { 0xf8, 0x38, 0x00 }, { 0xe4, 0x5c, 0x10 },
+    { 0xac, 0x7c, 0x00 }, { 0x00, 0xb8, 0x00 }, { 0x00, 0xa8, 0x00 }, { 0x00, 0xa8, 0x44 },
+    { 0x00, 0x88, 0x88 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+
+    { 0xf8, 0xf8, 0xf8 }, { 0x3c, 0xbc, 0xfc }, { 0x68, 0x88, 0xfc }, { 0x98, 0x78, 0xf8 },
+    { 0xf8, 0x78, 0xf8 }, { 0xf8, 0x58, 0x98 }, { 0xf8, 0x78, 0x58 }, { 0xfc, 0xa0, 0x44 },
+    { 0xf8, 0xb8, 0x00 }, { 0xb8, 0xf8, 0x18 }, { 0x58, 0xd8, 0x54 }, { 0x58, 0xf8, 0x98 },
+    { 0x00, 0xe8, 0xd8 }, { 0x78, 0x78, 0x78 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+
+    { 0xfc, 0xfc, 0xfc }, { 0xa4, 0xe4, 0xfc }, { 0xb8, 0xb8, 0xf8 }, { 0xd8, 0xb8, 0xf8 },
+    { 0xf8, 0xb8, 0xf8 }, { 0xf8, 0xa4, 0xc0 }, { 0xf0, 0xd0, 0xb0 }, { 0xfc, 0xe0, 0xa8 },
+    { 0xf8, 0xd8, 0x78 }, { 0xd8, 0xf8, 0x78 }, { 0xb8, 0xf8, 0xb8 }, { 0xb8, 0xf8, 0xd8 },
+    { 0x00, 0xfc, 0xfc }, { 0xf8, 0xd8, 0xf8 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+};
 
 static void host_sdl_set_error(const char *message) {
     if (message == NULL) {
@@ -32,7 +56,30 @@ static void host_sdl_set_sdl_error(const char *prefix) {
     snprintf(g_host_sdl_window_last_error, sizeof(g_host_sdl_window_last_error), "%s: %s", prefix, SDL_GetError());
 }
 
-HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync) {
+static uint8_t host_scale_channel(uint8_t value, float scale) {
+    uint32_t scaled = (uint32_t)((float)value * scale);
+    return (uint8_t)(scaled > 255u ? 255u : scaled);
+}
+
+static void host_convert_gray_to_rgba(uint8_t gray, uint8_t *rgba_out) {
+    uint8_t out = host_scale_channel(gray, k_host_sdl_brightness_scale);
+
+    rgba_out[0] = out;
+    rgba_out[1] = out;
+    rgba_out[2] = out;
+    rgba_out[3] = 0xffu;
+}
+
+static void host_convert_palette_to_rgba(uint8_t palette_index, uint8_t *rgba_out) {
+    const uint8_t *rgb = k_host_nes_palette[palette_index & 0x3fu];
+
+    rgba_out[0] = host_scale_channel(rgb[0], k_host_sdl_color_brightness_scale);
+    rgba_out[1] = host_scale_channel(rgb[1], k_host_sdl_color_brightness_scale);
+    rgba_out[2] = host_scale_channel(rgb[2], k_host_sdl_color_brightness_scale);
+    rgba_out[3] = 0xffu;
+}
+
+HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color) {
     HostSdlWindow *window;
 
     host_sdl_set_error(NULL);
@@ -110,6 +157,7 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         host_sdl_window_destroy(window);
         return NULL;
     }
+    window->enable_color = enable_color;
 
     return window;
 }
@@ -140,14 +188,13 @@ bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, 
     }
 
     for (int i = 0; i < width * height; ++i) {
-        uint8_t gray = pixels[i];
-        uint32_t brightened = (uint32_t)((float)gray * k_host_sdl_brightness_scale);
-        uint8_t out = (uint8_t)(brightened > 255u ? 255u : brightened);
+        uint8_t *rgba = &window->rgba_pixels[i * 4];
 
-        window->rgba_pixels[i * 4 + 0] = out;
-        window->rgba_pixels[i * 4 + 1] = out;
-        window->rgba_pixels[i * 4 + 2] = out;
-        window->rgba_pixels[i * 4 + 3] = 0xffu;
+        if (window->enable_color) {
+            host_convert_palette_to_rgba(pixels[i], rgba);
+        } else {
+            host_convert_gray_to_rgba(pixels[i], rgba);
+        }
     }
 
     if (!SDL_UpdateTexture(window->texture, NULL, window->rgba_pixels, window->rgba_pitch_bytes)) {

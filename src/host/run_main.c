@@ -18,6 +18,7 @@ typedef struct {
     const char *rom_path;
     int scale;
     bool enable_vsync;
+    bool enable_color;
     uint64_t max_frames;
 } RunOptions;
 
@@ -26,7 +27,7 @@ typedef struct {
 } HostInputState;
 
 static void print_usage(const char *argv0) {
-    printf("Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--max-frames N]\n", argv0);
+    printf("Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--max-frames N]\n", argv0);
 }
 
 static bool parse_u64_arg(const char *text, uint64_t *value_out) {
@@ -59,6 +60,7 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     options->rom_path = "roms/smb1.nes";
     options->scale = HOST_DEFAULT_SCALE;
     options->enable_vsync = true;
+    options->enable_color = true;
     options->max_frames = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -82,6 +84,14 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
         }
         if (strcmp(arg, "--no-vsync") == 0) {
             options->enable_vsync = false;
+            continue;
+        }
+        if (strcmp(arg, "--color") == 0) {
+            options->enable_color = true;
+            continue;
+        }
+        if (strcmp(arg, "--grayscale") == 0 || strcmp(arg, "--no-color") == 0) {
+            options->enable_color = false;
             continue;
         }
         if (strcmp(arg, "--max-frames") == 0) {
@@ -216,7 +226,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    window = host_sdl_window_create("smb2350 - SMB1", options.scale, options.enable_vsync);
+    window = host_sdl_window_create("smb2350 - SMB1", options.scale, options.enable_vsync, options.enable_color);
     if (window == NULL) {
         fprintf(stderr, "SDL window init failed: %s\n", host_sdl_window_last_error());
         return 2;
@@ -235,6 +245,7 @@ int main(int argc, char **argv) {
     printf("ROM: %s\n", options.rom_path);
     printf("window scale: %d\n", options.scale);
     printf("vsync: %s\n", options.enable_vsync ? "on" : "off");
+    printf("display mode: %s\n", options.enable_color ? "color" : "grayscale");
     if (options.max_frames != 0) {
         printf("max frames: %" PRIu64 "\n", options.max_frames);
     }
