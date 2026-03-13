@@ -1,5 +1,6 @@
 #include "nes.h"
 #include "png_write.h"
+#include "video_capture.h"
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -38,6 +39,100 @@ typedef struct {
     NesStopInfo stop_info;
     NesExecutionStats stats;
 } SmokeRunResult;
+
+typedef struct {
+    const char *rom_path;
+    uint64_t step_limit;
+    const char *dump_frame_path;
+    const char *video_out_path;
+} SmokeOptions;
+
+enum {
+    HOST_VIDEO_FPS = 60,
+};
+
+static void print_usage(const char *argv0) {
+    printf(
+        "Usage: %s [rom_path] [step_limit] [frame_dump.png] [--video-out output.mp4]\n",
+        argv0
+    );
+    printf("       %s roms/smb1.nes --video-out smb.mp4\n", argv0);
+}
+
+static bool parse_u64_arg(const char *text, uint64_t *value_out) {
+    char *end = NULL;
+    unsigned long long parsed = strtoull(text, &end, 10);
+
+    if (text[0] == '\0' || end == NULL || *end != '\0') {
+        return false;
+    }
+
+    *value_out = (uint64_t)parsed;
+    return true;
+}
+
+static bool parse_args(int argc, char **argv, SmokeOptions *options) {
+    int positional_count = 0;
+
+    options->rom_path = "roms/smb1.nes";
+    options->step_limit = 1000000ull;
+    options->dump_frame_path = NULL;
+    options->video_out_path = NULL;
+
+    for (int i = 1; i < argc; ++i) {
+        const char *arg = argv[i];
+
+        if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+            print_usage(argv[0]);
+            return false;
+        }
+        if (strcmp(arg, "--video-out") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--video-out requires a path\n");
+                return false;
+            }
+            options->video_out_path = argv[++i];
+            continue;
+        }
+        if (strcmp(arg, "--frame-out") == 0 || strcmp(arg, "--png-out") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "%s requires a path\n", arg);
+                return false;
+            }
+            options->dump_frame_path = argv[++i];
+            continue;
+        }
+        if (strcmp(arg, "--steps") == 0) {
+            if (i + 1 >= argc || !parse_u64_arg(argv[i + 1], &options->step_limit)) {
+                fprintf(stderr, "--steps requires an integer value\n");
+                return false;
+            }
+            ++i;
+            continue;
+        }
+        if (arg[0] == '-') {
+            fprintf(stderr, "Unknown option: %s\n", arg);
+            return false;
+        }
+
+        ++positional_count;
+        if (positional_count == 1) {
+            options->rom_path = arg;
+        } else if (positional_count == 2) {
+            if (!parse_u64_arg(arg, &options->step_limit)) {
+                fprintf(stderr, "Invalid step limit: %s\n", arg);
+                return false;
+            }
+        } else if (positional_count == 3) {
+            options->dump_frame_path = arg;
+        } else {
+            fprintf(stderr, "Unexpected positional argument: %s\n", arg);
+            return false;
+        }
+    }
+
+    return true;
+}
 
 static void print_cpu_state(const Cpu6502 *cpu) {
     printf(
@@ -192,6 +287,7 @@ static bool run_smoke_pass(
     const char *rom_path,
     uint64_t step_limit,
     const char *dump_frame_path,
+    const char *video_out_path,
     SmokeRunResult *result,
     bool verbose
 ) {
@@ -200,6 +296,8 @@ static bool run_smoke_pass(
     bool entered_old_wait_loop = false;
     bool exited_old_wait_loop_after_sprite0_hit = false;
     uint16_t first_pc_after_wait_loop = 0;
+    host_video_capture_t *video_capture = NULL;
+    uint64_t video_frames_written = 0;
 
     nes_init(&nes);
 
@@ -222,6 +320,17 @@ static bool run_smoke_pass(
         );
         printf("Reset vector: %04X\n", nes.cpu.pc);
         print_cpu_state(nes_cpu_state(&nes));
+        if (video_out_path != NULL) {
+            video_capture = host_video_start(video_out_path, NES_FRAME_WIDTH, NES_FRAME_HEIGHT, HOST_VIDEO_FPS);
+            if (video_capture != NULL) {
+                printf("video capture enabled\n");
+                printf("output file: %s\n", video_out_path);
+                printf("resolution: %dx%d\n", NES_FRAME_WIDTH, NES_FRAME_HEIGHT);
+                printf("fps: %d\n", HOST_VIDEO_FPS);
+            } else {
+                printf("Warning: video capture disabled: %s\n", host_video_last_error());
+            }
+        }
     }
 
     while (nes_execution_stats(&nes)->instruction_count < step_limit) {
@@ -235,6 +344,16 @@ static bool run_smoke_pass(
         if (!nes_step_instruction(&nes)) {
             ok = false;
             break;
+        }
+
+        if (video_capture != NULL && nes.ppu.completed_frame_count > video_frames_written) {
+            if (host_video_write_frame(video_capture, nes.ppu.frame_buffer.pixels)) {
+                video_frames_written = nes.ppu.completed_frame_count;
+            } else {
+                printf("Warning: video capture write failed: %s\n", host_video_last_error());
+                host_video_close(video_capture);
+                video_capture = NULL;
+            }
         }
     }
 
@@ -371,6 +490,14 @@ static bool run_smoke_pass(
         print_trace_window(&nes);
         printf("State hash: 0x%016" PRIx64 "\n", nes_state_hash(&nes));
         printf("Coverage hash: 0x%016" PRIx64 "\n", hash_opcode_coverage(&nes.stats));
+        if (video_out_path != NULL) {
+            printf(
+                "Video frames written: %" PRIu64 " (~%.2f seconds at %d fps)\n",
+                video_frames_written,
+                (double)video_frames_written / (double)HOST_VIDEO_FPS,
+                HOST_VIDEO_FPS
+            );
+        }
         if (dump_frame_path != NULL) {
             if (host_write_png_gray8(
                     dump_frame_path,
@@ -384,6 +511,10 @@ static bool run_smoke_pass(
                 printf("Frame dump failed: %s\n", dump_frame_path);
             }
         }
+    }
+
+    if (video_capture != NULL && !host_video_close(video_capture)) {
+        printf("Warning: video capture close reported: %s\n", host_video_last_error());
     }
 
     nes_destroy(&nes);
@@ -422,20 +553,22 @@ static bool compare_runs(const SmokeRunResult *a, const SmokeRunResult *b) {
 }
 
 int main(int argc, char **argv) {
-    const char *rom_path = (argc > 1) ? argv[1] : "roms/smb1.nes";
-    uint64_t step_limit = (argc > 2) ? strtoull(argv[2], NULL, 10) : 1000000ull;
-    const char *dump_frame_path = (argc > 3) ? argv[3] : NULL;
+    SmokeOptions options;
     SmokeRunResult run1;
     SmokeRunResult run2;
+
+    if (!parse_args(argc, argv, &options)) {
+        return 1;
+    }
 
     memset(&run1, 0, sizeof(run1));
     memset(&run2, 0, sizeof(run2));
 
-    if (!run_smoke_pass(rom_path, step_limit, dump_frame_path, &run1, true)) {
+    if (!run_smoke_pass(options.rom_path, options.step_limit, options.dump_frame_path, options.video_out_path, &run1, true)) {
         return 1;
     }
 
-    if (!run_smoke_pass(rom_path, step_limit, NULL, &run2, false)) {
+    if (!run_smoke_pass(options.rom_path, options.step_limit, NULL, NULL, &run2, false)) {
         fprintf(stderr, "Determinism rerun failed unexpectedly\n");
         return 2;
     }
