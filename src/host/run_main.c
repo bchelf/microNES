@@ -1,6 +1,7 @@
 #include "audio_sdl.h"
 #include "frame_pacer.h"
 #include "nes.h"
+#include "wav_write.h"
 #include "window_sdl.h"
 
 #include <SDL3/SDL.h>
@@ -25,7 +26,13 @@ typedef struct {
     bool enable_color;
     bool enable_audio;
     bool throttled;
+    bool apu_stats;
+    bool apu_write_summary;
     uint64_t max_frames;
+    const char *dump_wav_path;
+    double dump_wav_seconds;
+    uint8_t audio_mix_mask;
+    ApuDebugTestTone test_tone;
 } RunOptions;
 
 typedef struct {
@@ -34,7 +41,7 @@ typedef struct {
 
 static void print_usage(const char *argv0) {
     printf(
-        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N]\n",
+        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--dump-wav path] [--dump-wav-seconds N]\n",
         argv0
     );
 }
@@ -63,6 +70,48 @@ static bool parse_int_arg(const char *text, int *value_out) {
     return true;
 }
 
+static bool parse_double_arg(const char *text, double *value_out) {
+    char *end = NULL;
+    double parsed = strtod(text, &end);
+
+    if (text[0] == '\0' || end == NULL || *end != '\0') {
+        return false;
+    }
+
+    *value_out = parsed;
+    return true;
+}
+
+static bool parse_audio_channel_mask(const char *text, uint8_t *mask_out) {
+    if (strcmp(text, "pulse1") == 0) {
+        *mask_out = APU_DEBUG_MASK_PULSE1;
+    } else if (strcmp(text, "pulse2") == 0) {
+        *mask_out = APU_DEBUG_MASK_PULSE2;
+    } else if (strcmp(text, "triangle") == 0) {
+        *mask_out = APU_DEBUG_MASK_TRIANGLE;
+    } else if (strcmp(text, "noise") == 0) {
+        *mask_out = APU_DEBUG_MASK_NOISE;
+    } else if (strcmp(text, "dmc") == 0) {
+        *mask_out = APU_DEBUG_MASK_DMC;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool parse_test_tone_mode(const char *text, ApuDebugTestTone *mode_out) {
+    if (strcmp(text, "off") == 0 || strcmp(text, "none") == 0) {
+        *mode_out = APU_DEBUG_TEST_TONE_NONE;
+    } else if (strcmp(text, "pulse1") == 0) {
+        *mode_out = APU_DEBUG_TEST_TONE_PULSE1;
+    } else if (strcmp(text, "triangle") == 0) {
+        *mode_out = APU_DEBUG_TEST_TONE_TRIANGLE;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 static bool parse_args(int argc, char **argv, RunOptions *options) {
     bool rom_set = false;
 
@@ -72,7 +121,13 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     options->enable_color = true;
     options->enable_audio = true;
     options->throttled = true;
+    options->apu_stats = false;
+    options->apu_write_summary = false;
     options->max_frames = 0;
+    options->dump_wav_path = NULL;
+    options->dump_wav_seconds = 2.0;
+    options->audio_mix_mask = APU_DEBUG_MASK_ALL;
+    options->test_tone = APU_DEBUG_TEST_TONE_NONE;
 
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -129,6 +184,59 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
             ++i;
             continue;
         }
+        if (strcmp(arg, "--audio-solo") == 0) {
+            uint8_t mask;
+            if (i + 1 >= argc || !parse_audio_channel_mask(argv[i + 1], &mask)) {
+                fprintf(stderr, "--audio-solo requires one of: pulse1 pulse2 triangle noise dmc\n");
+                return false;
+            }
+            options->audio_mix_mask = mask;
+            ++i;
+            continue;
+        }
+        if (strcmp(arg, "--audio-mute") == 0) {
+            uint8_t mask;
+            if (i + 1 >= argc || !parse_audio_channel_mask(argv[i + 1], &mask)) {
+                fprintf(stderr, "--audio-mute requires one of: pulse1 pulse2 triangle noise dmc\n");
+                return false;
+            }
+            options->audio_mix_mask = (uint8_t)(options->audio_mix_mask & (uint8_t)~mask);
+            ++i;
+            continue;
+        }
+        if (strcmp(arg, "--apu-test-tone") == 0) {
+            if (i + 1 >= argc || !parse_test_tone_mode(argv[i + 1], &options->test_tone)) {
+                fprintf(stderr, "--apu-test-tone requires one of: off pulse1 triangle\n");
+                return false;
+            }
+            ++i;
+            continue;
+        }
+        if (strcmp(arg, "--apu-stats") == 0) {
+            options->apu_stats = true;
+            continue;
+        }
+        if (strcmp(arg, "--apu-write-summary") == 0) {
+            options->apu_write_summary = true;
+            continue;
+        }
+        if (strcmp(arg, "--dump-wav") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--dump-wav requires a path\n");
+                return false;
+            }
+            options->dump_wav_path = argv[++i];
+            continue;
+        }
+        if (strcmp(arg, "--dump-wav-seconds") == 0) {
+            if (i + 1 >= argc || !parse_double_arg(argv[i + 1], &options->dump_wav_seconds) ||
+                options->dump_wav_seconds <= 0.0) {
+                fprintf(stderr, "--dump-wav-seconds requires a positive number\n");
+                return false;
+            }
+            ++i;
+            continue;
+        }
         if (arg[0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", arg);
             return false;
@@ -144,6 +252,92 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     }
 
     return true;
+}
+
+static double host_stats_average_abs(const ApuDebugSampleStats *stats) {
+    if (stats->sample_count == 0) {
+        return 0.0;
+    }
+    return (double)stats->abs_sum / (double)stats->sample_count;
+}
+
+static void host_print_apu_stats(const ApuDebugReport *report) {
+    printf(
+        "apu: mix_mask=%02X test_tone=%s clips=%" PRIu64 " dropped_pcm=%" PRIu64 "\n",
+        report->mix_enable_mask,
+        apu_debug_test_tone_name(report->test_tone),
+        report->clip_count,
+        report->dropped_samples
+    );
+    for (int i = 0; i < APU_DEBUG_CHANNEL_COUNT; ++i) {
+        const ApuDebugSampleStats *stats = &report->channel_stats[i];
+        printf(
+            "  %-8s samples=%" PRIu64 " nonzero=%" PRIu64 " min=%d max=%d avg_abs=%.2f\n",
+            apu_debug_channel_name((ApuDebugChannel)i),
+            stats->sample_count,
+            stats->nonzero_sample_count,
+            (int)stats->min_value,
+            (int)stats->max_value,
+            host_stats_average_abs(stats)
+        );
+    }
+    printf(
+        "  pulse1 state: en=%d len=%u timer=%u duty=%u step=%u env=%u\n",
+        report->pulse[0].enabled ? 1 : 0,
+        report->pulse[0].length_counter,
+        report->pulse[0].timer_period,
+        report->pulse[0].duty,
+        report->pulse[0].duty_step,
+        report->pulse[0].envelope_decay
+    );
+    printf(
+        "  pulse2 state: en=%d len=%u timer=%u duty=%u step=%u env=%u\n",
+        report->pulse[1].enabled ? 1 : 0,
+        report->pulse[1].length_counter,
+        report->pulse[1].timer_period,
+        report->pulse[1].duty,
+        report->pulse[1].duty_step,
+        report->pulse[1].envelope_decay
+    );
+    printf(
+        "  triangle state: en=%d len=%u lin=%u reload=%u timer=%u seq=%u\n",
+        report->triangle.enabled ? 1 : 0,
+        report->triangle.length_counter,
+        report->triangle.linear_counter,
+        report->triangle.linear_reload_value,
+        report->triangle.timer_period,
+        report->triangle.sequence_step
+    );
+    printf(
+        "  noise state: en=%d len=%u vol=%u period_idx=%u timer=%u shift=%04X\n",
+        report->noise.enabled ? 1 : 0,
+        report->noise.length_counter,
+        report->noise.envelope_decay,
+        report->noise.period_index,
+        report->noise.timer_period,
+        report->noise.shift_register
+    );
+}
+
+static void host_print_apu_write_summary(const ApuDebugReport *report) {
+    static const uint16_t k_interesting_registers[] = {
+        0x4000u, 0x4001u, 0x4002u, 0x4003u,
+        0x4004u, 0x4005u, 0x4006u, 0x4007u,
+        0x4008u, 0x400au, 0x400bu,
+        0x400cu, 0x400eu, 0x400fu,
+        0x4010u, 0x4011u, 0x4012u, 0x4013u,
+        0x4015u, 0x4017u,
+    };
+
+    printf("apu writes:\n");
+    for (size_t i = 0; i < sizeof(k_interesting_registers) / sizeof(k_interesting_registers[0]); ++i) {
+        uint16_t addr = k_interesting_registers[i];
+        const ApuDebugRegisterSummary *summary = &report->register_summary[addr - 0x4000u];
+        if (summary->write_count == 0) {
+            continue;
+        }
+        printf("  %04X count=%" PRIu64 " last=%02X\n", addr, summary->write_count, summary->last_value);
+    }
 }
 
 static int host_button_index_for_scancode(SDL_Scancode scancode) {
@@ -272,6 +466,10 @@ int main(int argc, char **argv) {
     uint64_t stats_window_start_ns = 0;
     uint64_t now_ns;
     int16_t audio_samples[2048];
+    ApuDebugReport apu_report;
+    int16_t *wav_samples = NULL;
+    size_t wav_capacity = 0;
+    size_t wav_count = 0;
 
     if (!parse_args(argc, argv, &options)) {
         return 1;
@@ -291,6 +489,9 @@ int main(int argc, char **argv) {
     }
 
     nes_reset(&nes);
+    nes_audio_set_mix_enable_mask(&nes, options.audio_mix_mask);
+    nes_audio_set_test_tone(&nes, options.test_tone);
+    nes_audio_debug_reset_metrics(&nes);
     audio = host_audio_sdl_create((int)nes_audio_sample_rate(&nes), options.enable_audio);
     if (audio == NULL) {
         fprintf(stderr, "SDL audio init failed: %s\n", host_audio_sdl_last_error());
@@ -314,6 +515,20 @@ int main(int argc, char **argv) {
         printf(" sample_rate=%u", nes_audio_sample_rate(&nes));
     }
     printf("\n");
+    printf("audio mix mask: %02X\n", nes_audio_mix_enable_mask(&nes));
+    printf("apu test tone: %s\n", apu_debug_test_tone_name(nes_audio_test_tone(&nes)));
+    if (options.dump_wav_path != NULL) {
+        wav_capacity = (size_t)((double)nes_audio_sample_rate(&nes) * options.dump_wav_seconds);
+        wav_samples = (int16_t *)calloc(wav_capacity != 0 ? wav_capacity : 1u, sizeof(*wav_samples));
+        if (wav_samples == NULL) {
+            fprintf(stderr, "WAV buffer allocation failed\n");
+            host_audio_sdl_destroy(audio);
+            host_sdl_window_destroy(window);
+            nes_destroy(&nes);
+            return 5;
+        }
+        printf("wav dump: %s seconds=%.2f samples=%zu\n", options.dump_wav_path, options.dump_wav_seconds, wav_capacity);
+    }
     if (options.max_frames != 0) {
         printf("max frames: %" PRIu64 "\n", options.max_frames);
     }
@@ -351,8 +566,17 @@ int main(int argc, char **argv) {
 
         while (nes_audio_available_samples(&nes) > 0) {
             size_t sample_count = nes_audio_read_samples(&nes, audio_samples, sizeof(audio_samples) / sizeof(audio_samples[0]));
+            size_t remaining;
             if (sample_count == 0) {
                 break;
+            }
+            if (wav_samples != NULL && wav_count < wav_capacity) {
+                remaining = wav_capacity - wav_count;
+                if (remaining > sample_count) {
+                    remaining = sample_count;
+                }
+                memcpy(&wav_samples[wav_count], audio_samples, remaining * sizeof(audio_samples[0]));
+                wav_count += remaining;
             }
             if (!host_audio_sdl_submit_samples(audio, audio_samples, sample_count)) {
                 fprintf(stderr, "Audio submit failed: %s\n", host_audio_sdl_last_error());
@@ -410,6 +634,24 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (wav_samples != NULL) {
+        if (!host_write_wav_mono_s16(options.dump_wav_path, wav_samples, wav_count, nes_audio_sample_rate(&nes))) {
+            fprintf(stderr, "WAV dump failed: %s\n", host_wav_write_last_error());
+        } else {
+            printf("wav written: %s samples=%zu\n", options.dump_wav_path, wav_count);
+        }
+    }
+    if (options.apu_stats || options.apu_write_summary) {
+        nes_audio_debug_get_report(&nes, &apu_report);
+        if (options.apu_stats) {
+            host_print_apu_stats(&apu_report);
+        }
+        if (options.apu_write_summary) {
+            host_print_apu_write_summary(&apu_report);
+        }
+    }
+
+    free(wav_samples);
     nes_destroy(&nes);
     host_audio_sdl_destroy(audio);
     host_sdl_window_destroy(window);

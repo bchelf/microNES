@@ -129,6 +129,30 @@ size_t nes_audio_read_samples(Nes *nes, int16_t *dst, size_t max_samples) {
     return apu_audio_read_samples(&nes->apu, dst, max_samples);
 }
 
+void nes_audio_set_mix_enable_mask(Nes *nes, uint8_t mask) {
+    apu_debug_set_mix_enable_mask(&nes->apu, mask);
+}
+
+uint8_t nes_audio_mix_enable_mask(const Nes *nes) {
+    return apu_debug_mix_enable_mask(&nes->apu);
+}
+
+void nes_audio_set_test_tone(Nes *nes, ApuDebugTestTone mode) {
+    apu_debug_set_test_tone(&nes->apu, mode);
+}
+
+ApuDebugTestTone nes_audio_test_tone(const Nes *nes) {
+    return apu_debug_test_tone(&nes->apu);
+}
+
+void nes_audio_debug_reset_metrics(Nes *nes) {
+    apu_debug_reset_metrics(&nes->apu);
+}
+
+void nes_audio_debug_get_report(const Nes *nes, ApuDebugReport *report) {
+    apu_debug_get_report(&nes->apu, report);
+}
+
 const Cpu6502 *nes_cpu_state(const Nes *nes) {
     return &nes->cpu;
 }

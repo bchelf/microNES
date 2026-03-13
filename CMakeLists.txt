@@ -51,6 +51,7 @@ if (SMB2350_PLATFORM STREQUAL "host")
         add_executable(smb2350_run
             src/host/audio_sdl.c
             src/host/run_main.c
+            src/host/wav_write.c
             src/host/window_sdl.c
         )
 

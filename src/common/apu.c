@@ -40,6 +40,35 @@ static const uint16_t k_apu_noise_period_table[16] = {
     202, 254, 380, 508, 762, 1016, 2034, 4068,
 };
 
+enum {
+    APU_TEST_TONE_PULSE_PHASE = 0,
+    APU_TEST_TONE_TRIANGLE_PHASE = 1,
+};
+
+static const uint32_t k_apu_test_tone_step_pulse1 =
+    (uint32_t)((440ull << 32) / APU_OUTPUT_SAMPLE_RATE);
+static const uint32_t k_apu_test_tone_step_triangle =
+    (uint32_t)((220ull << 32) / APU_OUTPUT_SAMPLE_RATE);
+
+static void apu_stats_note(ApuDebugSampleStats *stats, int32_t value) {
+    if (stats->sample_count == 0) {
+        stats->min_value = value;
+        stats->max_value = value;
+    } else {
+        if (value < stats->min_value) {
+            stats->min_value = value;
+        }
+        if (value > stats->max_value) {
+            stats->max_value = value;
+        }
+    }
+    ++stats->sample_count;
+    if (value != 0) {
+        ++stats->nonzero_sample_count;
+    }
+    stats->abs_sum += (uint64_t)(value < 0 ? -value : value);
+}
+
 static void apu_pcm_push(Apu *apu, int16_t sample) {
     if (apu->pcm_count >= APU_PCM_CAPACITY) {
         ++apu->dropped_samples;
@@ -50,6 +79,53 @@ static void apu_pcm_push(Apu *apu, int16_t sample) {
     apu->pcm_write_index = (apu->pcm_write_index + 1u) % APU_PCM_CAPACITY;
     ++apu->pcm_count;
     ++apu->sample_count;
+}
+
+static void apu_capture_pulse_state(const ApuPulseChannel *src, ApuDebugPulseState *dst) {
+    dst->enabled = src->enabled;
+    dst->length_halt = src->length_halt;
+    dst->constant_volume = src->constant_volume;
+    dst->sweep_enabled = src->sweep_enabled;
+    dst->duty = src->duty;
+    dst->duty_step = src->duty_step;
+    dst->volume_period = src->volume_period;
+    dst->envelope_decay = src->envelope_decay;
+    dst->length_counter = src->length_counter;
+    dst->timer_period = src->timer_period;
+    dst->timer_counter = src->timer_counter;
+}
+
+static void apu_capture_triangle_state(const ApuTriangleChannel *src, ApuDebugTriangleState *dst) {
+    dst->enabled = src->enabled;
+    dst->control_flag = src->control_flag;
+    dst->linear_reload_flag = src->linear_reload_flag;
+    dst->sequence_step = src->sequence_step;
+    dst->linear_reload_value = src->linear_reload_value;
+    dst->linear_counter = src->linear_counter;
+    dst->length_counter = src->length_counter;
+    dst->timer_period = src->timer_period;
+    dst->timer_counter = src->timer_counter;
+}
+
+static void apu_capture_noise_state(const ApuNoiseChannel *src, ApuDebugNoiseState *dst) {
+    dst->enabled = src->enabled;
+    dst->length_halt = src->length_halt;
+    dst->constant_volume = src->constant_volume;
+    dst->mode = src->mode;
+    dst->volume_period = src->volume_period;
+    dst->envelope_decay = src->envelope_decay;
+    dst->length_counter = src->length_counter;
+    dst->period_index = src->period_index;
+    dst->timer_period = src->timer_period;
+    dst->timer_counter = src->timer_counter;
+    dst->shift_register = src->shift_register;
+}
+
+static void apu_reset_debug_defaults(Apu *apu) {
+    apu->mix_enable_mask = APU_DEBUG_MASK_ALL;
+    apu->test_tone_mode = (uint8_t)APU_DEBUG_TEST_TONE_NONE;
+    apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] = 0;
+    apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] = 0;
 }
 
 static uint16_t apu_pulse_sweep_target(const ApuPulseChannel *pulse) {
@@ -309,14 +385,55 @@ static uint8_t apu_noise_output(const ApuNoiseChannel *noise) {
 }
 
 static int16_t apu_mix_sample(Apu *apu) {
-    double pulse_sum = (double)apu_pulse_output(&apu->pulse[0]) + (double)apu_pulse_output(&apu->pulse[1]);
-    double triangle = (double)apu_triangle_output(&apu->triangle) * k_apu_triangle_mix_boost;
-    double noise = (double)apu_noise_output(&apu->noise) * k_apu_noise_mix_boost;
+    int32_t pulse1_raw = (int32_t)apu_pulse_output(&apu->pulse[0]);
+    int32_t pulse2_raw = (int32_t)apu_pulse_output(&apu->pulse[1]);
+    int32_t triangle_raw = (int32_t)apu_triangle_output(&apu->triangle);
+    int32_t noise_raw = (int32_t)apu_noise_output(&apu->noise);
+    int32_t dmc_raw = 0;
+    double pulse1;
+    double pulse2;
+    double triangle;
+    double noise;
+    double pulse_sum;
     double pulse_out = 0.0;
     double tnd_out = 0.0;
     double mixed;
-    double filtered;
     int sample;
+
+    if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_PULSE1) {
+        apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] += k_apu_test_tone_step_pulse1;
+        pulse1_raw = (apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] & 0x80000000u) ? 12 : 0;
+        pulse2_raw = 0;
+        triangle_raw = 0;
+        noise_raw = 0;
+    } else if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_TRIANGLE) {
+        uint32_t phase;
+        uint32_t step;
+        int32_t tri;
+
+        apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] += k_apu_test_tone_step_triangle;
+        phase = apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE];
+        step = phase >> 27;
+        tri = (step < 16u) ? (int32_t)step : (int32_t)(31u - step);
+        pulse1_raw = 0;
+        pulse2_raw = 0;
+        triangle_raw = tri;
+        noise_raw = 0;
+    }
+
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_PULSE1], pulse1_raw);
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_PULSE2], pulse2_raw);
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_TRIANGLE], triangle_raw);
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_NOISE], noise_raw);
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], dmc_raw);
+
+    pulse1 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1) ? (double)pulse1_raw : 0.0;
+    pulse2 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2) ? (double)pulse2_raw : 0.0;
+    triangle = (apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE) ?
+        (double)triangle_raw * k_apu_triangle_mix_boost : 0.0;
+    noise = (apu->mix_enable_mask & APU_DEBUG_MASK_NOISE) ?
+        (double)noise_raw * k_apu_noise_mix_boost : 0.0;
+    pulse_sum = pulse1 + pulse2;
 
     if (pulse_sum > 0.0) {
         pulse_out = 95.88 / ((8128.0 / pulse_sum) + 100.0);
@@ -335,9 +452,12 @@ static int16_t apu_mix_sample(Apu *apu) {
     sample = (int)lrint(mixed * 32767.0 * 0.85);
     if (sample < -32768) {
         sample = -32768;
+        ++apu->clip_count;
     } else if (sample > 32767) {
         sample = 32767;
+        ++apu->clip_count;
     }
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_FINAL_MIX], sample);
     return (int16_t)sample;
 }
 
@@ -353,12 +473,14 @@ void apu_init(Apu *apu) {
     memset(apu, 0, sizeof(*apu));
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
+    apu_reset_debug_defaults(apu);
 }
 
 void apu_reset(Apu *apu) {
     memset(apu, 0, sizeof(*apu));
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
+    apu_reset_debug_defaults(apu);
 }
 
 void apu_step(Apu *apu, uint32_t cpu_cycles) {
@@ -404,6 +526,7 @@ uint8_t apu_cpu_read(Apu *apu, uint16_t addr) {
 void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
     if (addr >= 0x4000u && addr <= 0x4017u) {
         apu->registers[addr - 0x4000u] = value;
+        ++apu->register_write_count[addr - 0x4000u];
     }
 
     switch (addr) {
@@ -534,4 +657,79 @@ size_t apu_audio_read_samples(Apu *apu, int16_t *dst, size_t max_samples) {
     }
     apu->pcm_count -= (uint32_t)count;
     return count;
+}
+
+void apu_debug_set_mix_enable_mask(Apu *apu, uint8_t mask) {
+    apu->mix_enable_mask = (uint8_t)(mask & APU_DEBUG_MASK_ALL);
+}
+
+uint8_t apu_debug_mix_enable_mask(const Apu *apu) {
+    return apu->mix_enable_mask;
+}
+
+void apu_debug_set_test_tone(Apu *apu, ApuDebugTestTone mode) {
+    apu->test_tone_mode = (uint8_t)mode;
+    apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] = 0;
+    apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] = 0;
+}
+
+ApuDebugTestTone apu_debug_test_tone(const Apu *apu) {
+    return (ApuDebugTestTone)apu->test_tone_mode;
+}
+
+void apu_debug_reset_metrics(Apu *apu) {
+    memset(apu->channel_stats, 0, sizeof(apu->channel_stats));
+    memset(apu->register_write_count, 0, sizeof(apu->register_write_count));
+    apu->dropped_samples = 0;
+    apu->clip_count = 0;
+}
+
+void apu_debug_get_report(const Apu *apu, ApuDebugReport *report) {
+    memset(report, 0, sizeof(*report));
+    report->mix_enable_mask = apu->mix_enable_mask;
+    report->test_tone = (ApuDebugTestTone)apu->test_tone_mode;
+    report->dropped_samples = apu->dropped_samples;
+    report->clip_count = apu->clip_count;
+    memcpy(report->channel_stats, apu->channel_stats, sizeof(report->channel_stats));
+    for (size_t i = 0; i < APU_DEBUG_REGISTER_COUNT; ++i) {
+        report->register_summary[i].write_count = apu->register_write_count[i];
+        report->register_summary[i].last_value = apu->registers[i];
+    }
+    apu_capture_pulse_state(&apu->pulse[0], &report->pulse[0]);
+    apu_capture_pulse_state(&apu->pulse[1], &report->pulse[1]);
+    apu_capture_triangle_state(&apu->triangle, &report->triangle);
+    apu_capture_noise_state(&apu->noise, &report->noise);
+    report->status = apu->status;
+    report->frame_counter_mode_5 = apu->frame_counter_mode_5;
+    report->frame_irq_inhibit = apu->frame_irq_inhibit;
+}
+
+const char *apu_debug_channel_name(ApuDebugChannel channel) {
+    switch (channel) {
+    case APU_DEBUG_CHANNEL_PULSE1:
+        return "pulse1";
+    case APU_DEBUG_CHANNEL_PULSE2:
+        return "pulse2";
+    case APU_DEBUG_CHANNEL_TRIANGLE:
+        return "triangle";
+    case APU_DEBUG_CHANNEL_NOISE:
+        return "noise";
+    case APU_DEBUG_CHANNEL_DMC:
+        return "dmc";
+    case APU_DEBUG_CHANNEL_FINAL_MIX:
+        return "mix";
+    default:
+        return "unknown";
+    }
+}
+
+const char *apu_debug_test_tone_name(ApuDebugTestTone mode) {
+    switch (mode) {
+    case APU_DEBUG_TEST_TONE_PULSE1:
+        return "pulse1";
+    case APU_DEBUG_TEST_TONE_TRIANGLE:
+        return "triangle";
+    default:
+        return "off";
+    }
 }

@@ -68,6 +68,12 @@ bool nes_step_frame(Nes *nes);
 uint32_t nes_audio_sample_rate(const Nes *nes);
 size_t nes_audio_available_samples(const Nes *nes);
 size_t nes_audio_read_samples(Nes *nes, int16_t *dst, size_t max_samples);
+void nes_audio_set_mix_enable_mask(Nes *nes, uint8_t mask);
+uint8_t nes_audio_mix_enable_mask(const Nes *nes);
+void nes_audio_set_test_tone(Nes *nes, ApuDebugTestTone mode);
+ApuDebugTestTone nes_audio_test_tone(const Nes *nes);
+void nes_audio_debug_reset_metrics(Nes *nes);
+void nes_audio_debug_get_report(const Nes *nes, ApuDebugReport *report);
 
 const Cpu6502 *nes_cpu_state(const Nes *nes);
 uint64_t nes_frame_count(const Nes *nes);
