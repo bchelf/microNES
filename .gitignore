@@ -1,5 +1,5 @@
 build/
-rom/
+roms/
 *.uf2
 *.elf
 *.bin
