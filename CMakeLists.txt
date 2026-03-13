@@ -34,6 +34,8 @@ target_include_directories(smb2350_core PUBLIC
 )
 
 if (SMB2350_PLATFORM STREQUAL "host")
+    find_package(SDL3 QUIET CONFIG)
+
     add_executable(smb2350_smoke
         src/host/png_write.c
         src/host/smoke_main.c
@@ -43,6 +45,20 @@ if (SMB2350_PLATFORM STREQUAL "host")
     target_link_libraries(smb2350_smoke PRIVATE
         smb2350_core
     )
+
+    if (SDL3_FOUND)
+        add_executable(smb2350_run
+            src/host/run_main.c
+            src/host/window_sdl.c
+        )
+
+        target_link_libraries(smb2350_run PRIVATE
+            SDL3::SDL3
+            smb2350_core
+        )
+    else ()
+        message(WARNING "SDL3 not found; smb2350_run will not be built.")
+    endif ()
 elseif (SMB2350_PLATFORM STREQUAL "pico")
     pico_sdk_init()
 
