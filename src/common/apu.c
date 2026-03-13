@@ -11,7 +11,6 @@ enum {
     APU_FRAME_STEP_5 = 18641,
 };
 
-static const double k_apu_dc_filter_feedback = 0.9992;
 static const double k_apu_triangle_mix_boost = 1.35;
 static const double k_apu_noise_mix_boost = 1.10;
 
@@ -327,11 +326,13 @@ static int16_t apu_mix_sample(Apu *apu) {
     }
 
     mixed = pulse_out + tnd_out;
-    filtered = mixed - apu->dc_prev_input + (k_apu_dc_filter_feedback * apu->dc_prev_output);
-    apu->dc_prev_input = mixed;
-    apu->dc_prev_output = filtered;
 
-    sample = (int)lrint(filtered * 32767.0 * 0.85);
+    /* No DC filter: the derivative-form filter (y = x - x_prev + a*y_prev)
+     * produces a full-amplitude negative spike whenever the mixer output drops
+     * (e.g. length counter silencing a channel mid-waveform). That spike decays
+     * over ~26ms at this sample rate, audible as a thump at effect end. The NES
+     * mixer output is already 0 at true silence so there is no DC to remove. */
+    sample = (int)lrint(mixed * 32767.0 * 0.85);
     if (sample < -32768) {
         sample = -32768;
     } else if (sample > 32767) {
