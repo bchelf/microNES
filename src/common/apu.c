@@ -158,18 +158,21 @@ static void apu_clock_triangle_linear(ApuTriangleChannel *triangle) {
 }
 
 static void apu_clock_sweep(ApuPulseChannel *pulse) {
-    if (pulse->sweep_divider == 0) {
-        if (pulse->sweep_enabled && pulse->sweep_shift > 0 && !apu_pulse_sweep_muted(pulse)) {
-            pulse->timer_period = apu_pulse_sweep_target(pulse);
-        }
-        pulse->sweep_divider = pulse->sweep_period;
-    } else {
-        --pulse->sweep_divider;
+    bool do_update = (pulse->sweep_divider == 0) &&
+                     pulse->sweep_enabled &&
+                     pulse->sweep_shift > 0 &&
+                     !apu_pulse_sweep_muted(pulse);
+
+    if (do_update) {
+        pulse->timer_period = apu_pulse_sweep_target(pulse);
     }
 
-    if (pulse->sweep_reload) {
-        pulse->sweep_reload = false;
+    if (pulse->sweep_divider == 0 || pulse->sweep_reload) {
+        /* Spec: divider period is P+1 half-frames, so reload to P. */
         pulse->sweep_divider = pulse->sweep_period;
+        pulse->sweep_reload = false;
+    } else {
+        --pulse->sweep_divider;
     }
 }
 
@@ -360,9 +363,11 @@ void apu_reset(Apu *apu) {
 void apu_step(Apu *apu, uint32_t cpu_cycles) {
     for (uint32_t i = 0; i < cpu_cycles; ++i) {
         ++apu->cpu_cycles;
-        apu_clock_frame_counter(apu);
         apu_clock_triangle_timer(&apu->triangle);
+        /* Pulse timers, noise, and frame counter are all clocked at APU rate
+         * (every other CPU cycle). Frame counter thresholds are in APU cycles. */
         if ((apu->cpu_cycles & 1u) == 0u) {
+            apu_clock_frame_counter(apu);
             apu_clock_pulse_timer(&apu->pulse[0]);
             apu_clock_pulse_timer(&apu->pulse[1]);
             apu_clock_noise_timer(&apu->noise);
@@ -424,7 +429,7 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
     case 0x4006u: {
         ApuPulseChannel *pulse = &apu->pulse[(addr - 0x4002u) / 4u];
         pulse->timer_period = (uint16_t)((pulse->timer_period & 0x0700u) | value);
-        pulse->timer_counter = pulse->timer_period;
+        /* Do not reset timer_counter here; only $4003/$4007 restarts the timer. */
         break;
     }
     case 0x4003u:
@@ -445,7 +450,7 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         break;
     case 0x400au:
         apu->triangle.timer_period = (uint16_t)((apu->triangle.timer_period & 0x0700u) | value);
-        apu->triangle.timer_counter = apu->triangle.timer_period;
+        /* Do not reset timer_counter here; only $400B restarts the timer. */
         break;
     case 0x400bu:
         apu->triangle.timer_period = (uint16_t)((apu->triangle.timer_period & 0x00ffu) | ((uint16_t)(value & 0x07u) << 8));
