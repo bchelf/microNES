@@ -1,13 +1,38 @@
 # smb2350
 
-Minimal Raspberry Pi Pico 2 / RP2350 bring-up project for the first two console hardware checks:
+This repo now contains two separate tracks:
 
-- monochrome NTSC composite video on `GP0` and `GP1`
-- mono PWM audio tone on `GP2`
+- a Pico 2 / RP2350 hardware bring-up target for composite video and audio
+- Deliverable A: a portable SMB1/NES core library for host-side testing and later Pico reuse
 
-This project intentionally avoids emulator work, color encoding, and extra hardware so the first UF2 can verify that video lock and audio output work on the bench.
+The emulator core is intentionally platform-independent. It does not include Pico SDK headers, macOS-specific APIs, PNG output, or composite video logic.
 
-## Project layout
+## Deliverable A
+
+Deliverable A adds a reusable C core under `src/common` with these pieces:
+
+- `Nes` top-level state object and stepping API
+- NROM-only iNES cartridge loading
+- CPU/bus/reset foundation for real ROM execution
+- PPU state and scanline-oriented rendering scaffolding
+- controller latch/shift abstraction
+- frame buffer and scanline buffer types
+- a native host smoke executable for macOS development
+
+### What is intentionally incomplete
+
+This is a serious foundation, but not a finished emulator:
+
+- the CPU implements a substantial real opcode path, not the complete 6502 instruction matrix
+- only mapper `0` / NROM is supported
+- the PPU is background/scanline oriented, but not cycle-accurate and not sprite-complete
+- the APU is a timing/register scaffold only
+- there is no PNG output yet
+- there is no composite conversion in the emulator core
+
+The design goal is to keep the core deterministic, testable, and easy to reuse from either a host renderer or a future RP2350 scanline output path.
+
+## Repo layout
 
 ```text
 .
@@ -15,101 +40,111 @@ This project intentionally avoids emulator work, color encoding, and extra hardw
 |-- pico_sdk_import.cmake
 |-- README.md
 `-- src
-    |-- audio_pwm.c
-    |-- audio_pwm.h
-    |-- main.c
-    |-- video_ntsc.c
-    |-- video_ntsc.h
-    `-- video_ntsc.pio
+    |-- common
+    |   |-- apu.c
+    |   |-- apu.h
+    |   |-- cart.c
+    |   |-- cart.h
+    |   |-- cpu6502.c
+    |   |-- cpu6502.h
+    |   |-- framebuffer.h
+    |   |-- input.c
+    |   |-- input.h
+    |   |-- nes.c
+    |   |-- nes.h
+    |   |-- nrom.c
+    |   |-- nrom.h
+    |   |-- ppu.c
+    |   |-- ppu.h
+    |   `-- scanline.h
+    |-- host
+    |   `-- smoke_main.c
+    `-- pico
+        |-- audio_pwm.c
+        |-- audio_pwm.h
+        |-- main.c
+        |-- video_ntsc.c
+        |-- video_ntsc.h
+        `-- video_ntsc.pio
 ```
+
+## Architecture
+
+### Portable core
+
+`src/common` contains all emulator/runtime state and logic:
+
+- `nes.c` owns the top-level bus, reset flow, stepping functions, and public API
+- `cpu6502.c` executes instructions against the NES bus
+- `cart.c` loads iNES files and validates the NROM-only cartridge model
+- `nrom.c` maps PRG/CHR memory for mapper 0
+- `ppu.c` owns VRAM, OAM, palette RAM, PPU register behavior, frame timing, and a scanline-oriented background renderer
+- `input.c` implements the controller latch and serial shift behavior
+- `apu.c` is a minimal timing/register placeholder for later audio work
+
+The frame output is a portable indexed-pixel representation:
+
+- full frame buffer: `256x240`
+- scanline buffer: `256` pixels
+
+That makes it usable later from:
+
+- a host-side frame hash / PNG dumper
+- an RP2350 scanline-to-composite adapter
+
+### Build separation
+
+The top-level CMake now supports one platform per build directory:
+
+- `SMB2350_PLATFORM=host` builds the portable core and native smoke target
+- `SMB2350_PLATFORM=pico` builds the existing RP2350 bring-up target
+
+That keeps host testing native while preserving the Pico cross-build.
 
 ## Build on macOS
 
-Assumptions:
+### Host smoke target
 
-- Pico SDK is already installed
-- `PICO_SDK_PATH` is exported in your shell
-- ARM embedded build tools are already installed
-
-Configure and build:
+This uses the normal host compiler and does not require the Pico SDK toolchain path.
 
 ```sh
-mkdir -p build
-cd build
-cmake ..
-cmake --build . -j
+cd /Users/bchelf/smb2350
+cmake -S . -B build-host -DSMB2350_PLATFORM=host
+cmake --build build-host -j
+./build-host/smb2350_smoke roms/smb1.nes 64
 ```
 
-The build produces:
+What the smoke target does:
 
-- `build/smb2350.uf2`
-- `build/smb2350.elf`
-- `build/smb2350.bin`
+1. loads an iNES ROM from the path you give it
+2. validates that it is NROM / mapper 0
+3. resets the NES core
+4. prints the reset vector and initial CPU state
+5. executes a small number of CPU instruction steps
+6. prints the resulting CPU/PPU summary
 
-## Flashing the UF2
+### Pico bring-up target
 
-1. Hold `BOOTSEL` on the Pico 2 while plugging in USB.
-2. The board should mount as `RPI-RP2`.
-3. Copy `build/smb2350.uf2` onto that drive.
-4. The board will reboot and start video/audio output immediately.
+This keeps the current composite/audio bench target intact.
 
-## Breadboard wiring
+```sh
+cd /Users/bchelf/smb2350
+source ~/.zshrc
+cmake -S . -B build-pico -DSMB2350_PLATFORM=pico
+cmake --build build-pico -j
+```
 
-### Composite video
+The Pico build still produces:
 
-Simple 2-pin resistor DAC into one RCA jack:
+- `build-pico/smb2350.uf2`
+- `build-pico/smb2350.elf`
+- `build-pico/smb2350.bin`
 
-- `GP0` -> `1k` resistor -> RCA center
-- `GP1` -> `470 ohm` resistor -> RCA center
-- Pico `GND` -> RCA shell
+## Deliverable B likely next
 
-Level assumptions:
+The next useful deliverable is likely:
 
-- `GP0` is the sync/blank bias pin
-- `GP1` adds luma for white pixels
-- the display is assumed to provide `75 ohm` termination internally
-
-Nominal output levels with that load are roughly:
-
-- sync: both pins low
-- black / blank: `GP0=1`, `GP1=0`
-- white: `GP0=1`, `GP1=1`
-
-### Audio
-
-- `GP2` -> `1k` resistor -> audio jack tip
-- Pico `GND` -> audio jack sleeve
-
-An optional small RC low-pass is fine, but the tone is designed to be audible even with only the series resistor.
-
-## What you should see and hear
-
-On power-up the program generates a non-interlaced NTSC-like monochrome test frame:
-
-- black background
-- white border
-- vertical bar region for width/linearity checks
-- horizontal bar region for height checks
-- white center crosshair
-
-You should hear a steady mid-frequency test tone on `GP2`.
-
-This is intended as a first hardware confidence check:
-
-- CRT or composite monitor should lock horizontally and vertically
-- geometry should be visibly inspectable
-- audio path should confirm the PWM output wiring
-
-## Implementation notes
-
-- Video timing uses a PIO state machine clocked at `512 samples / line`, with DMA continuously looping over a precomputed frame buffer.
-- The frame is `262` lines long at approximately `59.94 Hz`, matching a simple `240p`-style NTSC cadence rather than full interlaced broadcast timing.
-- Vertical sync is intentionally simplified to a short broad-sync region because the goal here is reliable bring-up, not broadcast compliance.
-- Audio uses high-rate PWM on `GP2` and a timer-driven sine table for a simple test tone.
-
-## Next milestones
-
-1. Replace the static test frame with a scanline renderer and line callbacks.
-2. Add a tile/sprite-oriented monochrome SMB test renderer.
-3. Replace the single tone with a small software mixer and frame-synchronous audio.
-4. Decide whether to keep the PIO + DMA composite path or move to a more advanced renderer once gameplay timing is integrated.
+1. expand CPU opcode coverage until SMB1 reset and main loop execution are dependable
+2. improve PPU behavior around scrolling, attribute use, and sprite evaluation
+3. add a host-side frame/hash or PNG testing adapter
+4. bridge scanline output into the RP2350 composite path without leaking hardware details into the core
