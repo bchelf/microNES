@@ -45,6 +45,11 @@ typedef struct {
     uint64_t first_sprite0_opaque_frame;
     int first_sprite0_opaque_scanline;
     int first_sprite0_opaque_x;
+    uint64_t sprite_composited_pixel_count;
+    uint64_t frames_with_sprite_pixels;
+    uint32_t last_completed_sprite_pixels;
+    uint64_t first_frame_with_sprite_pixels;
+    uint8_t max_scanline_sprite_count;
     NesFrameBuffer frame_buffer;
     NesScanline scanline_buffer;
 } Ppu;

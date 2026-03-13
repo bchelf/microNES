@@ -27,6 +27,10 @@ typedef struct {
     uint64_t first_sprite0_hit_frame;
     int first_sprite0_hit_scanline;
     int first_sprite0_hit_x;
+    uint64_t frames_with_sprite_pixels;
+    uint32_t last_completed_sprite_pixels;
+    uint64_t first_frame_with_sprite_pixels;
+    uint8_t max_scanline_sprite_count;
     bool entered_old_wait_loop;
     bool exited_old_wait_loop_after_sprite0_hit;
     uint16_t first_pc_after_wait_loop;
@@ -262,6 +266,10 @@ static bool run_smoke_pass(
     result->first_sprite0_hit_frame = nes.ppu.first_sprite0_hit_frame;
     result->first_sprite0_hit_scanline = nes.ppu.first_sprite0_hit_scanline;
     result->first_sprite0_hit_x = nes.ppu.first_sprite0_hit_x;
+    result->frames_with_sprite_pixels = nes.ppu.frames_with_sprite_pixels;
+    result->last_completed_sprite_pixels = nes.ppu.last_completed_sprite_pixels;
+    result->first_frame_with_sprite_pixels = nes.ppu.first_frame_with_sprite_pixels;
+    result->max_scanline_sprite_count = nes.ppu.max_scanline_sprite_count;
     result->entered_old_wait_loop = entered_old_wait_loop;
     result->exited_old_wait_loop_after_sprite0_hit = exited_old_wait_loop_after_sprite0_hit;
     result->first_pc_after_wait_loop = first_pc_after_wait_loop;
@@ -312,6 +320,19 @@ static bool run_smoke_pass(
                 nes.ppu.first_sprite0_opaque_frame,
                 nes.ppu.first_sprite0_opaque_scanline,
                 nes.ppu.first_sprite0_opaque_x
+            );
+        }
+        printf("\n");
+        printf(
+            "Sprite framebuffer pixels: last_completed=%" PRIu32 " frames_with_sprites=%" PRIu64 " max_scanline_sprites=%u",
+            nes.ppu.last_completed_sprite_pixels,
+            nes.ppu.frames_with_sprite_pixels,
+            (unsigned)nes.ppu.max_scanline_sprite_count
+        );
+        if (nes.ppu.first_frame_with_sprite_pixels != 0) {
+            printf(
+                " first_sprite_frame=%" PRIu64,
+                nes.ppu.first_frame_with_sprite_pixels
             );
         }
         printf("\n");
@@ -387,6 +408,10 @@ static bool compare_runs(const SmokeRunResult *a, const SmokeRunResult *b) {
     if (a->first_sprite0_hit_frame != b->first_sprite0_hit_frame) return false;
     if (a->first_sprite0_hit_scanline != b->first_sprite0_hit_scanline) return false;
     if (a->first_sprite0_hit_x != b->first_sprite0_hit_x) return false;
+    if (a->frames_with_sprite_pixels != b->frames_with_sprite_pixels) return false;
+    if (a->last_completed_sprite_pixels != b->last_completed_sprite_pixels) return false;
+    if (a->first_frame_with_sprite_pixels != b->first_frame_with_sprite_pixels) return false;
+    if (a->max_scanline_sprite_count != b->max_scanline_sprite_count) return false;
     if (a->entered_old_wait_loop != b->entered_old_wait_loop) return false;
     if (a->exited_old_wait_loop_after_sprite0_hit != b->exited_old_wait_loop_after_sprite0_hit) return false;
     if (a->first_pc_after_wait_loop != b->first_pc_after_wait_loop) return false;
