@@ -65,6 +65,9 @@ void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_
 bool nes_step_instruction(Nes *nes);
 bool nes_step_scanline(Nes *nes);
 bool nes_step_frame(Nes *nes);
+uint32_t nes_audio_sample_rate(const Nes *nes);
+size_t nes_audio_available_samples(const Nes *nes);
+size_t nes_audio_read_samples(Nes *nes, int16_t *dst, size_t max_samples);
 
 const Cpu6502 *nes_cpu_state(const Nes *nes);
 uint64_t nes_frame_count(const Nes *nes);

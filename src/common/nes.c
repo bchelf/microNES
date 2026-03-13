@@ -117,6 +117,18 @@ bool nes_step_frame(Nes *nes) {
     return true;
 }
 
+uint32_t nes_audio_sample_rate(const Nes *nes) {
+    return apu_output_sample_rate(&nes->apu);
+}
+
+size_t nes_audio_available_samples(const Nes *nes) {
+    return apu_audio_available_samples(&nes->apu);
+}
+
+size_t nes_audio_read_samples(Nes *nes, int16_t *dst, size_t max_samples) {
+    return apu_audio_read_samples(&nes->apu, dst, max_samples);
+}
+
 const Cpu6502 *nes_cpu_state(const Nes *nes) {
     return &nes->cpu;
 }
@@ -203,6 +215,29 @@ uint64_t nes_state_hash(const Nes *nes) {
     HASH_U64(nes->ppu.render_scroll_y);
     HASH_U64(nes->ppu.render_base_nametable);
     HASH_U64(nes->stats.nmi_count);
+    HASH_U64(nes->apu.cpu_cycles);
+    HASH_U64(nes->apu.sample_count);
+    HASH_U64(nes->apu.dropped_samples);
+    HASH_U64(nes->apu.frame_counter_cycle);
+    HASH_U64(nes->apu.frame_counter_steps);
+    HASH_U64(nes->apu.sample_phase);
+    HASH_U64(nes->apu.pcm_count);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[0].length_counter);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[0].timer_period);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[0].duty_step);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[0].envelope_decay);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[1].length_counter);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[1].timer_period);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[1].duty_step);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.pulse[1].envelope_decay);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.triangle.length_counter);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.triangle.timer_period);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.triangle.sequence_step);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.triangle.linear_counter);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.noise.length_counter);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.noise.timer_period);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.noise.shift_register);
+    HASH_U64((uint64_t)(uint32_t)nes->apu.noise.envelope_decay);
     HASH_U64(nes->ppu.sprite0_hit_count);
     HASH_U64(nes->ppu.sprite0_opaque_pixel_count);
     HASH_U64(nes->ppu.sprite0_background_overlap_count);

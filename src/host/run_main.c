@@ -1,3 +1,4 @@
+#include "audio_sdl.h"
 #include "frame_pacer.h"
 #include "nes.h"
 #include "window_sdl.h"
@@ -22,6 +23,7 @@ typedef struct {
     int scale;
     bool enable_vsync;
     bool enable_color;
+    bool enable_audio;
     bool throttled;
     uint64_t max_frames;
 } RunOptions;
@@ -32,7 +34,7 @@ typedef struct {
 
 static void print_usage(const char *argv0) {
     printf(
-        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--throttled] [--unthrottled] [--max-frames N]\n",
+        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N]\n",
         argv0
     );
 }
@@ -68,6 +70,7 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     options->scale = HOST_DEFAULT_SCALE;
     options->enable_vsync = false;
     options->enable_color = true;
+    options->enable_audio = true;
     options->throttled = true;
     options->max_frames = 0;
 
@@ -100,6 +103,14 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
         }
         if (strcmp(arg, "--grayscale") == 0 || strcmp(arg, "--no-color") == 0) {
             options->enable_color = false;
+            continue;
+        }
+        if (strcmp(arg, "--audio") == 0) {
+            options->enable_audio = true;
+            continue;
+        }
+        if (strcmp(arg, "--no-audio") == 0) {
+            options->enable_audio = false;
             continue;
         }
         if (strcmp(arg, "--throttled") == 0) {
@@ -251,6 +262,7 @@ static void host_wait_until_ns(uint64_t deadline_ns) {
 int main(int argc, char **argv) {
     RunOptions options;
     HostSdlWindow *window = NULL;
+    HostAudioSdl *audio = NULL;
     HostInputState input = { { 0 } };
     Smb2350FramePacer pacer;
     Smb2350FramePacerStats pacer_stats;
@@ -259,6 +271,7 @@ int main(int argc, char **argv) {
     uint64_t presented_frames = 0;
     uint64_t stats_window_start_ns = 0;
     uint64_t now_ns;
+    int16_t audio_samples[2048];
 
     if (!parse_args(argc, argv, &options)) {
         return 1;
@@ -278,6 +291,14 @@ int main(int argc, char **argv) {
     }
 
     nes_reset(&nes);
+    audio = host_audio_sdl_create((int)nes_audio_sample_rate(&nes), options.enable_audio);
+    if (audio == NULL) {
+        fprintf(stderr, "SDL audio init failed: %s\n", host_audio_sdl_last_error());
+        host_sdl_window_destroy(window);
+        nes_destroy(&nes);
+        return 4;
+    }
+
     now_ns = host_now_ns();
     smb2350_frame_pacer_init(&pacer, options.throttled, now_ns);
     stats_window_start_ns = now_ns;
@@ -288,6 +309,11 @@ int main(int argc, char **argv) {
     printf("target fps: %.4f\n", smb2350_frame_pacer_target_fps());
     printf("vsync: %s\n", options.enable_vsync ? "on" : "off");
     printf("display mode: %s\n", options.enable_color ? "color" : "grayscale");
+    printf("audio: %s", host_audio_sdl_is_enabled(audio) ? "on" : "off");
+    if (host_audio_sdl_is_enabled(audio)) {
+        printf(" sample_rate=%u", nes_audio_sample_rate(&nes));
+    }
+    printf("\n");
     if (options.max_frames != 0) {
         printf("max frames: %" PRIu64 "\n", options.max_frames);
     }
@@ -323,6 +349,21 @@ int main(int argc, char **argv) {
             break;
         }
 
+        while (nes_audio_available_samples(&nes) > 0) {
+            size_t sample_count = nes_audio_read_samples(&nes, audio_samples, sizeof(audio_samples) / sizeof(audio_samples[0]));
+            if (sample_count == 0) {
+                break;
+            }
+            if (!host_audio_sdl_submit_samples(audio, audio_samples, sample_count)) {
+                fprintf(stderr, "Audio submit failed: %s\n", host_audio_sdl_last_error());
+                running = false;
+                break;
+            }
+        }
+        if (!running) {
+            break;
+        }
+
         ++presented_frames;
         now_ns = host_now_ns();
         smb2350_frame_pacer_frame_done(&pacer, now_ns);
@@ -340,6 +381,14 @@ int main(int argc, char **argv) {
                 pacer_stats.max_late_ms,
                 presented_frames
             );
+            if (host_audio_sdl_is_enabled(audio)) {
+                printf(
+                    "audio: queued=%.1fms submitted=%" PRIu64 " dropped=%" PRIu64 "\n",
+                    ((double)host_audio_sdl_queued_bytes(audio) / 2.0 / (double)nes_audio_sample_rate(&nes)) * 1000.0,
+                    host_audio_sdl_submitted_samples(audio),
+                    host_audio_sdl_dropped_samples(audio)
+                );
+            }
             snprintf(
                 title,
                 sizeof(title),
@@ -362,6 +411,7 @@ int main(int argc, char **argv) {
     }
 
     nes_destroy(&nes);
+    host_audio_sdl_destroy(audio);
     host_sdl_window_destroy(window);
     return 0;
 }
