@@ -19,6 +19,7 @@ set(SMB2350_COMMON_SOURCES
     src/common/cart.c
     src/common/cpu6502.c
     src/common/cpu6502_opcode.c
+    src/common/frame_pacer.c
     src/common/input.c
     src/common/nes.c
     src/common/nrom.c
@@ -65,6 +66,7 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
     add_executable(smb2350
         src/pico/audio_pwm.c
         src/pico/main.c
+        src/pico/pico_time.c
         src/pico/video_ntsc.c
     )
 

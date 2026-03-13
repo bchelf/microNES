@@ -1,3 +1,4 @@
+#include "frame_pacer.h"
 #include "nes.h"
 #include "window_sdl.h"
 
@@ -12,6 +13,8 @@
 enum {
     HOST_DEFAULT_SCALE = 4,
     HOST_FPS_SAMPLE_MS = 1000,
+    HOST_COARSE_SLEEP_THRESHOLD_NS = 2000000,
+    HOST_COARSE_SLEEP_GUARD_NS = 250000,
 };
 
 typedef struct {
@@ -19,6 +22,7 @@ typedef struct {
     int scale;
     bool enable_vsync;
     bool enable_color;
+    bool throttled;
     uint64_t max_frames;
 } RunOptions;
 
@@ -27,7 +31,10 @@ typedef struct {
 } HostInputState;
 
 static void print_usage(const char *argv0) {
-    printf("Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--max-frames N]\n", argv0);
+    printf(
+        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--throttled] [--unthrottled] [--max-frames N]\n",
+        argv0
+    );
 }
 
 static bool parse_u64_arg(const char *text, uint64_t *value_out) {
@@ -59,8 +66,9 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
 
     options->rom_path = "roms/smb1.nes";
     options->scale = HOST_DEFAULT_SCALE;
-    options->enable_vsync = true;
+    options->enable_vsync = false;
     options->enable_color = true;
+    options->throttled = true;
     options->max_frames = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -92,6 +100,14 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
         }
         if (strcmp(arg, "--grayscale") == 0 || strcmp(arg, "--no-color") == 0) {
             options->enable_color = false;
+            continue;
+        }
+        if (strcmp(arg, "--throttled") == 0) {
+            options->throttled = true;
+            continue;
+        }
+        if (strcmp(arg, "--unthrottled") == 0 || strcmp(arg, "--no-throttle") == 0) {
+            options->throttled = false;
             continue;
         }
         if (strcmp(arg, "--max-frames") == 0) {
@@ -212,15 +228,37 @@ static bool host_process_events(bool *running, HostInputState *input) {
     return true;
 }
 
+static uint64_t host_now_ns(void) {
+    return (uint64_t)SDL_GetTicksNS();
+}
+
+static void host_wait_until_ns(uint64_t deadline_ns) {
+    uint64_t now_ns = host_now_ns();
+
+    while (now_ns < deadline_ns) {
+        uint64_t remaining_ns = deadline_ns - now_ns;
+
+        if (remaining_ns > HOST_COARSE_SLEEP_THRESHOLD_NS) {
+            SDL_DelayNS(remaining_ns - HOST_COARSE_SLEEP_GUARD_NS);
+        } else {
+            SDL_DelayPrecise(remaining_ns);
+        }
+
+        now_ns = host_now_ns();
+    }
+}
+
 int main(int argc, char **argv) {
     RunOptions options;
     HostSdlWindow *window = NULL;
     HostInputState input = { { 0 } };
+    Smb2350FramePacer pacer;
+    Smb2350FramePacerStats pacer_stats;
     Nes nes;
     bool running = true;
     uint64_t presented_frames = 0;
-    uint64_t fps_window_frames = 0;
-    uint64_t fps_window_start_ms = 0;
+    uint64_t stats_window_start_ns = 0;
+    uint64_t now_ns;
 
     if (!parse_args(argc, argv, &options)) {
         return 1;
@@ -240,10 +278,14 @@ int main(int argc, char **argv) {
     }
 
     nes_reset(&nes);
-    fps_window_start_ms = SDL_GetTicks();
+    now_ns = host_now_ns();
+    smb2350_frame_pacer_init(&pacer, options.throttled, now_ns);
+    stats_window_start_ns = now_ns;
 
     printf("ROM: %s\n", options.rom_path);
     printf("window scale: %d\n", options.scale);
+    printf("pacing: %s\n", options.throttled ? "throttled" : "unthrottled");
+    printf("target fps: %.4f\n", smb2350_frame_pacer_target_fps());
     printf("vsync: %s\n", options.enable_vsync ? "on" : "off");
     printf("display mode: %s\n", options.enable_color ? "color" : "grayscale");
     if (options.max_frames != 0) {
@@ -252,7 +294,6 @@ int main(int argc, char **argv) {
 
     while (running) {
         uint64_t target_completed_frame = nes.ppu.completed_frame_count + 1;
-        uint64_t now_ms;
         char title[128];
 
         if (!host_process_events(&running, &input)) {
@@ -283,21 +324,40 @@ int main(int argc, char **argv) {
         }
 
         ++presented_frames;
-        ++fps_window_frames;
-        now_ms = SDL_GetTicks();
-        if (now_ms - fps_window_start_ms >= HOST_FPS_SAMPLE_MS) {
-            double seconds = (double)(now_ms - fps_window_start_ms) / 1000.0;
-            double fps = seconds > 0.0 ? (double)fps_window_frames / seconds : 0.0;
+        now_ns = host_now_ns();
+        smb2350_frame_pacer_frame_done(&pacer, now_ns);
 
-            printf("fps: %.2f frames=%" PRIu64 " emu_frames=%" PRIu64 "\n", fps, presented_frames, nes.ppu.completed_frame_count);
-            snprintf(title, sizeof(title), "smb2350 - SMB1 | %.2f fps", fps);
+        if (now_ns - stats_window_start_ns >= HOST_FPS_SAMPLE_MS * 1000000ull) {
+            smb2350_frame_pacer_get_stats(&pacer, now_ns, &pacer_stats);
+            printf(
+                "fps: %.2f/%.2f frame_ms(avg/last/worst)=%.3f/%.3f/%.3f late=%" PRIu64 " max_late=%.3fms frames=%" PRIu64 "\n",
+                pacer_stats.measured_fps,
+                pacer_stats.target_fps,
+                pacer_stats.average_frame_ms,
+                pacer_stats.last_frame_ms,
+                pacer_stats.worst_frame_ms,
+                pacer_stats.late_frame_count,
+                pacer_stats.max_late_ms,
+                presented_frames
+            );
+            snprintf(
+                title,
+                sizeof(title),
+                "smb2350 - SMB1 | %.2f fps | late=%" PRIu64,
+                pacer_stats.measured_fps,
+                pacer_stats.late_frame_count
+            );
             host_sdl_window_set_title(window, title);
-            fps_window_frames = 0;
-            fps_window_start_ms = now_ms;
+            stats_window_start_ns = now_ns;
         }
 
         if (options.max_frames != 0 && presented_frames >= options.max_frames) {
             break;
+        }
+
+        if (smb2350_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
+            host_wait_until_ns(pacer.wait_until_ns);
+            smb2350_frame_pacer_note_wait_complete(&pacer, host_now_ns());
         }
     }
 
