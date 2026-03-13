@@ -186,7 +186,8 @@ static void ppu_latch_render_state(Ppu *ppu) {
     uint16_t fine_y = (v >> 12) & 0x0007u;
 
     ppu->render_vram_addr = v;
-    ppu->render_scroll_x = (uint8_t)(((coarse_x << 3) | ppu->fine_x) & 0xffu);
+    ppu->render_fine_x = ppu->fine_x;
+    ppu->render_scroll_x = (uint8_t)(((coarse_x << 3) | ppu->render_fine_x) & 0xffu);
     ppu->render_scroll_y = (uint8_t)(((coarse_y << 3) | fine_y) & 0xffu);
     ppu->render_base_nametable = (uint8_t)((v >> 10) & 0x03u);
 }
@@ -195,12 +196,25 @@ static bool ppu_rendering_enabled(const Ppu *ppu) {
     return (ppu->mask & (PPU_MASK_SHOW_BG | PPU_MASK_SHOW_SPRITES)) != 0;
 }
 
+static bool ppu_visible_scanline_active(const Ppu *ppu) {
+    return ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT && ppu->cycle > 0 && ppu->cycle <= 256;
+}
+
 static void ppu_copy_horizontal_bits_from_temp(Ppu *ppu) {
     ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x041fu) | (ppu->temp_addr & 0x041fu));
 }
 
 static void ppu_copy_vertical_bits_from_temp(Ppu *ppu) {
     ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x7be0u) | (ppu->temp_addr & 0x7be0u));
+}
+
+static void ppu_refresh_visible_scanline_render_state(Ppu *ppu) {
+    if (!ppu_rendering_enabled(ppu) || !ppu_visible_scanline_active(ppu)) {
+        return;
+    }
+
+    ppu_copy_horizontal_bits_from_temp(ppu);
+    ppu_latch_render_state(ppu);
 }
 
 static void ppu_increment_vertical_v(Ppu *ppu) {
@@ -252,6 +266,38 @@ static void ppu_finalize_frame(Ppu *ppu) {
             ppu->first_frame_with_sprite_pixels = ppu->completed_frame_count;
         }
     }
+    ppu->last_completed_visible_write_diag_count = ppu->visible_write_diag_count;
+    memcpy(
+        ppu->last_completed_visible_write_diag,
+        ppu->visible_write_diag,
+        sizeof(ppu->last_completed_visible_write_diag)
+    );
+}
+
+static void ppu_record_visible_write_diag(Ppu *ppu, uint8_t reg, uint8_t value) {
+    PpuVisibleWriteDiag *diag;
+
+    if (ppu->scanline < 0 || ppu->scanline >= NES_FRAME_HEIGHT) {
+        return;
+    }
+    if (ppu->cycle <= 0 || ppu->cycle > 256) {
+        return;
+    }
+    if (ppu->visible_write_diag_count >= PPU_VISIBLE_WRITE_DIAG_MAX) {
+        return;
+    }
+
+    diag = &ppu->visible_write_diag[ppu->visible_write_diag_count++];
+    diag->frame_index = ppu->frame_count;
+    diag->scanline = (uint16_t)ppu->scanline;
+    diag->cycle = (uint16_t)ppu->cycle;
+    diag->reg = reg;
+    diag->value = value;
+    diag->vram_addr = ppu->vram_addr;
+    diag->temp_addr = ppu->temp_addr;
+    diag->fine_x = ppu->fine_x;
+    diag->ctrl = ppu->ctrl;
+    diag->mask = ppu->mask;
 }
 
 static uint16_t ppu_palette_index(uint16_t addr) {
@@ -276,6 +322,47 @@ static uint16_t ppu_nametable_index(const NesCartridge *cartridge, uint16_t addr
     }
 
     return (uint16_t)(physical * 0x0400u + inner);
+}
+
+static void ppu_fill_render_tile_diag(
+    const Ppu *ppu,
+    const NesCartridge *cartridge,
+    int tile_x,
+    PpuRenderTileDiag *diag
+) {
+    uint16_t base_v = ppu->render_vram_addr;
+    uint16_t total_x = (uint16_t)(ppu->render_fine_x + tile_x * 8);
+    uint16_t coarse_x = (uint16_t)((base_v & 0x001fu) + (total_x >> 3));
+    uint16_t coarse_y = (base_v >> 5) & 0x001fu;
+    uint16_t effective_nametable = (uint16_t)(((base_v >> 10) & 0x0003u) ^ ((coarse_x >> 5) & 0x0001u));
+    uint16_t fine_y = (base_v >> 12) & 0x0007u;
+    uint16_t name_table = (uint16_t)(effective_nametable * 0x0400u);
+    uint16_t nametable_addr;
+    uint16_t attribute_addr;
+    uint8_t tile_index;
+    uint16_t pattern_base;
+    uint16_t pattern_addr;
+
+    coarse_x &= 0x001fu;
+    nametable_addr = (uint16_t)(0x2000u + name_table + coarse_y * 32u + coarse_x);
+    attribute_addr = (uint16_t)(0x23c0u + name_table + ((coarse_y >> 2) * 8u) + (coarse_x >> 2));
+    tile_index = ppu->nametables[ppu_nametable_index(cartridge, nametable_addr)];
+    pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
+    pattern_addr = (uint16_t)(pattern_base + tile_index * 16u + fine_y);
+
+    memset(diag, 0, sizeof(*diag));
+    diag->tile_x = (uint8_t)tile_x;
+    diag->coarse_x = (uint8_t)coarse_x;
+    diag->coarse_y = (uint8_t)coarse_y;
+    diag->fine_y = (uint8_t)fine_y;
+    diag->nametable = (uint8_t)effective_nametable;
+    diag->nametable_addr = nametable_addr;
+    diag->attribute_addr = attribute_addr;
+    diag->pattern_base = pattern_base;
+    diag->tile_index = tile_index;
+    diag->pattern_addr = pattern_addr;
+    diag->pattern_low = nrom_ppu_read(cartridge, pattern_addr);
+    diag->pattern_high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
 }
 
 static uint8_t ppu_vram_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr) {
@@ -307,7 +394,7 @@ static void ppu_vram_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uin
 static PpuPixelSample ppu_background_pixel(const Ppu *ppu, const NesCartridge *cartridge, int x, int y) {
     PpuPixelSample sample;
     uint16_t base_v = ppu->render_vram_addr;
-    uint16_t total_x = (uint16_t)(ppu->fine_x + x);
+    uint16_t total_x = (uint16_t)(ppu->render_fine_x + x);
     uint16_t coarse_x = (uint16_t)((base_v & 0x001fu) + (total_x >> 3));
     uint16_t coarse_y = (base_v >> 5) & 0x001fu;
     uint16_t effective_nametable = (uint16_t)(((base_v >> 10) & 0x0003u) ^ ((coarse_x >> 5) & 0x0001u));
@@ -335,6 +422,85 @@ static PpuPixelSample ppu_background_pixel(const Ppu *ppu, const NesCartridge *c
     }
     sample.color = ppu->palette[palette_index & 0x1fu];
     return sample;
+}
+
+static void ppu_detect_render_artifact(
+    Ppu *ppu,
+    const NesCartridge *cartridge,
+    int y,
+    const uint8_t *row
+) {
+    const uint8_t *prev;
+    uint16_t equal_prev_pixels = 0;
+    uint16_t repeated_prev_chunks = 0;
+    uint16_t transitions = 0;
+    uint16_t longest_run = 1;
+    uint16_t current_run = 1;
+    int first_transition_x = -1;
+
+    if (y <= 0 || ppu->render_artifact_diag.valid) {
+        return;
+    }
+
+    prev = nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)(y - 1));
+    for (int x = 0; x < NES_FRAME_WIDTH; ++x) {
+        if (row[x] == prev[x]) {
+            ++equal_prev_pixels;
+        }
+        if (x > 0) {
+            if (row[x] != row[x - 1]) {
+                ++transitions;
+                current_run = 1;
+                if (first_transition_x < 0) {
+                    first_transition_x = x;
+                }
+            } else {
+                ++current_run;
+                if (current_run > longest_run) {
+                    longest_run = current_run;
+                }
+            }
+        }
+    }
+
+    for (int x = 0; x < NES_FRAME_WIDTH; x += 8) {
+        if (memcmp(&row[x], &prev[x], 8) == 0) {
+            ++repeated_prev_chunks;
+        }
+    }
+
+    if (ppu->render_fine_x == ppu->fine_x) {
+        return;
+    }
+
+    if (!(equal_prev_pixels >= 224u && repeated_prev_chunks >= 20u && transitions >= 12u)) {
+        return;
+    }
+
+    ppu->render_artifact_diag.valid = true;
+    ppu->render_artifact_diag.frame_index = ppu->frame_count;
+    ppu->render_artifact_diag.scanline = (uint16_t)y;
+    ppu->render_artifact_diag.equal_prev_pixels = equal_prev_pixels;
+    ppu->render_artifact_diag.repeated_prev_chunks = repeated_prev_chunks;
+    ppu->render_artifact_diag.transitions = transitions;
+    ppu->render_artifact_diag.longest_run = longest_run;
+    ppu->render_artifact_diag.focus_x = (uint16_t)(first_transition_x >= 0 ? first_transition_x : 0);
+
+    {
+        int center_tile = ppu->render_artifact_diag.focus_x / 8;
+        int start_tile = center_tile - (PPU_RENDER_ARTIFACT_TILE_WINDOW / 2);
+        if (start_tile < 0) {
+            start_tile = 0;
+        }
+        if (start_tile > 32 - PPU_RENDER_ARTIFACT_TILE_WINDOW) {
+            start_tile = 32 - PPU_RENDER_ARTIFACT_TILE_WINDOW;
+        }
+
+        ppu->render_artifact_diag.tile_count = PPU_RENDER_ARTIFACT_TILE_WINDOW;
+        for (int i = 0; i < PPU_RENDER_ARTIFACT_TILE_WINDOW; ++i) {
+            ppu_fill_render_tile_diag(ppu, cartridge, start_tile + i, &ppu->render_artifact_diag.tiles[i]);
+        }
+    }
 }
 
 static int ppu_sprite_height(const Ppu *ppu) {
@@ -663,6 +829,8 @@ static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
         ppu->scanline_buffer.pixels[x] = color;
     }
 
+    ppu_detect_render_artifact(ppu, cartridge, y, dst);
+
     ppu->scanline_buffer.y = (uint16_t)y;
     ppu->scanline_buffer.frame_index = ppu->frame_count;
     ppu->scanline_buffer.ready = true;
@@ -691,6 +859,7 @@ void ppu_reset(Ppu *ppu) {
     ppu->scroll_x = 0;
     ppu->scroll_y = 0;
     ppu->render_vram_addr = 0;
+    ppu->render_fine_x = 0;
     ppu->render_scroll_x = 0;
     ppu->render_scroll_y = 0;
     ppu->render_base_nametable = 0;
@@ -725,6 +894,7 @@ void ppu_reset(Ppu *ppu) {
     ppu->sprite0_diag.enabled = diag_enabled;
     ppu->sprite0_diag.frame_start = diag_start;
     ppu->sprite0_diag.frame_end = diag_end;
+    memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
     ppu->frame_buffer.frame_index = 0;
     ppu->scanline_buffer.frame_index = 0;
     ppu->scanline_buffer.y = 0;
@@ -734,6 +904,10 @@ void ppu_reset(Ppu *ppu) {
     memset(ppu->palette, 0, sizeof(ppu->palette));
     memset(ppu->frame_buffer.pixels, 0, sizeof(ppu->frame_buffer.pixels));
     memset(ppu->scanline_buffer.pixels, 0, sizeof(ppu->scanline_buffer.pixels));
+    memset(ppu->visible_write_diag, 0, sizeof(ppu->visible_write_diag));
+    memset(ppu->last_completed_visible_write_diag, 0, sizeof(ppu->last_completed_visible_write_diag));
+    ppu->visible_write_diag_count = 0;
+    ppu->last_completed_visible_write_diag_count = 0;
 }
 
 void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_end) {
@@ -818,6 +992,9 @@ void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
                 ++ppu->frame_count;
                 ppu->sprite_composited_pixel_count = 0;
                 ppu->frame_buffer.frame_index = ppu->frame_count;
+                memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
+                ppu->visible_write_diag_count = 0;
+                memset(ppu->visible_write_diag, 0, sizeof(ppu->visible_write_diag));
                 ppu_latch_render_state(ppu);
                 ppu_sprite0_diag_begin_frame(ppu);
             }
@@ -865,9 +1042,12 @@ void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t val
     case PPU_REG_PPUCTRL:
         ppu->ctrl = value;
         ppu->temp_addr = (uint16_t)((ppu->temp_addr & (uint16_t)~0x0c00u) | (((uint16_t)value & 0x03u) << 10));
+        ppu_record_visible_write_diag(ppu, reg, value);
+        ppu_refresh_visible_scanline_render_state(ppu);
         break;
     case PPU_REG_PPUMASK:
         ppu->mask = value;
+        ppu_record_visible_write_diag(ppu, reg, value);
         break;
     case PPU_REG_OAMADDR:
         ppu->oam_addr = value;
@@ -889,6 +1069,8 @@ void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t val
             );
         }
         ppu->write_toggle = !ppu->write_toggle;
+        ppu_record_visible_write_diag(ppu, reg, value);
+        ppu_refresh_visible_scanline_render_state(ppu);
         break;
     case PPU_REG_PPUADDR:
         if (!ppu->write_toggle) {
@@ -898,6 +1080,8 @@ void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t val
             ppu->vram_addr = ppu->temp_addr;
         }
         ppu->write_toggle = !ppu->write_toggle;
+        ppu_record_visible_write_diag(ppu, reg, value);
+        ppu_refresh_visible_scanline_render_state(ppu);
         break;
     case PPU_REG_PPUDATA:
         ppu_vram_write(ppu, cartridge, ppu->vram_addr, value);

@@ -211,6 +211,7 @@ uint64_t nes_state_hash(const Nes *nes) {
     HASH_U64(nes->ppu.fine_x);
     HASH_U64(nes->ppu.write_toggle ? 1u : 0u);
     HASH_U64(nes->ppu.render_vram_addr);
+    HASH_U64(nes->ppu.render_fine_x);
     HASH_U64(nes->ppu.render_scroll_x);
     HASH_U64(nes->ppu.render_scroll_y);
     HASH_U64(nes->ppu.render_base_nametable);

@@ -11,6 +11,8 @@
 enum {
     PPU_SPRITE0_DIAG_MAX_FRAMES = 64,
     PPU_SPRITE0_DIAG_MAX_EXAMPLES = 6,
+    PPU_RENDER_ARTIFACT_TILE_WINDOW = 8,
+    PPU_VISIBLE_WRITE_DIAG_MAX = 32,
 };
 
 typedef enum {
@@ -51,6 +53,7 @@ typedef struct {
     uint8_t scroll_x;
     uint8_t scroll_y;
     uint16_t render_vram_addr;
+    uint8_t render_fine_x;
     uint8_t render_scroll_x;
     uint8_t render_scroll_y;
     uint8_t render_base_nametable;
@@ -120,6 +123,47 @@ typedef struct {
 } PpuSprite0Diag;
 
 typedef struct {
+    uint8_t tile_x;
+    uint8_t coarse_x;
+    uint8_t coarse_y;
+    uint8_t fine_y;
+    uint8_t nametable;
+    uint16_t nametable_addr;
+    uint16_t attribute_addr;
+    uint16_t pattern_base;
+    uint8_t tile_index;
+    uint16_t pattern_addr;
+    uint8_t pattern_low;
+    uint8_t pattern_high;
+} PpuRenderTileDiag;
+
+typedef struct {
+    bool valid;
+    uint64_t frame_index;
+    uint16_t scanline;
+    uint16_t equal_prev_pixels;
+    uint16_t repeated_prev_chunks;
+    uint16_t transitions;
+    uint16_t longest_run;
+    uint16_t focus_x;
+    uint8_t tile_count;
+    PpuRenderTileDiag tiles[PPU_RENDER_ARTIFACT_TILE_WINDOW];
+} PpuRenderArtifactDiag;
+
+typedef struct {
+    uint64_t frame_index;
+    uint16_t scanline;
+    uint16_t cycle;
+    uint8_t reg;
+    uint8_t value;
+    uint16_t vram_addr;
+    uint16_t temp_addr;
+    uint8_t fine_x;
+    uint8_t ctrl;
+    uint8_t mask;
+} PpuVisibleWriteDiag;
+
+typedef struct {
     uint8_t ctrl;
     uint8_t mask;
     uint8_t status;
@@ -135,6 +179,7 @@ typedef struct {
     uint8_t scroll_x;
     uint8_t scroll_y;
     uint16_t render_vram_addr;
+    uint8_t render_fine_x;
     uint8_t render_scroll_x;
     uint8_t render_scroll_y;
     uint8_t render_base_nametable;
@@ -166,6 +211,11 @@ typedef struct {
     uint64_t first_frame_with_sprite_pixels;
     uint8_t max_scanline_sprite_count;
     PpuSprite0Diag sprite0_diag;
+    PpuRenderArtifactDiag render_artifact_diag;
+    PpuVisibleWriteDiag visible_write_diag[PPU_VISIBLE_WRITE_DIAG_MAX];
+    uint8_t visible_write_diag_count;
+    PpuVisibleWriteDiag last_completed_visible_write_diag[PPU_VISIBLE_WRITE_DIAG_MAX];
+    uint8_t last_completed_visible_write_diag_count;
     NesFrameBuffer frame_buffer;
     NesScanline scanline_buffer;
 } Ppu;

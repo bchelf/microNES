@@ -152,6 +152,8 @@ static const char *oam_update_source_name(uint8_t source) {
 }
 
 static void print_sprite0_frame_diag(const char *label, const PpuSprite0FrameDiag *frame);
+static void print_render_artifact_diag(const PpuRenderArtifactDiag *diag);
+static void print_visible_write_diag(const Ppu *ppu);
 
 static void print_usage(const char *argv0) {
     printf(
@@ -707,6 +709,74 @@ static void print_sprite0_frame_diag(const char *label, const PpuSprite0FrameDia
     }
 }
 
+static void print_render_artifact_diag(const PpuRenderArtifactDiag *diag) {
+    if (diag == NULL || !diag->valid) {
+        return;
+    }
+
+    printf(
+        "Render artifact suspect: frame=%" PRIu64 " scanline=%u equal_prev=%u repeated_prev_chunks=%u transitions=%u longest_run=%u focus_x=%u\n",
+        diag->frame_index,
+        diag->scanline,
+        diag->equal_prev_pixels,
+        diag->repeated_prev_chunks,
+        diag->transitions,
+        diag->longest_run,
+        diag->focus_x
+    );
+    for (uint8_t i = 0; i < diag->tile_count; ++i) {
+        const PpuRenderTileDiag *tile = &diag->tiles[i];
+        printf(
+            "  tile_x=%u coarse=(%u,%u) fine_y=%u nt=%u nt_addr=%04X attr_addr=%04X pattern_base=%04X tile=%02X pattern_addr=%04X row=%02X/%02X\n",
+            tile->tile_x,
+            tile->coarse_x,
+            tile->coarse_y,
+            tile->fine_y,
+            tile->nametable,
+            tile->nametable_addr,
+            tile->attribute_addr,
+            tile->pattern_base,
+            tile->tile_index,
+            tile->pattern_addr,
+            tile->pattern_low,
+            tile->pattern_high
+        );
+    }
+}
+
+static const char *ppu_reg_name(uint8_t reg) {
+    switch (reg) {
+    case 0: return "PPUCTRL";
+    case 1: return "PPUMASK";
+    case 5: return "PPUSCROLL";
+    case 6: return "PPUADDR";
+    default: return "PPU?";
+    }
+}
+
+static void print_visible_write_diag(const Ppu *ppu) {
+    if (ppu->last_completed_visible_write_diag_count == 0) {
+        return;
+    }
+
+    printf("Visible PPU writes for completed frame %" PRIu64 ":\n", ppu->completed_frame_count);
+    for (uint8_t i = 0; i < ppu->last_completed_visible_write_diag_count; ++i) {
+        const PpuVisibleWriteDiag *diag = &ppu->last_completed_visible_write_diag[i];
+        printf(
+            "  scanline=%u cycle=%u reg=%s value=%02X v=%04X t=%04X fx=%u ctrl=%02X mask=%02X\n",
+            diag->scanline,
+            diag->cycle,
+            ppu_reg_name(diag->reg),
+            diag->value,
+            diag->vram_addr,
+            diag->temp_addr,
+            diag->fine_x,
+            diag->ctrl,
+            diag->mask
+        );
+    }
+}
+
 static uint64_t hash_opcode_coverage(const NesExecutionStats *stats) {
     uint64_t hash = 1469598103934665603ull;
 
@@ -924,6 +994,9 @@ static bool run_smoke_pass(
             } else {
                 ++tracker.repeated_frame_hash_frames;
             }
+            if (verbose && nes.ppu.render_artifact_diag.valid) {
+                print_render_artifact_diag(&nes.ppu.render_artifact_diag);
+            }
             tracker.observed_completed_frames = nes.ppu.completed_frame_count;
         }
         if (nes.stats.nmi_count != tracker.observed_nmi_count) {
@@ -1093,6 +1166,7 @@ static bool run_smoke_pass(
             nes.ppu.oam[2],
             nes.ppu.oam[3]
         );
+        print_visible_write_diag(&nes.ppu);
         print_stop_summary(&nes);
         print_top_opcodes(&nes.stats, 10);
         print_unsupported_hits(&nes.stats);
