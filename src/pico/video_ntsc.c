@@ -30,6 +30,10 @@ enum {
     VIDEO_FRONT_PORCH_SAMPLES = 12,
     VIDEO_ACTIVE_SAMPLES = VIDEO_SAMPLES_PER_LINE - VIDEO_HSYNC_SAMPLES -
                            VIDEO_BACK_PORCH_SAMPLES - VIDEO_FRONT_PORCH_SAMPLES,
+    VIDEO_ACTIVE_START = VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES,
+    VIDEO_ACTIVE_WORD_START = VIDEO_ACTIVE_START / 16,
+    VIDEO_ACTIVE_WORD_END = (VIDEO_ACTIVE_START + VIDEO_ACTIVE_SAMPLES - 1) / 16,
+    VIDEO_ACTIVE_WORD_COUNT = VIDEO_ACTIVE_WORD_END - VIDEO_ACTIVE_WORD_START + 1,
     VIDEO_SAMPLE_RATE_HZ = 8056010,
     VIDEO_BORDER_X = 10,
     VIDEO_BORDER_Y = 8,
@@ -45,6 +49,10 @@ typedef enum {
 
 static uint32_t blank_frame_words[VIDEO_FRAME_WORDS];
 static uint32_t frame_words[VIDEO_BUFFER_COUNT][VIDEO_FRAME_WORDS];
+static uint8_t video_active_sample_src_x[VIDEO_ACTIVE_SAMPLES];
+static uint8_t video_active_sample_word_slot[VIDEO_ACTIVE_SAMPLES];
+static uint8_t video_active_sample_shift[VIDEO_ACTIVE_SAMPLES];
+static uint32_t video_active_word_mask[VIDEO_ACTIVE_WORD_COUNT];
 static int video_sm;
 static int video_dma_data;
 static volatile uint8_t video_scanout_buffer_index;
@@ -134,6 +142,21 @@ static void video_build_blank_template(void) {
     }
 }
 
+static void video_build_active_mapping(void) {
+    for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
+        int line_sample = VIDEO_ACTIVE_START + sample;
+        int word_index = line_sample >> 4;
+        int word_slot = word_index - VIDEO_ACTIVE_WORD_START;
+        int bit_index = (line_sample & 0x0f) * 2;
+
+        video_active_sample_src_x[sample] =
+            (uint8_t)((sample * SMB2350_VIDEO_VISIBLE_WIDTH) / VIDEO_ACTIVE_SAMPLES);
+        video_active_sample_word_slot[sample] = (uint8_t)word_slot;
+        video_active_sample_shift[sample] = (uint8_t)bit_index;
+        video_active_word_mask[word_slot] |= 0x3u << bit_index;
+    }
+}
+
 static void video_copy_blank_template(uint8_t buffer_index) {
     memcpy(frame_words[buffer_index], blank_frame_words, sizeof(blank_frame_words));
 }
@@ -186,6 +209,7 @@ void video_ntsc_init(void) {
     pio_sm_init(pio, video_sm, offset, &config);
 
     video_build_blank_template();
+    video_build_active_mapping();
     video_copy_blank_template(0);
     video_copy_blank_template(1);
 
@@ -245,32 +269,57 @@ void video_ntsc_begin_frame(void) {
 
 void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels, int pixel_count) {
     uint32_t *line_words;
-    int active_start;
 
     if (visible_y < 0 || visible_y >= VIDEO_VISIBLE_LINES || pixels == NULL || pixel_count <= 0) {
         return;
     }
 
     line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
-    active_start = VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES;
+    if (pixel_count == SMB2350_VIDEO_VISIBLE_WIDTH) {
+        static const uint32_t level_bits[] = {
+            VIDEO_LEVEL_BLACK,
+            VIDEO_LEVEL_GRAY,
+            VIDEO_LEVEL_WHITE,
+        };
+        uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
+
+        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
+            packed_words[i] = line_words[VIDEO_ACTIVE_WORD_START + i] & ~video_active_word_mask[i];
+        }
+        for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
+            uint8_t src_x = video_active_sample_src_x[sample];
+            uint8_t word_slot = video_active_sample_word_slot[sample];
+            uint8_t shift = video_active_sample_shift[sample];
+            uint8_t luma = pixels[src_x];
+
+            if (luma > SMB2350_VIDEO_LUMA_WHITE) {
+                luma = SMB2350_VIDEO_LUMA_WHITE;
+            }
+            packed_words[word_slot] |= level_bits[luma] << shift;
+        }
+        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
+            line_words[VIDEO_ACTIVE_WORD_START + i] = packed_words[i];
+        }
+        return;
+    }
 
     for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
         int src_x = (x * pixel_count) / VIDEO_ACTIVE_SAMPLES;
         video_level_t level = VIDEO_LEVEL_BLACK;
 
         switch (pixels[src_x]) {
-            case SMB2350_VIDEO_LUMA_WHITE:
-                level = VIDEO_LEVEL_WHITE;
-                break;
-            case SMB2350_VIDEO_LUMA_GRAY:
-                level = VIDEO_LEVEL_GRAY;
-                break;
-            case SMB2350_VIDEO_LUMA_BLACK:
-            default:
-                level = VIDEO_LEVEL_BLACK;
-                break;
+        case SMB2350_VIDEO_LUMA_WHITE:
+            level = VIDEO_LEVEL_WHITE;
+            break;
+        case SMB2350_VIDEO_LUMA_GRAY:
+            level = VIDEO_LEVEL_GRAY;
+            break;
+        case SMB2350_VIDEO_LUMA_BLACK:
+        default:
+            level = VIDEO_LEVEL_BLACK;
+            break;
         }
-        video_put_sample(line_words, active_start + x, level);
+        video_put_sample(line_words, VIDEO_ACTIVE_START + x, level);
     }
 }
 

@@ -53,12 +53,12 @@ static void cpu_note_opcode(Nes *nes, uint16_t pc, uint8_t opcode) {
 
 static inline uint8_t cpu_read(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
     (void)cpu;
-    return nes_cpu_bus_read(nes, addr);
+    return nes_cpu_bus_read_fast(nes, addr);
 }
 
 static inline void cpu_write(Cpu6502 *cpu, Nes *nes, uint16_t addr, uint8_t value) {
     (void)cpu;
-    nes_cpu_bus_write(nes, addr, value);
+    nes_cpu_bus_write_fast(nes, addr, value);
 }
 
 static inline void cpu_set_zn(Cpu6502 *cpu, uint8_t value) {
@@ -278,7 +278,7 @@ void cpu6502_reset(Cpu6502 *cpu, Nes *nes) {
     cpu->y = 0;
     cpu->sp = 0xfd;
     cpu->p = CPU6502_FLAG_I | CPU6502_FLAG_U;
-    cpu->pc = (uint16_t)(nes_cpu_bus_read(nes, 0xfffcu) | ((uint16_t)nes_cpu_bus_read(nes, 0xfffdu) << 8));
+    cpu->pc = (uint16_t)(nes_cpu_bus_read_fast(nes, 0xfffcu) | ((uint16_t)nes_cpu_bus_read_fast(nes, 0xfffdu) << 8));
     cpu->cycles = 7;
     cpu->last_opcode = 0;
     cpu->jammed = false;

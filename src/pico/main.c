@@ -63,7 +63,7 @@ int main(void) {
                     delta_step_us / 60000.0,
                     delta_convert_us / 60000.0,
                     (current_video_stats.swap_wait_us_total - report_video_stats.swap_wait_us_total) / 60000.0,
-                    (double)(current_video_stats.swap_wait_us_max - report_video_stats.swap_wait_us_max) / 1000.0,
+                    (double)current_video_stats.swap_wait_us_max / 1000.0,
                     emulator_video.nes.stats.instruction_count,
                     emulator_video.nes.ppu.frame_count,
                     emulator_video.last_frame_source_nonzero_pixels,

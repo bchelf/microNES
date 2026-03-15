@@ -493,6 +493,11 @@ void apu_reset(Apu *apu) {
 }
 
 void apu_step(Apu *apu, uint32_t cpu_cycles) {
+#if !SMB2350_ENABLE_APU_EMULATION
+    apu->cpu_cycles += cpu_cycles;
+    (void)apu;
+    return;
+#else
     for (uint32_t i = 0; i < cpu_cycles; ++i) {
         ++apu->cpu_cycles;
         apu_clock_triangle_timer(&apu->triangle);
@@ -506,6 +511,7 @@ void apu_step(Apu *apu, uint32_t cpu_cycles) {
         }
         apu_clock_sample_output(apu);
     }
+#endif
 }
 
 uint8_t apu_cpu_read(Apu *apu, uint16_t addr) {

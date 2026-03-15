@@ -836,7 +836,12 @@ static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
 }
 
 static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
-    uint8_t *dst = nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);
+    uint8_t *dst =
+#if SMB2350_ENABLE_FRAMEBUFFER
+        nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);
+#else
+        NULL;
+#endif
     PpuScanlineSprite sprites[PPU_MAX_SCANLINE_SPRITES];
     uint8_t sprite_count = ppu_collect_scanline_sprites(ppu, y, sprites);
     PpuScanlineSprite sprite0;
@@ -950,11 +955,17 @@ static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
 #endif
         }
 
+#if SMB2350_ENABLE_FRAMEBUFFER
         dst[x] = color;
+#endif
         ppu->scanline_buffer.pixels[x] = color;
     }
 
+#if SMB2350_ENABLE_FRAMEBUFFER
     ppu_detect_render_artifact(ppu, cartridge, y, dst);
+#else
+    (void)cartridge;
+#endif
 
     ppu->scanline_buffer.y = (uint16_t)y;
     ppu->scanline_buffer.frame_index = ppu->frame_count;
@@ -1020,14 +1031,18 @@ void ppu_reset(Ppu *ppu) {
     ppu->sprite0_diag.frame_start = diag_start;
     ppu->sprite0_diag.frame_end = diag_end;
     memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
+#if SMB2350_ENABLE_FRAMEBUFFER
     ppu->frame_buffer.frame_index = 0;
+#endif
     ppu->scanline_buffer.frame_index = 0;
     ppu->scanline_buffer.y = 0;
     ppu->scanline_buffer.ready = false;
     memset(ppu->oam, 0, sizeof(ppu->oam));
     memset(ppu->nametables, 0, sizeof(ppu->nametables));
     memset(ppu->palette, 0, sizeof(ppu->palette));
+#if SMB2350_ENABLE_FRAMEBUFFER
     memset(ppu->frame_buffer.pixels, 0, sizeof(ppu->frame_buffer.pixels));
+#endif
     memset(ppu->scanline_buffer.pixels, 0, sizeof(ppu->scanline_buffer.pixels));
     memset(ppu->visible_write_diag, 0, sizeof(ppu->visible_write_diag));
     memset(ppu->last_completed_visible_write_diag, 0, sizeof(ppu->last_completed_visible_write_diag));
@@ -1122,7 +1137,9 @@ void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
                 ++ppu->frame_count;
 #if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
                 ppu->sprite_composited_pixel_count = 0;
+#if SMB2350_ENABLE_FRAMEBUFFER
                 ppu->frame_buffer.frame_index = ppu->frame_count;
+#endif
                 memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
                 ppu->visible_write_diag_count = 0;
                 memset(ppu->visible_write_diag, 0, sizeof(ppu->visible_write_diag));

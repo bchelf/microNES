@@ -7,53 +7,36 @@
 #include <stdio.h>
 #include <string.h>
 
-static const uint8_t k_emulator_video_palette_rgb[64][3] = {
-    { 0x7c, 0x7c, 0x7c }, { 0x00, 0x00, 0xfc }, { 0x00, 0x00, 0xbc }, { 0x44, 0x28, 0xbc },
-    { 0x94, 0x00, 0x84 }, { 0xa8, 0x00, 0x20 }, { 0xa8, 0x10, 0x00 }, { 0x88, 0x14, 0x00 },
-    { 0x50, 0x30, 0x00 }, { 0x00, 0x78, 0x00 }, { 0x00, 0x68, 0x00 }, { 0x00, 0x58, 0x00 },
-    { 0x00, 0x40, 0x58 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+static const uint8_t k_emulator_video_palette_to_luma[64] = {
+    SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
+    SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
+    SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
+    SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
 
-    { 0xbc, 0xbc, 0xbc }, { 0x00, 0x78, 0xf8 }, { 0x00, 0x58, 0xf8 }, { 0x68, 0x44, 0xfc },
-    { 0xd8, 0x00, 0xcc }, { 0xe4, 0x00, 0x58 }, { 0xf8, 0x38, 0x00 }, { 0xe4, 0x5c, 0x10 },
-    { 0xac, 0x7c, 0x00 }, { 0x00, 0xb8, 0x00 }, { 0x00, 0xa8, 0x00 }, { 0x00, 0xa8, 0x44 },
-    { 0x00, 0x88, 0x88 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+    SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
+    SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,
+    SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,
+    SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
 
-    { 0xf8, 0xf8, 0xf8 }, { 0x3c, 0xbc, 0xfc }, { 0x68, 0x88, 0xfc }, { 0x98, 0x78, 0xf8 },
-    { 0xf8, 0x78, 0xf8 }, { 0xf8, 0x58, 0x98 }, { 0xf8, 0x78, 0x58 }, { 0xfc, 0xa0, 0x44 },
-    { 0xf8, 0xb8, 0x00 }, { 0xb8, 0xf8, 0x18 }, { 0x58, 0xd8, 0x54 }, { 0x58, 0xf8, 0x98 },
-    { 0x00, 0xe8, 0xd8 }, { 0x78, 0x78, 0x78 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+    SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,
+    SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_WHITE,
+    SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_WHITE,
+    SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_GRAY,  SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
 
-    { 0xfc, 0xfc, 0xfc }, { 0xa4, 0xe4, 0xfc }, { 0xb8, 0xb8, 0xf8 }, { 0xd8, 0xb8, 0xf8 },
-    { 0xf8, 0xb8, 0xf8 }, { 0xf8, 0xa4, 0xc0 }, { 0xf0, 0xd0, 0xb0 }, { 0xfc, 0xe0, 0xa8 },
-    { 0xf8, 0xd8, 0x78 }, { 0xd8, 0xf8, 0x78 }, { 0xb8, 0xf8, 0xb8 }, { 0xb8, 0xf8, 0xd8 },
-    { 0x00, 0xfc, 0xfc }, { 0xf8, 0xd8, 0xf8 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
-};
-
-enum {
-    EMULATOR_VIDEO_LUMA_BLACK_MAX = 71,
-    EMULATOR_VIDEO_LUMA_GRAY_MAX = 175,
+    SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE,
+    SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE,
+    SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE,
+    SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_WHITE, SMB2350_VIDEO_LUMA_BLACK, SMB2350_VIDEO_LUMA_BLACK,
 };
 
 static void emulator_video_adapter_set_error(PicoEmulatorVideoAdapter *adapter, const char *message) {
     snprintf(adapter->last_error, sizeof(adapter->last_error), "%s", message);
 }
 
-static uint8_t emulator_video_adapter_palette_luma(uint8_t nes_pixel) {
-    const uint8_t *rgb = k_emulator_video_palette_rgb[nes_pixel & 0x3fu];
-    return (uint8_t)((54u * rgb[0] + 183u * rgb[1] + 19u * rgb[2]) >> 8);
-}
-
 static uint8_t emulator_video_adapter_pixel_to_luma(uint8_t nes_pixel, int x, int y) {
-    uint8_t luma = emulator_video_adapter_palette_luma(nes_pixel);
     (void)x;
     (void)y;
-    if (luma <= EMULATOR_VIDEO_LUMA_BLACK_MAX) {
-        return SMB2350_VIDEO_LUMA_BLACK;
-    }
-    if (luma <= EMULATOR_VIDEO_LUMA_GRAY_MAX) {
-        return SMB2350_VIDEO_LUMA_GRAY;
-    }
-    return SMB2350_VIDEO_LUMA_WHITE;
+    return k_emulator_video_palette_to_luma[nes_pixel & 0x3fu];
 }
 
 static uint8_t emulator_video_adapter_count_bits64(uint64_t value) {
