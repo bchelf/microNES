@@ -43,6 +43,13 @@ typedef struct {
     uint64_t instruction_index;
 } NesStopInfo;
 
+typedef struct {
+    uint64_t cpu_exec_us_total;
+    uint64_t ppu_step_us_total;
+    uint64_t bus_read_count;
+    uint64_t bus_write_count;
+} NesStepProfile;
+
 typedef struct Nes {
     Cpu6502 cpu;
     Ppu ppu;
@@ -55,6 +62,9 @@ typedef struct Nes {
     Cpu6502TraceEntry trace[NES_TRACE_CAPACITY];
     uint8_t trace_head;
     uint8_t trace_count;
+    smb2350_profile_now_us_fn profile_now_us;
+    void *profile_now_user;
+    NesStepProfile step_profile;
     char last_error[1024];
 } Nes;
 
@@ -63,6 +73,7 @@ void nes_destroy(Nes *nes);
 bool nes_load_cartridge_file(Nes *nes, const char *path);
 bool nes_load_cartridge_memory(Nes *nes, const uint8_t *rom_image, size_t rom_image_size);
 void nes_reset(Nes *nes);
+void nes_set_profile_clock(Nes *nes, smb2350_profile_now_us_fn now_us, void *user);
 void nes_set_controller_state(Nes *nes, unsigned controller_index, NesControllerState state);
 void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_end);
 bool nes_step_instruction(Nes *nes);
@@ -103,6 +114,9 @@ static inline uint8_t nes_nrom_prg_read_fast(const Nes *nes, uint16_t addr) {
 }
 
 static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
+#if SMB2350_ENABLE_STEP_PROFILING
+    ++nes->step_profile.bus_read_count;
+#endif
     if (addr < 0x2000u) {
         return nes->cpu_ram[addr & 0x07ffu];
     }
@@ -125,6 +139,9 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
 }
 
 static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value) {
+#if SMB2350_ENABLE_STEP_PROFILING
+    ++nes->step_profile.bus_write_count;
+#endif
     if (addr < 0x2000u) {
         nes->cpu_ram[addr & 0x07ffu] = value;
         return;
@@ -161,5 +178,16 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
 
 uint8_t nes_cpu_bus_read(Nes *nes, uint16_t addr);
 void nes_cpu_bus_write(Nes *nes, uint16_t addr, uint8_t value);
+
+static inline uint64_t nes_profile_now_us(const Nes *nes) {
+#if SMB2350_ENABLE_STEP_PROFILING
+    if (nes->profile_now_us != NULL) {
+        return nes->profile_now_us(nes->profile_now_user);
+    }
+#else
+    (void)nes;
+#endif
+    return 0;
+}
 
 #endif

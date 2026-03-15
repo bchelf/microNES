@@ -33,6 +33,12 @@ static void emulator_video_adapter_set_error(PicoEmulatorVideoAdapter *adapter, 
     snprintf(adapter->last_error, sizeof(adapter->last_error), "%s", message);
 }
 
+static uint64_t emulator_video_adapter_now_us(void *user) {
+    (void)user;
+    return time_us_64();
+}
+
+#if SMB2350_ENABLE_PICO_VIDEO_STATS
 static uint8_t emulator_video_adapter_pixel_to_luma(uint8_t nes_pixel, int x, int y) {
     (void)x;
     (void)y;
@@ -48,6 +54,7 @@ static uint8_t emulator_video_adapter_count_bits64(uint64_t value) {
     }
     return count;
 }
+#endif
 
 bool emulator_video_adapter_init(
     PicoEmulatorVideoAdapter *adapter,
@@ -63,6 +70,7 @@ bool emulator_video_adapter_init(
         return false;
     }
 
+    nes_set_profile_clock(&adapter->nes, emulator_video_adapter_now_us, NULL);
     nes_reset(&adapter->nes);
     adapter->initialized = true;
     adapter->debug_overlay_enabled = false;
@@ -73,10 +81,10 @@ bool emulator_video_adapter_init(
 }
 
 bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
-    uint8_t luma_pixels[SMB2350_VIDEO_VISIBLE_WIDTH];
     uint64_t frame_started_us;
     uint64_t step_scanline_us_total = 0;
     uint64_t convert_scanline_us_total = 0;
+#if SMB2350_ENABLE_PICO_VIDEO_STATS
     uint64_t color_mask = 0;
     uint32_t source_nonzero_pixels = 0;
     uint32_t visible_nonblack_pixels = 0;
@@ -86,6 +94,7 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     uint8_t max_pixel = 0x00u;
     int16_t first_visible_x = -1;
     int16_t first_visible_y = -1;
+#endif
 
     if (!adapter->initialized) {
         emulator_video_adapter_set_error(adapter, "emulator video adapter is not initialized");
@@ -108,6 +117,7 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
 
         scanline = nes_scanline_buffer(&adapter->nes);
         started_us = time_us_64();
+#if SMB2350_ENABLE_PICO_VIDEO_STATS
         for (int x = 0; x < SMB2350_VIDEO_VISIBLE_WIDTH; ++x) {
             uint8_t nes_pixel = scanline->pixels[x];
             uint8_t luma = emulator_video_adapter_pixel_to_luma(nes_pixel, x, (int)scanline->y);
@@ -134,9 +144,23 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
             } else if (luma == SMB2350_VIDEO_LUMA_WHITE) {
                 ++visible_white_pixels;
             }
-            luma_pixels[x] = luma;
         }
-        video_ntsc_write_visible_scanline_luma((int)scanline->y, luma_pixels, SMB2350_VIDEO_VISIBLE_WIDTH);
+        video_ntsc_write_visible_scanline_indexed_luma(
+            (int)scanline->y,
+            scanline->pixels,
+            SMB2350_VIDEO_VISIBLE_WIDTH,
+            k_emulator_video_palette_to_luma,
+            64
+        );
+#else
+        video_ntsc_write_visible_scanline_indexed_luma(
+            (int)scanline->y,
+            scanline->pixels,
+            SMB2350_VIDEO_VISIBLE_WIDTH,
+            k_emulator_video_palette_to_luma,
+            64
+        );
+#endif
         convert_scanline_us_total += time_us_64() - started_us;
         ++adapter->rendered_scanlines;
     }
@@ -146,6 +170,7 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     adapter->profile_render_frame_us_total += time_us_64() - frame_started_us;
     adapter->profile_step_scanline_us_total += step_scanline_us_total;
     adapter->profile_convert_scanline_us_total += convert_scanline_us_total;
+#if SMB2350_ENABLE_PICO_VIDEO_STATS
     adapter->last_frame_source_nonzero_pixels = source_nonzero_pixels;
     adapter->last_frame_visible_nonblack_pixels = visible_nonblack_pixels;
     adapter->last_frame_visible_white_pixels = visible_white_pixels;
@@ -158,6 +183,17 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     if (visible_nonblack_pixels != 0u) {
         ++adapter->frames_with_visible_output;
     }
+#else
+    adapter->last_frame_source_nonzero_pixels = 0;
+    adapter->last_frame_visible_nonblack_pixels = 0;
+    adapter->last_frame_visible_white_pixels = 0;
+    adapter->last_frame_visible_gray_pixels = 0;
+    adapter->last_frame_min_pixel = 0;
+    adapter->last_frame_max_pixel = 0;
+    adapter->last_frame_unique_color_count = 0;
+    adapter->last_frame_first_visible_x = -1;
+    adapter->last_frame_first_visible_y = -1;
+#endif
     return true;
 }
 

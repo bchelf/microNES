@@ -43,6 +43,17 @@ typedef struct {
 
 enum { PPU_MAX_SCANLINE_SPRITES = 8 };
 
+static inline uint64_t ppu_profile_now_us(const Ppu *ppu) {
+#if SMB2350_ENABLE_STEP_PROFILING
+    if (ppu->profile_now_us != NULL) {
+        return ppu->profile_now_us(ppu->profile_now_user);
+    }
+#else
+    (void)ppu;
+#endif
+    return 0;
+}
+
 #if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
 static uint64_t ppu_hash_framebuffer(const NesFrameBuffer *frame_buffer) {
     uint64_t hash = 1469598103934665603ull;
@@ -1048,6 +1059,7 @@ void ppu_reset(Ppu *ppu) {
     memset(ppu->last_completed_visible_write_diag, 0, sizeof(ppu->last_completed_visible_write_diag));
     ppu->visible_write_diag_count = 0;
     ppu->last_completed_visible_write_diag_count = 0;
+    memset(&ppu->step_profile, 0, sizeof(ppu->step_profile));
 }
 
 void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_end) {
@@ -1089,65 +1101,110 @@ void ppu_oam_write_byte(Ppu *ppu, uint8_t index, uint8_t value, bool via_dma) {
 #endif
 }
 
-void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
-    for (uint32_t i = 0; i < cycles; ++i) {
-        ++ppu->cycle;
-
-        if (ppu->cycle == 1 && ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
-            if (ppu_rendering_enabled(ppu)) {
-                if (ppu->scanline == 0) {
-                    ppu_copy_vertical_bits_from_temp(ppu);
-                }
-                ppu_copy_horizontal_bits_from_temp(ppu);
+static inline void ppu_step_cycle_1(Ppu *ppu) {
+    if (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
+        if (ppu_rendering_enabled(ppu)) {
+            if (ppu->scanline == 0) {
+                ppu_copy_vertical_bits_from_temp(ppu);
             }
-            ppu_latch_render_state(ppu);
+            ppu_copy_horizontal_bits_from_temp(ppu);
         }
+        ppu_latch_render_state(ppu);
+    }
 
-        if (ppu->scanline == 241 && ppu->cycle == 1) {
-            ppu_finalize_frame(ppu);
-            ppu_sprite0_diag_commit_frame(ppu);
-            ppu->status |= PPU_STATUS_VBLANK;
-            ppu->frame_ready = true;
-            if (ppu->ctrl & 0x80u) {
-                ppu->nmi_pending = true;
-            }
-        } else if (ppu->scanline == 261 && ppu->cycle == 1) {
-            ppu_record_sprite0_status_clear(ppu, true);
-            ppu->status &= (uint8_t)~(PPU_STATUS_VBLANK | PPU_STATUS_SPRITE0_HIT);
-            ppu->frame_ready = false;
-            ppu->completed_frame_ready = false;
-            ppu->scanline_ready = false;
-            ppu->scanline_buffer.ready = false;
+    if (ppu->scanline == 241) {
+        ppu_finalize_frame(ppu);
+        ppu_sprite0_diag_commit_frame(ppu);
+        ppu->status |= PPU_STATUS_VBLANK;
+        ppu->frame_ready = true;
+        if (ppu->ctrl & 0x80u) {
+            ppu->nmi_pending = true;
         }
+    } else if (ppu->scanline == 261) {
+        ppu_record_sprite0_status_clear(ppu, true);
+        ppu->status &= (uint8_t)~(PPU_STATUS_VBLANK | PPU_STATUS_SPRITE0_HIT);
+        ppu->frame_ready = false;
+        ppu->completed_frame_ready = false;
+        ppu->scanline_ready = false;
+        ppu->scanline_buffer.ready = false;
+    }
+}
 
-        if (ppu->cycle > 340) {
-            ppu->cycle = 0;
+static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
+    if (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
+#if SMB2350_ENABLE_STEP_PROFILING
+        uint64_t render_started_us = ppu_profile_now_us(ppu);
+#endif
+        ppu_render_scanline(ppu, cartridge, ppu->scanline);
+#if SMB2350_ENABLE_STEP_PROFILING
+        ppu->step_profile.render_us_total += ppu_profile_now_us(ppu) - render_started_us;
+        ++ppu->step_profile.scanline_render_count;
+#endif
+        if (ppu_rendering_enabled(ppu)) {
+            ppu_increment_vertical_v(ppu);
+            ppu_copy_horizontal_bits_from_temp(ppu);
+        }
+    }
 
-            if (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
-                ppu_render_scanline(ppu, cartridge, ppu->scanline);
-                if (ppu_rendering_enabled(ppu)) {
-                    ppu_increment_vertical_v(ppu);
-                    ppu_copy_horizontal_bits_from_temp(ppu);
-                }
-            }
-
-            ++ppu->scanline;
-            if (ppu->scanline > 261) {
-                ppu->scanline = 0;
-                ++ppu->frame_count;
+    ++ppu->scanline;
+    if (ppu->scanline > 261) {
+        ppu->scanline = 0;
+        ++ppu->frame_count;
 #if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
-                ppu->sprite_composited_pixel_count = 0;
+        ppu->sprite_composited_pixel_count = 0;
 #if SMB2350_ENABLE_FRAMEBUFFER
-                ppu->frame_buffer.frame_index = ppu->frame_count;
+        ppu->frame_buffer.frame_index = ppu->frame_count;
 #endif
-                memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
-                ppu->visible_write_diag_count = 0;
-                memset(ppu->visible_write_diag, 0, sizeof(ppu->visible_write_diag));
+        memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
+        ppu->visible_write_diag_count = 0;
+        memset(ppu->visible_write_diag, 0, sizeof(ppu->visible_write_diag));
 #endif
-                ppu_latch_render_state(ppu);
-                ppu_sprite0_diag_begin_frame(ppu);
-            }
+        ppu_latch_render_state(ppu);
+        ppu_sprite0_diag_begin_frame(ppu);
+    }
+}
+
+void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
+#if SMB2350_ENABLE_STEP_PROFILING
+    ppu->step_profile.step_calls += 1;
+    ppu->step_profile.cycles_requested += cycles;
+#endif
+    while (cycles > 0) {
+        if (ppu->cycle == 0) {
+#if SMB2350_ENABLE_STEP_PROFILING
+            uint64_t event_started_us = ppu_profile_now_us(ppu);
+#endif
+            ppu->cycle = 1;
+            --cycles;
+            ppu_step_cycle_1(ppu);
+#if SMB2350_ENABLE_STEP_PROFILING
+            ppu->step_profile.event_us_total += ppu_profile_now_us(ppu) - event_started_us;
+#endif
+            continue;
         }
+
+        {
+            uint32_t advance = 341u - (uint32_t)ppu->cycle;
+
+            if (advance > cycles) {
+                ppu->cycle += (int)cycles;
+                break;
+            }
+
+            ppu->cycle += (int)advance;
+            cycles -= advance;
+        }
+
+#if SMB2350_ENABLE_STEP_PROFILING
+        {
+            uint64_t event_started_us = ppu_profile_now_us(ppu);
+#endif
+            ppu->cycle = 0;
+            ppu_finish_scanline(ppu, cartridge);
+#if SMB2350_ENABLE_STEP_PROFILING
+            ppu->step_profile.event_us_total += ppu_profile_now_us(ppu) - event_started_us;
+        }
+#endif
     }
 }
 

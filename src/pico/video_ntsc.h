@@ -34,6 +34,13 @@ void video_ntsc_start(void);
 void video_ntsc_begin_frame(void);
 void video_ntsc_write_visible_scanline_mono(int visible_y, const uint8_t *pixels, int pixel_count);
 void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels, int pixel_count);
+void video_ntsc_write_visible_scanline_indexed_luma(
+    int visible_y,
+    const uint8_t *pixels,
+    int pixel_count,
+    const uint8_t *palette_to_luma,
+    int palette_size
+);
 void video_ntsc_present(void);
 void video_ntsc_build_test_pattern_frame(void);
 void video_ntsc_perf_get(Smb2350VideoNtscPerfStats *stats_out);

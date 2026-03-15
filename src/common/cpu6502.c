@@ -241,6 +241,9 @@ static inline uint8_t cpu_ror_value(Cpu6502 *cpu, uint8_t value) {
 }
 
 static void cpu_service_interrupt(Cpu6502 *cpu, Nes *nes, uint16_t vector, bool set_break_flag) {
+#if SMB2350_ENABLE_STEP_PROFILING
+    uint64_t cpu_started_us = nes_profile_now_us(nes);
+#endif
     uint8_t flags = (uint8_t)(cpu->p | CPU6502_FLAG_U);
     uint16_t pc = cpu->pc;
 
@@ -256,8 +259,17 @@ static void cpu_service_interrupt(Cpu6502 *cpu, Nes *nes, uint16_t vector, bool 
     cpu->p |= CPU6502_FLAG_I;
     cpu->pc = (uint16_t)(cpu_read(cpu, nes, vector) | ((uint16_t)cpu_read(cpu, nes, (uint16_t)(vector + 1u)) << 8));
     cpu->cycles += 7;
+#if SMB2350_ENABLE_STEP_PROFILING
+    nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
+#endif
     apu_step(&nes->apu, 7);
+#if SMB2350_ENABLE_STEP_PROFILING
+    cpu_started_us = nes_profile_now_us(nes);
+#endif
     ppu_step_cycles(&nes->ppu, &nes->cartridge, 21);
+#if SMB2350_ENABLE_STEP_PROFILING
+    nes->step_profile.ppu_step_us_total += nes_profile_now_us(nes) - cpu_started_us;
+#endif
 }
 
 void cpu6502_init(Cpu6502 *cpu) {
@@ -292,6 +304,9 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
     int8_t rel = 0;
     uint16_t pc_before = cpu->pc;
     const Cpu6502OpcodeInfo *opcode_info;
+#if SMB2350_ENABLE_STEP_PROFILING
+    uint64_t cpu_started_us = 0;
+#endif
 
     if (cpu->jammed) {
         if (nes->stop_info.reason == NES_STOP_NONE) {
@@ -315,6 +330,9 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
         return true;
     }
 
+#if SMB2350_ENABLE_STEP_PROFILING
+    cpu_started_us = nes_profile_now_us(nes);
+#endif
     cpu->last_opcode = cpu_fetch8(cpu, nes);
     opcode_info = cpu6502_opcode_info(cpu->last_opcode);
     cpu_record_trace(nes, cpu, pc_before, cpu->last_opcode);
@@ -1111,7 +1129,16 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
     cpu->p |= CPU6502_FLAG_U;
     cpu->cycles += cycles;
     ++nes->stats.instruction_count;
+#if SMB2350_ENABLE_STEP_PROFILING
+    nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
+#endif
     apu_step(&nes->apu, cycles);
+#if SMB2350_ENABLE_STEP_PROFILING
+    cpu_started_us = nes_profile_now_us(nes);
+#endif
     ppu_step_cycles(&nes->ppu, &nes->cartridge, cycles * 3u);
+#if SMB2350_ENABLE_STEP_PROFILING
+    nes->step_profile.ppu_step_us_total += nes_profile_now_us(nes) - cpu_started_us;
+#endif
     return true;
 }

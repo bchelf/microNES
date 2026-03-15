@@ -1,6 +1,8 @@
 #ifndef SMB2350_RUNTIME_CONFIG_H
 #define SMB2350_RUNTIME_CONFIG_H
 
+#include <stdint.h>
+
 #ifndef SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
 #define SMB2350_ENABLE_RUNTIME_DIAGNOSTICS 1
 #endif
@@ -20,5 +22,15 @@
 #ifndef SMB2350_ENABLE_FRAMEBUFFER
 #define SMB2350_ENABLE_FRAMEBUFFER 1
 #endif
+
+#ifndef SMB2350_ENABLE_STEP_PROFILING
+#define SMB2350_ENABLE_STEP_PROFILING 0
+#endif
+
+#ifndef SMB2350_ENABLE_PICO_VIDEO_STATS
+#define SMB2350_ENABLE_PICO_VIDEO_STATS 1
+#endif
+
+typedef uint64_t (*smb2350_profile_now_us_fn)(void *user);
 
 #endif

@@ -165,6 +165,14 @@ typedef struct {
 } PpuVisibleWriteDiag;
 
 typedef struct {
+    uint64_t step_calls;
+    uint64_t cycles_requested;
+    uint64_t event_us_total;
+    uint64_t render_us_total;
+    uint64_t scanline_render_count;
+} PpuStepProfile;
+
+typedef struct {
     uint8_t ctrl;
     uint8_t mask;
     uint8_t status;
@@ -217,6 +225,9 @@ typedef struct {
     uint8_t visible_write_diag_count;
     PpuVisibleWriteDiag last_completed_visible_write_diag[PPU_VISIBLE_WRITE_DIAG_MAX];
     uint8_t last_completed_visible_write_diag_count;
+    smb2350_profile_now_us_fn profile_now_us;
+    void *profile_now_user;
+    PpuStepProfile step_profile;
     NesFrameBuffer frame_buffer;
     NesScanline scanline_buffer;
 } Ppu;

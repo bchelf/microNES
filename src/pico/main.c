@@ -16,6 +16,12 @@ int main(void) {
     uint64_t report_render_us = 0;
     uint64_t report_step_us = 0;
     uint64_t report_convert_us = 0;
+    uint64_t report_cpu_exec_us = 0;
+    uint64_t report_ppu_step_us = 0;
+    uint64_t report_ppu_render_us = 0;
+    uint64_t report_bus_reads = 0;
+    uint64_t report_bus_writes = 0;
+    uint64_t report_ppu_cycles = 0;
     Smb2350VideoNtscPerfStats report_video_stats = { 0 };
 #endif
 
@@ -50,20 +56,39 @@ int main(void) {
                     emulator_video.profile_step_scanline_us_total - report_step_us;
                 uint64_t delta_convert_us =
                     emulator_video.profile_convert_scanline_us_total - report_convert_us;
+                uint64_t delta_cpu_exec_us =
+                    emulator_video.nes.step_profile.cpu_exec_us_total - report_cpu_exec_us;
+                uint64_t delta_ppu_step_us =
+                    emulator_video.nes.step_profile.ppu_step_us_total - report_ppu_step_us;
+                uint64_t delta_ppu_render_us =
+                    emulator_video.nes.ppu.step_profile.render_us_total - report_ppu_render_us;
+                uint64_t delta_bus_reads =
+                    emulator_video.nes.step_profile.bus_read_count - report_bus_reads;
+                uint64_t delta_bus_writes =
+                    emulator_video.nes.step_profile.bus_write_count - report_bus_writes;
+                uint64_t delta_ppu_cycles =
+                    emulator_video.nes.ppu.step_profile.cycles_requested - report_ppu_cycles;
                 double fps = delta_us != 0 ? (60.0 * 1000000.0) / (double)delta_us : 0.0;
                 double frame_ms = delta_us / 60000.0;
 
                 video_ntsc_perf_get(&current_video_stats);
                 printf(
-                    "emu perf: frames=%llu fps=%.2f frame_ms=%.2f render=%.2fms step=%.2fms convert=%.2fms wait=%.2fms wait_max=%.2fms cpu_instr=%llu ppu_frame=%llu src_nonzero=%u visible=%u gray=%u white=%u colors=%u range=%02x-%02x first_visible=%d,%d\n",
+                    "emu perf: frames=%llu fps=%.2f frame_ms=%.2f render=%.2fms step=%.2fms cpu=%.2fms ppu=%.2fms ppu_render=%.2fms ppu_other=%.2fms convert=%.2fms wait=%.2fms wait_max=%.2fms bus_r=%llu bus_w=%llu ppu_cycles=%llu cpu_instr=%llu ppu_frame=%llu src_nonzero=%u visible=%u gray=%u white=%u colors=%u range=%02x-%02x first_visible=%d,%d\n",
                     emulator_video.rendered_frames,
                     fps,
                     frame_ms,
                     delta_render_us / 60000.0,
                     delta_step_us / 60000.0,
+                    delta_cpu_exec_us / 60000.0,
+                    delta_ppu_step_us / 60000.0,
+                    delta_ppu_render_us / 60000.0,
+                    (delta_ppu_step_us - delta_ppu_render_us) / 60000.0,
                     delta_convert_us / 60000.0,
                     (current_video_stats.swap_wait_us_total - report_video_stats.swap_wait_us_total) / 60000.0,
                     (double)current_video_stats.swap_wait_us_max / 1000.0,
+                    delta_bus_reads,
+                    delta_bus_writes,
+                    delta_ppu_cycles,
                     emulator_video.nes.stats.instruction_count,
                     emulator_video.nes.ppu.frame_count,
                     emulator_video.last_frame_source_nonzero_pixels,
@@ -80,6 +105,12 @@ int main(void) {
                 report_render_us = emulator_video.profile_render_frame_us_total;
                 report_step_us = emulator_video.profile_step_scanline_us_total;
                 report_convert_us = emulator_video.profile_convert_scanline_us_total;
+                report_cpu_exec_us = emulator_video.nes.step_profile.cpu_exec_us_total;
+                report_ppu_step_us = emulator_video.nes.step_profile.ppu_step_us_total;
+                report_ppu_render_us = emulator_video.nes.ppu.step_profile.render_us_total;
+                report_bus_reads = emulator_video.nes.step_profile.bus_read_count;
+                report_bus_writes = emulator_video.nes.step_profile.bus_write_count;
+                report_ppu_cycles = emulator_video.nes.ppu.step_profile.cycles_requested;
                 report_video_stats = current_video_stats;
             }
         }

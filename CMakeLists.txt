@@ -74,6 +74,7 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
         SMB2350_ENABLE_APU_PCM_OUTPUT=0
         SMB2350_ENABLE_APU_EMULATION=0
         SMB2350_ENABLE_FRAMEBUFFER=0
+        SMB2350_ENABLE_STEP_PROFILING=1
     )
 
     set(SMB2350_PICO_SOURCES
@@ -129,6 +130,8 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
     else ()
         target_compile_definitions(smb2350 PRIVATE SMB2350_PICO_VIDEO_MODE_TEST_PATTERN=1)
     endif ()
+
+    target_compile_definitions(smb2350 PRIVATE SMB2350_ENABLE_PICO_VIDEO_STATS=0)
 
     pico_enable_stdio_usb(smb2350 1)
     pico_enable_stdio_uart(smb2350 0)

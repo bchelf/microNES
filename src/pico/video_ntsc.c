@@ -264,7 +264,6 @@ void video_ntsc_begin_frame(void) {
             video_perf_stats.swap_wait_us_max = wait_us;
         }
     }
-    video_copy_blank_template(video_build_buffer_index);
 }
 
 void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels, int pixel_count) {
@@ -323,6 +322,72 @@ void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels
     }
 }
 
+void video_ntsc_write_visible_scanline_indexed_luma(
+    int visible_y,
+    const uint8_t *pixels,
+    int pixel_count,
+    const uint8_t *palette_to_luma,
+    int palette_size
+) {
+    uint32_t *line_words;
+
+    if (visible_y < 0 || visible_y >= VIDEO_VISIBLE_LINES ||
+        pixels == NULL || pixel_count <= 0 ||
+        palette_to_luma == NULL || palette_size <= 0) {
+        return;
+    }
+
+    line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
+    if (pixel_count == SMB2350_VIDEO_VISIBLE_WIDTH) {
+        static const uint32_t level_bits[] = {
+            VIDEO_LEVEL_BLACK,
+            VIDEO_LEVEL_GRAY,
+            VIDEO_LEVEL_WHITE,
+        };
+        uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
+
+        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
+            packed_words[i] = line_words[VIDEO_ACTIVE_WORD_START + i] & ~video_active_word_mask[i];
+        }
+        for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
+            uint8_t src_x = video_active_sample_src_x[sample];
+            uint8_t word_slot = video_active_sample_word_slot[sample];
+            uint8_t shift = video_active_sample_shift[sample];
+            uint8_t pixel = pixels[src_x];
+            uint8_t luma = palette_to_luma[pixel & (uint8_t)(palette_size - 1)];
+
+            if (luma > SMB2350_VIDEO_LUMA_WHITE) {
+                luma = SMB2350_VIDEO_LUMA_WHITE;
+            }
+            packed_words[word_slot] |= level_bits[luma] << shift;
+        }
+        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
+            line_words[VIDEO_ACTIVE_WORD_START + i] = packed_words[i];
+        }
+        return;
+    }
+
+    for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
+        int src_x = (x * pixel_count) / VIDEO_ACTIVE_SAMPLES;
+        uint8_t luma = palette_to_luma[pixels[src_x] & (uint8_t)(palette_size - 1)];
+        video_level_t level = VIDEO_LEVEL_BLACK;
+
+        switch (luma) {
+        case SMB2350_VIDEO_LUMA_WHITE:
+            level = VIDEO_LEVEL_WHITE;
+            break;
+        case SMB2350_VIDEO_LUMA_GRAY:
+            level = VIDEO_LEVEL_GRAY;
+            break;
+        case SMB2350_VIDEO_LUMA_BLACK:
+        default:
+            level = VIDEO_LEVEL_BLACK;
+            break;
+        }
+        video_put_sample(line_words, VIDEO_ACTIVE_START + x, level);
+    }
+}
+
 void video_ntsc_write_visible_scanline_mono(int visible_y, const uint8_t *pixels, int pixel_count) {
     video_ntsc_write_visible_scanline_luma(visible_y, pixels, pixel_count);
 }
@@ -334,6 +399,7 @@ void video_ntsc_present(void) {
 
 void video_ntsc_build_test_pattern_frame(void) {
     video_ntsc_begin_frame();
+    video_copy_blank_template(video_build_buffer_index);
 
     for (int visible_y = 0; visible_y < VIDEO_VISIBLE_LINES; ++visible_y) {
         uint32_t *line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);

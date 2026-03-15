@@ -17,6 +17,8 @@ static void nes_set_error(Nes *nes, const char *fmt, ...) {
 static void nes_clear_runtime_state(Nes *nes) {
     memset(&nes->stats, 0, sizeof(nes->stats));
     memset(&nes->stop_info, 0, sizeof(nes->stop_info));
+    memset(&nes->step_profile, 0, sizeof(nes->step_profile));
+    memset(&nes->ppu.step_profile, 0, sizeof(nes->ppu.step_profile));
 #if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
     memset(nes->trace, 0, sizeof(nes->trace));
     nes->trace_head = 0;
@@ -81,6 +83,13 @@ void nes_reset(Nes *nes) {
     nes_clear_runtime_state(nes);
     cpu6502_reset(&nes->cpu, nes);
     nes_set_error(nes, "");
+}
+
+void nes_set_profile_clock(Nes *nes, smb2350_profile_now_us_fn now_us, void *user) {
+    nes->profile_now_us = now_us;
+    nes->profile_now_user = user;
+    nes->ppu.profile_now_us = now_us;
+    nes->ppu.profile_now_user = user;
 }
 
 void nes_set_controller_state(Nes *nes, unsigned controller_index, NesControllerState state) {
