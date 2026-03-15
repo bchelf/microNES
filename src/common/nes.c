@@ -103,14 +103,6 @@ void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_
 }
 
 bool SMB2350_HOT_FUNC(nes_step_instruction)(Nes *nes) {
-    if (!nes_has_cartridge(nes)) {
-        if (nes->stop_info.reason == NES_STOP_NONE) {
-            nes->stop_info.reason = NES_STOP_NO_CARTRIDGE;
-            nes->stop_info.instruction_index = nes->stats.instruction_count;
-        }
-        nes_set_error(nes, "no cartridge loaded");
-        return false;
-    }
     return cpu6502_step(&nes->cpu, nes);
 }
 

@@ -149,6 +149,9 @@ static bool cart_parse_ines_image(
         cartridge->chr_is_ram = false;
     }
 
+    cartridge->prg_rom_mask = (uint32_t)(cartridge->prg_rom_size - 1u);
+    cartridge->chr_mask = (uint32_t)(cartridge->chr_size - 1u);
+
     if (!cart_build_chr_row_cache(cartridge, error, error_size)) {
         cart_unload(cartridge);
         return false;

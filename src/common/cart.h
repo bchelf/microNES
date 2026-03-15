@@ -15,8 +15,10 @@ typedef struct {
     size_t rom_image_size;
     const uint8_t *prg_rom;
     size_t prg_rom_size;
+    uint32_t prg_rom_mask;   /* prg_rom_size - 1; use with & for fast mirroring */
     uint8_t *chr_data;
     size_t chr_size;
+    uint32_t chr_mask;       /* chr_size - 1; use with & instead of % in hot paths */
     uint8_t *chr_row_pixels;
     size_t chr_row_count;
     bool chr_is_ram;

@@ -494,8 +494,8 @@ void apu_reset(Apu *apu) {
 
 void apu_step(Apu *apu, uint32_t cpu_cycles) {
 #if !SMB2350_ENABLE_APU_EMULATION
-    apu->cpu_cycles += cpu_cycles;
     (void)apu;
+    (void)cpu_cycles;
     return;
 #else
     for (uint32_t i = 0; i < cpu_cycles; ++i) {

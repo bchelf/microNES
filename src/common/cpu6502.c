@@ -303,7 +303,6 @@ bool SMB2350_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     uint8_t value = 0;
     int8_t rel = 0;
     uint16_t pc_before = cpu->pc;
-    const Cpu6502OpcodeInfo *opcode_info;
 #if SMB2350_ENABLE_STEP_PROFILING
     uint64_t cpu_started_us = 0;
 #endif
@@ -334,7 +333,6 @@ bool SMB2350_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     cpu_started_us = nes_profile_now_us(nes);
 #endif
     cpu->last_opcode = cpu_fetch8(cpu, nes);
-    opcode_info = cpu6502_opcode_info(cpu->last_opcode);
     cpu_record_trace(nes, cpu, pc_before, cpu->last_opcode);
     cpu_note_opcode(nes, pc_before, cpu->last_opcode);
 
@@ -1095,7 +1093,8 @@ bool SMB2350_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
         cpu_set_zn(cpu, value);
         cycles = 7;
         break;
-    default:
+    default: {
+        const Cpu6502OpcodeInfo *opcode_info = cpu6502_opcode_info(cpu->last_opcode);
         if (nes->stop_info.reason == NES_STOP_NONE) {
             nes->stop_info.reason = opcode_info->official ? NES_STOP_UNSUPPORTED_OPCODE : NES_STOP_ILLEGAL_OPCODE;
             nes->stop_info.pc = pc_before;
@@ -1124,9 +1123,9 @@ bool SMB2350_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
         );
         cpu->jammed = true;
         return false;
-    }
+    } /* default */
+    } /* switch */
 
-    cpu->p |= CPU6502_FLAG_U;
     cpu->cycles += cycles;
     ++nes->stats.instruction_count;
 #if SMB2350_ENABLE_STEP_PROFILING

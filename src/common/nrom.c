@@ -1,7 +1,7 @@
 #include "nrom.h"
 
 static inline size_t nrom_chr_row_index(const NesCartridge *cartridge, uint16_t pattern_addr) {
-    size_t masked = pattern_addr % cartridge->chr_size;
+    size_t masked = pattern_addr & cartridge->chr_mask;
     return ((masked >> 4) * 8u) + (masked & 0x07u);
 }
 
@@ -31,7 +31,7 @@ uint8_t nrom_ppu_read(const NesCartridge *cartridge, uint16_t addr) {
     if (cartridge->chr_size == 0) {
         return 0;
     }
-    return cartridge->chr_data[addr % cartridge->chr_size];
+    return cartridge->chr_data[addr & cartridge->chr_mask];
 }
 
 void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {

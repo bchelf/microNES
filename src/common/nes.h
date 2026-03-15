@@ -102,15 +102,7 @@ uint64_t nes_state_hash(const Nes *nes);
 const char *nes_stop_reason_name(NesStopReason reason);
 
 static inline uint8_t nes_nrom_prg_read_fast(const Nes *nes, uint16_t addr) {
-    uint32_t offset;
-
-    if (nes->cartridge.prg_rom_size == 0) {
-        return 0xffu;
-    }
-
-    offset = (uint32_t)(addr - 0x8000u);
-    offset &= (nes->cartridge.prg_rom_size == 0x4000u) ? 0x3fffu : 0x7fffu;
-    return nes->cartridge.prg_rom[offset];
+    return nes->cartridge.prg_rom[(uint32_t)(addr - 0x8000u) & nes->cartridge.prg_rom_mask];
 }
 
 static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {

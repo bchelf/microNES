@@ -902,29 +902,32 @@ static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
             uint16_t pattern_addr = (uint16_t)(bg_pattern_base + tile * 16u + bg_row);
             const uint8_t *row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
 
-            for (int px = 0; px < 8; ++px) {
-                int screen_x = screen_start_x + px;
-                uint8_t color_bits;
-
-                if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) {
-                    continue;
+            if (row_pixels != NULL) {
+                for (int px = 0; px < 8; ++px) {
+                    int screen_x = screen_start_x + px;
+                    if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
+                    if (screen_x < 8 && !show_bg_left) continue;
+                    uint8_t color_bits = row_pixels[px];
+                    if (color_bits != 0) {
+                        uint8_t palette_index = (uint8_t)((palette_select << 2) | color_bits);
+                        bg_opaque[screen_x] = 1;
+                        dst[screen_x] = ppu->palette[palette_index & 0x1fu];
+                    }
                 }
-                if (screen_x < 8 && !show_bg_left) {
-                    continue;
-                }
-
-                color_bits = row_pixels != NULL ? row_pixels[px] : 0;
-                if (row_pixels == NULL) {
-                    uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
-                    uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+            } else {
+                uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
+                uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+                for (int px = 0; px < 8; ++px) {
+                    int screen_x = screen_start_x + px;
+                    if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
+                    if (screen_x < 8 && !show_bg_left) continue;
                     uint8_t bit = (uint8_t)(7 - px);
-                    color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
-                }
-
-                if (color_bits != 0) {
-                    uint8_t palette_index = (uint8_t)((palette_select << 2) | color_bits);
-                    bg_opaque[screen_x] = 1;
-                    dst[screen_x] = ppu->palette[palette_index & 0x1fu];
+                    uint8_t color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+                    if (color_bits != 0) {
+                        uint8_t palette_index = (uint8_t)((palette_select << 2) | color_bits);
+                        bg_opaque[screen_x] = 1;
+                        dst[screen_x] = ppu->palette[palette_index & 0x1fu];
+                    }
                 }
             }
         }
@@ -956,40 +959,47 @@ static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
         }
 
         row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
-        for (int sx = 0; sx < 8; ++sx) {
-            int screen_x = sprite->x + sx;
-            int source_x = (sprite->attributes & 0x40u) ? (7 - sx) : sx;
-            uint8_t color_bits;
-
-            if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) {
-                continue;
+        if (row_pixels != NULL) {
+            bool flip_h = (sprite->attributes & 0x40u) != 0;
+            for (int sx = 0; sx < 8; ++sx) {
+                int screen_x = sprite->x + sx;
+                if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
+                if (screen_x < 8 && !show_sprites_left) continue;
+                uint8_t color_bits = row_pixels[flip_h ? (7 - sx) : sx];
+                if (color_bits == 0) continue;
+                if (sprite->oam_index == 0 && bg_opaque[screen_x] && screen_x < 255) {
+                    ppu_note_sprite0_hit(ppu, screen_x, y);
+                }
+                sprite_flags[screen_x] = (uint8_t)(
+                    0x01u |
+                    (((sprite->attributes & 0x20u) != 0) ? 0x02u : 0u) |
+                    ((sprite->oam_index == 0) ? 0x04u : 0u)
+                );
+                sprite_color[screen_x] =
+                    ppu->palette[(0x10u + ((sprite->attributes & 0x03u) << 2) + color_bits) & 0x1fu];
             }
-            if (screen_x < 8 && !show_sprites_left) {
-                continue;
-            }
-
-            color_bits = row_pixels != NULL ? row_pixels[source_x] : 0;
-            if (row_pixels == NULL) {
-                uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
-                uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+        } else {
+            uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
+            uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+            for (int sx = 0; sx < 8; ++sx) {
+                int screen_x = sprite->x + sx;
+                if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
+                if (screen_x < 8 && !show_sprites_left) continue;
+                int source_x = (sprite->attributes & 0x40u) ? (7 - sx) : sx;
                 uint8_t bit = (uint8_t)(7 - source_x);
-                color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+                uint8_t color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+                if (color_bits == 0) continue;
+                if (sprite->oam_index == 0 && bg_opaque[screen_x] && screen_x < 255) {
+                    ppu_note_sprite0_hit(ppu, screen_x, y);
+                }
+                sprite_flags[screen_x] = (uint8_t)(
+                    0x01u |
+                    (((sprite->attributes & 0x20u) != 0) ? 0x02u : 0u) |
+                    ((sprite->oam_index == 0) ? 0x04u : 0u)
+                );
+                sprite_color[screen_x] =
+                    ppu->palette[(0x10u + ((sprite->attributes & 0x03u) << 2) + color_bits) & 0x1fu];
             }
-            if (color_bits == 0) {
-                continue;
-            }
-
-            if (sprite->oam_index == 0 && bg_opaque[screen_x] && screen_x < 255) {
-                ppu_note_sprite0_hit(ppu, screen_x, y);
-            }
-
-            sprite_flags[screen_x] = (uint8_t)(
-                0x01u |
-                (((sprite->attributes & 0x20u) != 0) ? 0x02u : 0u) |
-                ((sprite->oam_index == 0) ? 0x04u : 0u)
-            );
-            sprite_color[screen_x] =
-                ppu->palette[(0x10u + ((sprite->attributes & 0x03u) << 2) + color_bits) & 0x1fu];
         }
     }
 
