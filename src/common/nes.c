@@ -102,7 +102,7 @@ void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_
     ppu_set_sprite0_diag_window(&nes->ppu, frame_start, frame_end);
 }
 
-bool nes_step_instruction(Nes *nes) {
+bool SMB2350_HOT_FUNC(nes_step_instruction)(Nes *nes) {
     if (!nes_has_cartridge(nes)) {
         if (nes->stop_info.reason == NES_STOP_NONE) {
             nes->stop_info.reason = NES_STOP_NO_CARTRIDGE;
@@ -114,7 +114,7 @@ bool nes_step_instruction(Nes *nes) {
     return cpu6502_step(&nes->cpu, nes);
 }
 
-bool nes_step_scanline(Nes *nes) {
+bool SMB2350_HOT_FUNC(nes_step_scanline)(Nes *nes) {
     uint64_t frame_before = nes->ppu.frame_count;
     uint64_t token = ((uint64_t)frame_before << 16) | (uint16_t)(nes->ppu.scanline_buffer.y & 0xffff);
 

@@ -50,4 +50,9 @@ void video_ntsc_present(void);
 void video_ntsc_build_test_pattern_frame(void);
 void video_ntsc_perf_get(Smb2350VideoNtscPerfStats *stats_out);
 
+// Precompute a 64×4 table mapping (nes_palette_index, dither_phase) →
+// composite level. Call once after the palette is known (e.g. at launch) to
+// enable the fast indexed-luma path that avoids per-sample gray lookups.
+void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size);
+
 #endif

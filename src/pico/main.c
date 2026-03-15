@@ -1,12 +1,17 @@
 #include "audio_pwm.h"
 #include "core1_video.h"
 #include "emulator_video_adapter.h"
+#include "hardware/clocks.h"
+#include "hardware/vreg.h"
 #include "pico/time.h"
 #include "video_ntsc.h"
 
 #include "pico/stdlib.h"
 
 #include <stdio.h>
+
+#define SMB2350_PICO_OVERCLOCK_KHZ 252000u
+#define SMB2350_PICO_OVERCLOCK_VREG VREG_VOLTAGE_1_20
 
 int main(void) {
 #if defined(SMB2350_PICO_VIDEO_MODE_EMULATOR)
@@ -30,7 +35,14 @@ int main(void) {
     Smb2350VideoNtscPerfStats report_video_stats = { 0 };
 #endif
 
+    vreg_set_voltage(SMB2350_PICO_OVERCLOCK_VREG);
+    sleep_ms(10);
+    if (!set_sys_clock_khz(SMB2350_PICO_OVERCLOCK_KHZ, true)) {
+        panic("failed to set sys clock to %u kHz", SMB2350_PICO_OVERCLOCK_KHZ);
+    }
+
     stdio_init_all();
+    printf("sys clock: %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));
 
     video_ntsc_init();
     audio_pwm_init(440);

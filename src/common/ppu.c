@@ -1323,7 +1323,7 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
     }
 }
 
-void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
+void SMB2350_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
 #if SMB2350_ENABLE_STEP_PROFILING
     ppu->step_profile.step_calls += 1;
     ppu->step_profile.cycles_requested += cycles;

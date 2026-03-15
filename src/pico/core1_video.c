@@ -25,7 +25,7 @@ void core1_video_get_stats(Core1VideoStats *stats_out) {
     *stats_out = s_stats;
 }
 
-static void core1_entry(void) {
+static void __not_in_flash_func(core1_entry)(void) {
     ScanlineQueueSlot slot;
 
     // Wait for the initial DMA frame to complete so the build buffer is free.
@@ -68,5 +68,7 @@ void core1_video_launch(const uint8_t *palette_to_luma, int palette_size) {
     s_palette_to_luma = palette_to_luma;
     s_palette_size = palette_size;
     memset(&s_stats, 0, sizeof(s_stats));
+    // Build the precomputed pixel→level table before core 1 starts consuming.
+    video_ntsc_precompute_palette(palette_to_luma, palette_size);
     multicore_launch_core1(core1_entry);
 }

@@ -117,6 +117,11 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
 #if SMB2350_ENABLE_STEP_PROFILING
     ++nes->step_profile.bus_read_count;
 #endif
+    // PRG ROM is checked first: for SMB1/NROM the majority of reads are
+    // instruction fetches and data from the $8000-$FFFF range.
+    if (addr >= 0x8000u) {
+        return nes_nrom_prg_read_fast(nes, addr);
+    }
     if (addr < 0x2000u) {
         return nes->cpu_ram[addr & 0x07ffu];
     }
@@ -131,9 +136,6 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
     }
     if (addr >= 0x4000u && addr <= 0x4017u) {
         return apu_cpu_read(&nes->apu, addr);
-    }
-    if (addr >= 0x8000u) {
-        return nes_nrom_prg_read_fast(nes, addr);
     }
     return 0;
 }

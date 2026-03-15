@@ -74,8 +74,13 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
         SMB2350_ENABLE_APU_PCM_OUTPUT=0
         SMB2350_ENABLE_APU_EMULATION=0
         SMB2350_ENABLE_FRAMEBUFFER=0
-        SMB2350_ENABLE_STEP_PROFILING=1
+        SMB2350_ENABLE_STEP_PROFILING=0
+        SMB2350_PICO_PLATFORM=1
     )
+
+    # Give smb2350_core access to pico/platform.h so SMB2350_HOT_FUNC can expand
+    # to __not_in_flash_func and place hot functions in SRAM.
+    target_link_libraries(smb2350_core PUBLIC pico_base_headers)
 
     set(SMB2350_PICO_SOURCES
         src/pico/audio_pwm.c
@@ -122,6 +127,7 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
         hardware_irq
         hardware_pio
         hardware_pwm
+        hardware_vreg
         m
         pico_multicore
         pico_stdlib

@@ -81,6 +81,13 @@ static volatile bool video_swap_pending;
 static volatile bool video_started;
 static Smb2350VideoNtscPerfStats video_perf_stats;
 
+// Precomputed table: for each (6-bit NES palette index, 2-bit dither phase),
+// the final 2-bit composite output level. Built by video_ntsc_precompute_palette().
+// Collapses palette_to_luma + gray_to_luma + phase_to_level into one lookup.
+// 64 * 4 = 256 bytes, fits comfortably in cache.
+static uint8_t video_precomputed_level[64][4];
+static bool video_palette_precomputed = false;
+
 static inline uint32_t *video_buffer_line_ptr(uint8_t buffer_index, int line) {
     return &frame_words[buffer_index][line * VIDEO_WORDS_PER_LINE];
 }
@@ -337,7 +344,21 @@ void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels
     }
 }
 
-void video_ntsc_write_visible_scanline_indexed_luma(
+void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
+    if (palette_to_luma == NULL || palette_size <= 0) {
+        return;
+    }
+    for (int pixel = 0; pixel < 64; ++pixel) {
+        uint8_t gray = palette_to_luma[pixel & (palette_size - 1)];
+        for (int phase = 0; phase < 4; ++phase) {
+            video_precomputed_level[pixel][phase] =
+                (uint8_t)video_gray_level_to_output_level(gray, phase);
+        }
+    }
+    video_palette_precomputed = true;
+}
+
+void __not_in_flash_func(video_ntsc_write_visible_scanline_indexed_luma)(
     int visible_y,
     const uint8_t *pixels,
     int pixel_count,
@@ -359,16 +380,30 @@ void video_ntsc_write_visible_scanline_indexed_luma(
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
             packed_words[i] = line_words[VIDEO_ACTIVE_WORD_START + i] & ~video_active_word_mask[i];
         }
-        for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
-            uint8_t src_x = video_active_sample_src_x[sample];
-            uint8_t word_slot = video_active_sample_word_slot[sample];
-            uint8_t shift = video_active_sample_shift[sample];
-            uint8_t pixel = pixels[src_x];
-            uint8_t gray = palette_to_luma[pixel & (uint8_t)(palette_size - 1)];
-            video_level_t level = video_gray_level_to_output_level(gray, sample);
 
-            packed_words[word_slot] |= (uint32_t)level << shift;
+        if (video_palette_precomputed) {
+            // Fast path: single table lookup per sample collapses palette→gray→level.
+            for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
+                uint8_t src_x = video_active_sample_src_x[sample];
+                uint8_t word_slot = video_active_sample_word_slot[sample];
+                uint8_t shift = video_active_sample_shift[sample];
+                uint8_t level = video_precomputed_level[pixels[src_x] & 63u][sample & 3];
+
+                packed_words[word_slot] |= (uint32_t)level << shift;
+            }
+        } else {
+            for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
+                uint8_t src_x = video_active_sample_src_x[sample];
+                uint8_t word_slot = video_active_sample_word_slot[sample];
+                uint8_t shift = video_active_sample_shift[sample];
+                uint8_t pixel = pixels[src_x];
+                uint8_t gray = palette_to_luma[pixel & (uint8_t)(palette_size - 1)];
+                video_level_t level = video_gray_level_to_output_level(gray, sample);
+
+                packed_words[word_slot] |= (uint32_t)level << shift;
+            }
         }
+
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
             line_words[VIDEO_ACTIVE_WORD_START + i] = packed_words[i];
         }

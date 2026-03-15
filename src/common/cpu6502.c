@@ -296,7 +296,7 @@ void cpu6502_reset(Cpu6502 *cpu, Nes *nes) {
     cpu->jammed = false;
 }
 
-bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
+bool SMB2350_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     uint32_t cycles = 0;
     bool page_crossed = false;
     uint16_t addr = 0;
