@@ -6,3 +6,4 @@ roms/
 *.bin
 *.map
 .vscode/
+.cache/

@@ -1,4 +1,5 @@
 #include "audio_pwm.h"
+#include "core1_video.h"
 #include "emulator_video_adapter.h"
 #include "pico/time.h"
 #include "video_ntsc.h"
@@ -11,17 +12,21 @@ int main(void) {
 #if defined(SMB2350_PICO_VIDEO_MODE_EMULATOR)
     extern unsigned char smb2350_pico_embedded_rom[];
     extern unsigned int smb2350_pico_embedded_rom_len;
-    PicoEmulatorVideoAdapter emulator_video;
+    static PicoEmulatorVideoAdapter emulator_video;
     uint64_t report_started_us = 0;
     uint64_t report_render_us = 0;
     uint64_t report_step_us = 0;
-    uint64_t report_convert_us = 0;
     uint64_t report_cpu_exec_us = 0;
     uint64_t report_ppu_step_us = 0;
     uint64_t report_ppu_render_us = 0;
     uint64_t report_bus_reads = 0;
     uint64_t report_bus_writes = 0;
     uint64_t report_ppu_cycles = 0;
+    uint64_t report_c1_convert_us = 0;
+    uint64_t report_c1_begin_wait_us = 0;
+    uint64_t report_c1_frames = 0;
+    uint32_t report_q_stall_count = 0;
+    uint64_t report_q_stall_us = 0;
     Smb2350VideoNtscPerfStats report_video_stats = { 0 };
 #endif
 
@@ -35,10 +40,17 @@ int main(void) {
             &emulator_video,
             smb2350_pico_embedded_rom,
             (size_t)smb2350_pico_embedded_rom_len)) {
-        printf("video mode: emulator\n");
+        printf("video mode: emulator (dual-core)\n");
+
+        // Seed the DMA with a blank frame, start scanout, then launch core 1.
+        // Core 1 will begin_frame (returns immediately, video_started=true from
+        // this point) and wait on the scanline queue.
         video_ntsc_begin_frame();
         video_ntsc_present();
         video_ntsc_start();
+
+        core1_video_launch(k_emulator_video_palette_to_gray, 64);
+
         report_started_us = time_us_64();
 
         while (true) {
@@ -49,13 +61,13 @@ int main(void) {
             if ((emulator_video.rendered_frames % 60u) == 0u) {
                 uint64_t now_us = time_us_64();
                 Smb2350VideoNtscPerfStats current_video_stats;
+                Core1VideoStats c1_stats;
+                ScanlineQueue *q = core1_video_get_queue();
                 uint64_t delta_us = now_us - report_started_us;
                 uint64_t delta_render_us =
                     emulator_video.profile_render_frame_us_total - report_render_us;
                 uint64_t delta_step_us =
                     emulator_video.profile_step_scanline_us_total - report_step_us;
-                uint64_t delta_convert_us =
-                    emulator_video.profile_convert_scanline_us_total - report_convert_us;
                 uint64_t delta_cpu_exec_us =
                     emulator_video.nes.step_profile.cpu_exec_us_total - report_cpu_exec_us;
                 uint64_t delta_ppu_step_us =
@@ -71,19 +83,36 @@ int main(void) {
                 double fps = delta_us != 0 ? (60.0 * 1000000.0) / (double)delta_us : 0.0;
                 double frame_ms = delta_us / 60000.0;
 
+                core1_video_get_stats(&c1_stats);
                 video_ntsc_perf_get(&current_video_stats);
+
+                uint64_t delta_c1_convert_us = c1_stats.convert_us_total - report_c1_convert_us;
+                uint64_t delta_c1_begin_wait_us = c1_stats.frame_begin_wait_us_total - report_c1_begin_wait_us;
+                uint64_t delta_c1_frames = c1_stats.frames_converted - report_c1_frames;
+                uint32_t delta_q_stall_count = q->producer_stall_count - report_q_stall_count;
+                uint64_t delta_q_stall_us = q->producer_stall_us_total - report_q_stall_us;
+
                 printf(
-                    "emu perf: frames=%llu fps=%.2f frame_ms=%.2f render=%.2fms step=%.2fms cpu=%.2fms ppu=%.2fms ppu_render=%.2fms ppu_other=%.2fms convert=%.2fms wait=%.2fms wait_max=%.2fms bus_r=%llu bus_w=%llu ppu_cycles=%llu cpu_instr=%llu ppu_frame=%llu src_nonzero=%u visible=%u gray=%u white=%u colors=%u range=%02x-%02x first_visible=%d,%d\n",
+                    "emu perf: frames=%llu fps=%.2f frame_ms=%.2f"
+                    " step=%.2fms cpu=%.2fms ppu=%.2fms ppu_render=%.2fms ppu_other=%.2fms"
+                    " c1_convert=%.2fms c1_wait=%.2fms c1_frames=%llu"
+                    " q_stalls=%u q_stall_ms=%.2f"
+                    " ntsc_wait=%.2fms ntsc_wait_max=%.2fms"
+                    " bus_r=%llu bus_w=%llu ppu_cycles=%llu cpu_instr=%llu ppu_frame=%llu"
+                    " src_nonzero=%u visible=%u gray=%u white=%u colors=%u range=%02x-%02x first_visible=%d,%d\n",
                     emulator_video.rendered_frames,
                     fps,
                     frame_ms,
-                    delta_render_us / 60000.0,
                     delta_step_us / 60000.0,
                     delta_cpu_exec_us / 60000.0,
                     delta_ppu_step_us / 60000.0,
                     delta_ppu_render_us / 60000.0,
                     (delta_ppu_step_us - delta_ppu_render_us) / 60000.0,
-                    delta_convert_us / 60000.0,
+                    delta_c1_frames > 0 ? (double)delta_c1_convert_us / ((double)delta_c1_frames * 1000.0) : 0.0,
+                    delta_c1_frames > 0 ? (double)delta_c1_begin_wait_us / ((double)delta_c1_frames * 1000.0) : 0.0,
+                    delta_c1_frames,
+                    delta_q_stall_count,
+                    delta_q_stall_us / 1000.0,
                     (current_video_stats.swap_wait_us_total - report_video_stats.swap_wait_us_total) / 60000.0,
                     (double)current_video_stats.swap_wait_us_max / 1000.0,
                     delta_bus_reads,
@@ -104,13 +133,17 @@ int main(void) {
                 report_started_us = now_us;
                 report_render_us = emulator_video.profile_render_frame_us_total;
                 report_step_us = emulator_video.profile_step_scanline_us_total;
-                report_convert_us = emulator_video.profile_convert_scanline_us_total;
                 report_cpu_exec_us = emulator_video.nes.step_profile.cpu_exec_us_total;
                 report_ppu_step_us = emulator_video.nes.step_profile.ppu_step_us_total;
                 report_ppu_render_us = emulator_video.nes.ppu.step_profile.render_us_total;
                 report_bus_reads = emulator_video.nes.step_profile.bus_read_count;
                 report_bus_writes = emulator_video.nes.step_profile.bus_write_count;
                 report_ppu_cycles = emulator_video.nes.ppu.step_profile.cycles_requested;
+                report_c1_convert_us = c1_stats.convert_us_total;
+                report_c1_begin_wait_us = c1_stats.frame_begin_wait_us_total;
+                report_c1_frames = c1_stats.frames_converted;
+                report_q_stall_count = q->producer_stall_count;
+                report_q_stall_us = q->producer_stall_us_total;
                 report_video_stats = current_video_stats;
             }
         }

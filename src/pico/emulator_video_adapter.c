@@ -1,5 +1,6 @@
 #include "emulator_video_adapter.h"
 
+#include "core1_video.h"
 #include "video_ntsc.h"
 
 #include "pico/time.h"
@@ -10,7 +11,7 @@
 // NES palette indices are mapped to 8 logical grayscale levels before scanout.
 // This improves tonal separation on monochrome composite output while keeping
 // the fast path table-driven and cheap enough for Pico.
-static const uint8_t k_emulator_video_palette_to_gray[64] = {
+const uint8_t k_emulator_video_palette_to_gray[64] = {
     SMB2350_VIDEO_LUMA_MID,         SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,
     SMB2350_VIDEO_LUMA_BLACK,       SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,
     SMB2350_VIDEO_LUMA_BLACK,       SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,
@@ -42,9 +43,7 @@ static uint64_t emulator_video_adapter_now_us(void *user) {
 }
 
 #if SMB2350_ENABLE_PICO_VIDEO_STATS
-static uint8_t emulator_video_adapter_pixel_to_luma(uint8_t nes_pixel, int x, int y) {
-    (void)x;
-    (void)y;
+static uint8_t emulator_video_adapter_pixel_to_luma(uint8_t nes_pixel) {
     return k_emulator_video_palette_to_gray[nes_pixel & 0x3fu];
 }
 
@@ -86,7 +85,7 @@ bool emulator_video_adapter_init(
 bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     uint64_t frame_started_us;
     uint64_t step_scanline_us_total = 0;
-    uint64_t convert_scanline_us_total = 0;
+    ScanlineQueue *queue;
 #if SMB2350_ENABLE_PICO_VIDEO_STATS
     uint64_t color_mask = 0;
     uint32_t source_nonzero_pixels = 0;
@@ -104,9 +103,12 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
         return false;
     }
 
+    queue = core1_video_get_queue();
     frame_started_us = time_us_64();
-    video_ntsc_begin_frame();
 
+    // Step all 240 visible scanlines and push pixel data to the queue.
+    // Core 1 converts each scanline to composite format concurrently.
+    // begin_frame / present are handled by core 1.
     for (int line = 0; line < SMB2350_VIDEO_VISIBLE_HEIGHT; ++line) {
         const NesScanline *scanline;
         uint64_t started_us;
@@ -119,11 +121,11 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
         step_scanline_us_total += time_us_64() - started_us;
 
         scanline = nes_scanline_buffer(&adapter->nes);
-        started_us = time_us_64();
+
 #if SMB2350_ENABLE_PICO_VIDEO_STATS
         for (int x = 0; x < SMB2350_VIDEO_VISIBLE_WIDTH; ++x) {
             uint8_t nes_pixel = scanline->pixels[x];
-            uint8_t luma = emulator_video_adapter_pixel_to_luma(nes_pixel, x, (int)scanline->y);
+            uint8_t luma = emulator_video_adapter_pixel_to_luma(nes_pixel);
 
             color_mask |= 1ull << (nes_pixel & 0x3fu);
             if (nes_pixel != 0u) {
@@ -148,31 +150,16 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
                 ++visible_gray_pixels;
             }
         }
-        video_ntsc_write_visible_scanline_indexed_luma(
-            (int)scanline->y,
-            scanline->pixels,
-            SMB2350_VIDEO_VISIBLE_WIDTH,
-            k_emulator_video_palette_to_gray,
-            64
-        );
-#else
-        video_ntsc_write_visible_scanline_indexed_luma(
-            (int)scanline->y,
-            scanline->pixels,
-            SMB2350_VIDEO_VISIBLE_WIDTH,
-            k_emulator_video_palette_to_gray,
-            64
-        );
 #endif
-        convert_scanline_us_total += time_us_64() - started_us;
+
+        scanline_queue_push(queue, scanline->pixels, scanline->y);
         ++adapter->rendered_scanlines;
     }
 
-    video_ntsc_present();
     ++adapter->rendered_frames;
     adapter->profile_render_frame_us_total += time_us_64() - frame_started_us;
     adapter->profile_step_scanline_us_total += step_scanline_us_total;
-    adapter->profile_convert_scanline_us_total += convert_scanline_us_total;
+
 #if SMB2350_ENABLE_PICO_VIDEO_STATS
     adapter->last_frame_source_nonzero_pixels = source_nonzero_pixels;
     adapter->last_frame_visible_nonblack_pixels = visible_nonblack_pixels;

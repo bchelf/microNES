@@ -97,7 +97,9 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
         file(WRITE "${SMB2350_PICO_ROM_C}"
 "unsigned char smb2350_pico_embedded_rom[] = { ${SMB2350_PICO_ROM_BYTES} };\nunsigned int smb2350_pico_embedded_rom_len = ${SMB2350_PICO_ROM_BYTE_COUNT}u;\n")
         list(APPEND SMB2350_PICO_SOURCES
+            src/pico/core1_video.c
             src/pico/emulator_video_adapter.c
+            src/pico/scanline_queue.c
             "${SMB2350_PICO_ROM_C}"
         )
     endif ()
@@ -121,6 +123,7 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
         hardware_pio
         hardware_pwm
         m
+        pico_multicore
         pico_stdlib
         smb2350_core
     )
