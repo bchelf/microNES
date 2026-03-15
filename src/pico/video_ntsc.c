@@ -47,6 +47,26 @@ typedef enum {
     VIDEO_LEVEL_WHITE = 0x3,
 } video_level_t;
 
+// The RP2350 composite path only has a few physical output levels, so we map
+// NES palette entries to 8 logical grayscale levels first, then convert those
+// to luma bytes and finally to a tiny ordered-dither pattern over the physical
+// black/gray/white levels. This preserves timing and keeps the hot path to
+// table lookups and assignments only.
+static const uint8_t k_video_gray_to_luma[8] = {
+    0, 32, 64, 96, 128, 160, 192, 224,
+};
+
+static const uint8_t k_video_gray_phase_to_level[8][4] = {
+    { VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK },
+    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK },
+    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_BLACK, VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_BLACK },
+    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_BLACK },
+    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY  },
+    { VIDEO_LEVEL_WHITE, VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY  },
+    { VIDEO_LEVEL_WHITE, VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_WHITE, VIDEO_LEVEL_GRAY  },
+    { VIDEO_LEVEL_WHITE, VIDEO_LEVEL_WHITE, VIDEO_LEVEL_WHITE, VIDEO_LEVEL_WHITE },
+};
+
 static uint32_t blank_frame_words[VIDEO_FRAME_WORDS];
 static uint32_t frame_words[VIDEO_BUFFER_COUNT][VIDEO_FRAME_WORDS];
 static uint8_t video_active_sample_src_x[VIDEO_ACTIVE_SAMPLES];
@@ -63,6 +83,22 @@ static Smb2350VideoNtscPerfStats video_perf_stats;
 
 static inline uint32_t *video_buffer_line_ptr(uint8_t buffer_index, int line) {
     return &frame_words[buffer_index][line * VIDEO_WORDS_PER_LINE];
+}
+
+static inline video_level_t video_gray_level_to_output_level(uint8_t gray_level, int phase) {
+    uint8_t luma;
+    uint8_t bucket;
+
+    if (gray_level > SMB2350_VIDEO_LUMA_WHITE) {
+        gray_level = SMB2350_VIDEO_LUMA_WHITE;
+    }
+
+    luma = k_video_gray_to_luma[gray_level];
+    bucket = (uint8_t)(luma >> 5);
+    if (bucket > SMB2350_VIDEO_LUMA_WHITE) {
+        bucket = SMB2350_VIDEO_LUMA_WHITE;
+    }
+    return (video_level_t)k_video_gray_phase_to_level[bucket][phase & 0x03];
 }
 
 static void video_put_sample(uint32_t *line_words, int sample_index, video_level_t level) {
@@ -275,11 +311,6 @@ void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels
 
     line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
     if (pixel_count == SMB2350_VIDEO_VISIBLE_WIDTH) {
-        static const uint32_t level_bits[] = {
-            VIDEO_LEVEL_BLACK,
-            VIDEO_LEVEL_GRAY,
-            VIDEO_LEVEL_WHITE,
-        };
         uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
 
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
@@ -289,12 +320,9 @@ void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels
             uint8_t src_x = video_active_sample_src_x[sample];
             uint8_t word_slot = video_active_sample_word_slot[sample];
             uint8_t shift = video_active_sample_shift[sample];
-            uint8_t luma = pixels[src_x];
+            video_level_t level = video_gray_level_to_output_level(pixels[src_x], sample);
 
-            if (luma > SMB2350_VIDEO_LUMA_WHITE) {
-                luma = SMB2350_VIDEO_LUMA_WHITE;
-            }
-            packed_words[word_slot] |= level_bits[luma] << shift;
+            packed_words[word_slot] |= (uint32_t)level << shift;
         }
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
             line_words[VIDEO_ACTIVE_WORD_START + i] = packed_words[i];
@@ -304,20 +332,7 @@ void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels
 
     for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
         int src_x = (x * pixel_count) / VIDEO_ACTIVE_SAMPLES;
-        video_level_t level = VIDEO_LEVEL_BLACK;
-
-        switch (pixels[src_x]) {
-        case SMB2350_VIDEO_LUMA_WHITE:
-            level = VIDEO_LEVEL_WHITE;
-            break;
-        case SMB2350_VIDEO_LUMA_GRAY:
-            level = VIDEO_LEVEL_GRAY;
-            break;
-        case SMB2350_VIDEO_LUMA_BLACK:
-        default:
-            level = VIDEO_LEVEL_BLACK;
-            break;
-        }
+        video_level_t level = video_gray_level_to_output_level(pixels[src_x], x);
         video_put_sample(line_words, VIDEO_ACTIVE_START + x, level);
     }
 }
@@ -339,11 +354,6 @@ void video_ntsc_write_visible_scanline_indexed_luma(
 
     line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
     if (pixel_count == SMB2350_VIDEO_VISIBLE_WIDTH) {
-        static const uint32_t level_bits[] = {
-            VIDEO_LEVEL_BLACK,
-            VIDEO_LEVEL_GRAY,
-            VIDEO_LEVEL_WHITE,
-        };
         uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
 
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
@@ -354,12 +364,10 @@ void video_ntsc_write_visible_scanline_indexed_luma(
             uint8_t word_slot = video_active_sample_word_slot[sample];
             uint8_t shift = video_active_sample_shift[sample];
             uint8_t pixel = pixels[src_x];
-            uint8_t luma = palette_to_luma[pixel & (uint8_t)(palette_size - 1)];
+            uint8_t gray = palette_to_luma[pixel & (uint8_t)(palette_size - 1)];
+            video_level_t level = video_gray_level_to_output_level(gray, sample);
 
-            if (luma > SMB2350_VIDEO_LUMA_WHITE) {
-                luma = SMB2350_VIDEO_LUMA_WHITE;
-            }
-            packed_words[word_slot] |= level_bits[luma] << shift;
+            packed_words[word_slot] |= (uint32_t)level << shift;
         }
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
             line_words[VIDEO_ACTIVE_WORD_START + i] = packed_words[i];
@@ -369,21 +377,8 @@ void video_ntsc_write_visible_scanline_indexed_luma(
 
     for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
         int src_x = (x * pixel_count) / VIDEO_ACTIVE_SAMPLES;
-        uint8_t luma = palette_to_luma[pixels[src_x] & (uint8_t)(palette_size - 1)];
-        video_level_t level = VIDEO_LEVEL_BLACK;
-
-        switch (luma) {
-        case SMB2350_VIDEO_LUMA_WHITE:
-            level = VIDEO_LEVEL_WHITE;
-            break;
-        case SMB2350_VIDEO_LUMA_GRAY:
-            level = VIDEO_LEVEL_GRAY;
-            break;
-        case SMB2350_VIDEO_LUMA_BLACK:
-        default:
-            level = VIDEO_LEVEL_BLACK;
-            break;
-        }
+        uint8_t gray = palette_to_luma[pixels[src_x] & (uint8_t)(palette_size - 1)];
+        video_level_t level = video_gray_level_to_output_level(gray, x);
         video_put_sample(line_words, VIDEO_ACTIVE_START + x, level);
     }
 }
