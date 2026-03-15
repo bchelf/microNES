@@ -1,9 +1,5 @@
 #include "nrom.h"
 
-static inline size_t nrom_chr_row_index(const NesCartridge *cartridge, uint16_t pattern_addr) {
-    size_t masked = pattern_addr & cartridge->chr_mask;
-    return ((masked >> 4) * 8u) + (masked & 0x07u);
-}
 
 uint8_t nrom_cpu_read(const NesCartridge *cartridge, uint16_t addr) {
     uint32_t offset = (uint32_t)(addr - 0x8000u);
@@ -63,9 +59,3 @@ void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
     }
 }
 
-const uint8_t *nrom_ppu_row_pixels(const NesCartridge *cartridge, uint16_t pattern_addr) {
-    if (cartridge->chr_size == 0 || cartridge->chr_row_pixels == NULL) {
-        return NULL;
-    }
-    return &cartridge->chr_row_pixels[nrom_chr_row_index(cartridge, pattern_addr) * 8u];
-}

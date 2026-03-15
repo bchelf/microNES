@@ -857,7 +857,7 @@ static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
 #endif
 }
 
-static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
+static void SMB2350_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartridge, int y) {
 #if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS && !SMB2350_ENABLE_FRAMEBUFFER
     uint8_t *dst = ppu->scanline_buffer.pixels;
     uint8_t bg_opaque[NES_FRAME_WIDTH];
@@ -1334,21 +1334,22 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
 }
 
 void SMB2350_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
-#if SMB2350_ENABLE_STEP_PROFILING
-    ppu->step_profile.step_calls += 1;
-    ppu->step_profile.cycles_requested += cycles;
-#endif
+    // Fast path: the vast majority of calls don't cross a scanline boundary.
+    // Avoid loop and branch overhead by returning immediately for the common case.
+    if (ppu->cycle != 0) {
+        uint32_t advance = 341u - (uint32_t)ppu->cycle;
+        if (advance > cycles) {
+            ppu->cycle += (int)cycles;
+            return;
+        }
+    }
+
+    // Slow path: at scanline cycle 0, or the step spans a boundary.
     while (cycles > 0) {
         if (ppu->cycle == 0) {
-#if SMB2350_ENABLE_STEP_PROFILING
-            uint64_t event_started_us = ppu_profile_now_us(ppu);
-#endif
             ppu->cycle = 1;
             --cycles;
             ppu_step_cycle_1(ppu);
-#if SMB2350_ENABLE_STEP_PROFILING
-            ppu->step_profile.event_us_total += ppu_profile_now_us(ppu) - event_started_us;
-#endif
             continue;
         }
 
@@ -1364,16 +1365,8 @@ void SMB2350_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint32
             cycles -= advance;
         }
 
-#if SMB2350_ENABLE_STEP_PROFILING
-        {
-            uint64_t event_started_us = ppu_profile_now_us(ppu);
-#endif
-            ppu->cycle = 0;
-            ppu_finish_scanline(ppu, cartridge);
-#if SMB2350_ENABLE_STEP_PROFILING
-            ppu->step_profile.event_us_total += ppu_profile_now_us(ppu) - event_started_us;
-        }
-#endif
+        ppu->cycle = 0;
+        ppu_finish_scanline(ppu, cartridge);
     }
 }
 

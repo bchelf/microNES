@@ -114,7 +114,7 @@ bool SMB2350_HOT_FUNC(nes_step_scanline)(Nes *nes) {
     nes->ppu.scanline_buffer.ready = false;
 
     do {
-        if (!nes_step_instruction(nes)) {
+        if (!cpu6502_step(&nes->cpu, nes)) {
             return false;
         }
     } while (!nes->ppu.scanline_ready ||
