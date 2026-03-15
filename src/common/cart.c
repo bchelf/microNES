@@ -17,6 +17,57 @@ static void cart_set_error(char *error, size_t error_size, const char *message) 
     }
 }
 
+static void cart_decode_chr_row(NesCartridge *cartridge, size_t low_addr) {
+    size_t row_index;
+    uint8_t *dst;
+    uint8_t low;
+    uint8_t high;
+
+    if (cartridge->chr_row_pixels == NULL || cartridge->chr_size == 0) {
+        return;
+    }
+
+    low_addr %= cartridge->chr_size;
+    row_index = ((low_addr >> 4) * 8u) + (low_addr & 0x07u);
+    dst = &cartridge->chr_row_pixels[row_index * 8u];
+    low = cartridge->chr_data[low_addr];
+    high = cartridge->chr_data[(low_addr + 8u) % cartridge->chr_size];
+
+    for (int x = 0; x < 8; ++x) {
+        uint8_t bit = (uint8_t)(7 - x);
+        dst[x] = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+    }
+}
+
+static bool cart_build_chr_row_cache(NesCartridge *cartridge, char *error, size_t error_size) {
+    size_t row_count;
+    size_t total_bytes;
+
+    if (cartridge->chr_size == 0) {
+        cartridge->chr_row_pixels = NULL;
+        cartridge->chr_row_count = 0;
+        return true;
+    }
+
+    row_count = (cartridge->chr_size / 16u) * 8u;
+    total_bytes = row_count * 8u;
+    cartridge->chr_row_pixels = (uint8_t *)malloc(total_bytes);
+    if (cartridge->chr_row_pixels == NULL) {
+        cart_set_error(error, error_size, "failed to allocate CHR row cache");
+        return false;
+    }
+    cartridge->chr_row_count = row_count;
+
+    for (size_t tile = 0; tile < cartridge->chr_size / 16u; ++tile) {
+        size_t tile_base = tile * 16u;
+        for (size_t row = 0; row < 8u; ++row) {
+            cart_decode_chr_row(cartridge, tile_base + row);
+        }
+    }
+
+    return true;
+}
+
 static bool cart_parse_ines_image(
     NesCartridge *cartridge,
     uint8_t *rom_image,
@@ -98,6 +149,11 @@ static bool cart_parse_ines_image(
         cartridge->chr_is_ram = false;
     }
 
+    if (!cart_build_chr_row_cache(cartridge, error, error_size)) {
+        cart_unload(cartridge);
+        return false;
+    }
+
     cart_set_error(error, error_size, "");
     return true;
 }
@@ -107,6 +163,7 @@ bool cart_is_loaded(const NesCartridge *cartridge) {
 }
 
 void cart_unload(NesCartridge *cartridge) {
+    free(cartridge->chr_row_pixels);
     if (cartridge->chr_is_ram) {
         free(cartridge->chr_data);
     }

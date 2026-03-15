@@ -9,5 +9,6 @@ uint8_t nrom_cpu_read(const NesCartridge *cartridge, uint16_t addr);
 void nrom_cpu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value);
 uint8_t nrom_ppu_read(const NesCartridge *cartridge, uint16_t addr);
 void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value);
+const uint8_t *nrom_ppu_row_pixels(const NesCartridge *cartridge, uint16_t pattern_addr);
 
 #endif

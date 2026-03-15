@@ -17,6 +17,8 @@ typedef struct {
     size_t prg_rom_size;
     uint8_t *chr_data;
     size_t chr_size;
+    uint8_t *chr_row_pixels;
+    size_t chr_row_count;
     bool chr_is_ram;
     uint8_t mapper;
     uint8_t prg_banks;

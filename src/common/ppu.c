@@ -471,13 +471,20 @@ static PpuPixelSample ppu_background_pixel(const Ppu *ppu, const NesCartridge *c
     uint8_t attr = ppu->nametables[ppu_nametable_index(cartridge, attr_addr)];
     uint16_t pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
     uint16_t pattern_addr = (uint16_t)(pattern_base + tile * 16u + row);
-    uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
-    uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
-    uint8_t bit = (uint8_t)(7 - (total_x & 0x07u));
-    uint8_t color_low = (low >> bit) & 0x01u;
-    uint8_t color_high = (high >> bit) & 0x01u;
+    const uint8_t *row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
+    uint8_t color_bits;
     uint8_t palette_select = (attr >> ((((coarse_y & 0x02u) << 1) | (coarse_x & 0x02u)))) & 0x03u;
-    uint8_t palette_index = (uint8_t)((palette_select << 2) | (color_high << 1) | color_low);
+    uint8_t palette_index;
+
+    if (row_pixels != NULL) {
+        color_bits = row_pixels[total_x & 0x07u];
+    } else {
+        uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
+        uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+        uint8_t bit = (uint8_t)(7 - (total_x & 0x07u));
+        color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+    }
+    palette_index = (uint8_t)((palette_select << 2) | color_bits);
 
     sample.opaque = (palette_index & 0x03u) != 0;
     if (!sample.opaque) {
@@ -629,9 +636,6 @@ static PpuSpritePixelSample ppu_sample_sprite_pixel_internal(
     int local_x;
     int local_y;
     uint16_t pattern_addr;
-    uint8_t low;
-    uint8_t high;
-    uint8_t bit;
     uint8_t color_bits;
 
     if (x < sprite->x || x >= sprite->x + 8) {
@@ -665,10 +669,17 @@ static PpuSpritePixelSample ppu_sample_sprite_pixel_internal(
         pattern_addr = (uint16_t)(pattern_base + sprite->tile * 16u + local_y);
     }
 
-    low = nrom_ppu_read(cartridge, pattern_addr);
-    high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
-    bit = (uint8_t)(7 - local_x);
-    color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+    {
+        const uint8_t *row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
+        if (row_pixels != NULL) {
+            color_bits = row_pixels[local_x];
+        } else {
+            uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
+            uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+            uint8_t bit = (uint8_t)(7 - local_x);
+            color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+        }
+    }
     if (color_bits == 0) {
         return sample;
     }
@@ -847,6 +858,153 @@ static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
 }
 
 static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
+#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS && !SMB2350_ENABLE_FRAMEBUFFER
+    uint8_t *dst = ppu->scanline_buffer.pixels;
+    uint8_t bg_opaque[NES_FRAME_WIDTH];
+    uint8_t sprite_color[NES_FRAME_WIDTH];
+    uint8_t sprite_flags[NES_FRAME_WIDTH];
+    PpuScanlineSprite sprites[PPU_MAX_SCANLINE_SPRITES];
+    uint8_t sprite_count = ppu_collect_scanline_sprites(ppu, y, sprites);
+    bool show_bg = (ppu->mask & PPU_MASK_SHOW_BG) != 0;
+    bool show_bg_left = (ppu->mask & PPU_MASK_SHOW_BG_LEFT) != 0;
+    bool show_sprites_left = (ppu->mask & PPU_MASK_SHOW_SPRITES_LEFT) != 0;
+    uint8_t universal_color = ppu->palette[0];
+    uint16_t bg_base_v = ppu->render_vram_addr;
+    uint16_t bg_base_coarse_x = bg_base_v & 0x001fu;
+    uint16_t bg_coarse_y = (bg_base_v >> 5) & 0x001fu;
+    uint16_t bg_base_nametable = (bg_base_v >> 10) & 0x0003u;
+    uint16_t bg_row = (bg_base_v >> 12) & 0x0007u;
+    uint16_t bg_pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
+
+    memset(bg_opaque, 0, sizeof(bg_opaque));
+    memset(sprite_flags, 0, sizeof(sprite_flags));
+
+    for (int x = 0; x < NES_FRAME_WIDTH; ++x) {
+        dst[x] = universal_color;
+    }
+
+    if (show_bg) {
+        for (int tile_group = 0; tile_group < 33; ++tile_group) {
+            int screen_start_x = tile_group * 8 - ppu->render_fine_x;
+            uint16_t coarse_x_total = (uint16_t)(bg_base_coarse_x + tile_group);
+            uint16_t coarse_x = coarse_x_total & 0x001fu;
+            uint16_t effective_nametable =
+                (uint16_t)(bg_base_nametable ^ ((coarse_x_total >> 5) & 0x0001u));
+            uint16_t name_table = (uint16_t)(effective_nametable * 0x0400u);
+            uint16_t tile_index_addr =
+                (uint16_t)(0x2000u + name_table + bg_coarse_y * 32u + coarse_x);
+            uint16_t attr_addr =
+                (uint16_t)(0x23c0u + name_table + ((bg_coarse_y >> 2) * 8u) + (coarse_x >> 2));
+            uint8_t tile = ppu->nametables[ppu_nametable_index(cartridge, tile_index_addr)];
+            uint8_t attr = ppu->nametables[ppu_nametable_index(cartridge, attr_addr)];
+            uint8_t palette_select =
+                (uint8_t)((attr >> ((((bg_coarse_y & 0x02u) << 1) | (coarse_x & 0x02u)))) & 0x03u);
+            uint16_t pattern_addr = (uint16_t)(bg_pattern_base + tile * 16u + bg_row);
+            const uint8_t *row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
+
+            for (int px = 0; px < 8; ++px) {
+                int screen_x = screen_start_x + px;
+                uint8_t color_bits;
+
+                if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) {
+                    continue;
+                }
+                if (screen_x < 8 && !show_bg_left) {
+                    continue;
+                }
+
+                color_bits = row_pixels != NULL ? row_pixels[px] : 0;
+                if (row_pixels == NULL) {
+                    uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
+                    uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+                    uint8_t bit = (uint8_t)(7 - px);
+                    color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+                }
+
+                if (color_bits != 0) {
+                    uint8_t palette_index = (uint8_t)((palette_select << 2) | color_bits);
+                    bg_opaque[screen_x] = 1;
+                    dst[screen_x] = ppu->palette[palette_index & 0x1fu];
+                }
+            }
+        }
+    }
+
+    for (int i = (int)sprite_count - 1; i >= 0; --i) {
+        const PpuScanlineSprite *sprite = &sprites[i];
+        int sprite_height = ppu_sprite_height(ppu);
+        int local_y = y - ((int)sprite->y + 1);
+        uint16_t pattern_addr;
+        const uint8_t *row_pixels;
+
+        if (local_y < 0 || local_y >= sprite_height) {
+            continue;
+        }
+        if (sprite->attributes & 0x80u) {
+            local_y = sprite_height - 1 - local_y;
+        }
+
+        if (sprite_height == 16) {
+            uint8_t tile_row = (uint8_t)(local_y >> 3);
+            uint8_t row_in_tile = (uint8_t)(local_y & 0x07);
+            uint16_t pattern_base = (sprite->tile & 0x01u) ? 0x1000u : 0x0000u;
+            uint8_t tile_number = (uint8_t)((sprite->tile & 0xfeu) + tile_row);
+            pattern_addr = (uint16_t)(pattern_base + tile_number * 16u + row_in_tile);
+        } else {
+            uint16_t pattern_base = (ppu->ctrl & 0x08u) ? 0x1000u : 0x0000u;
+            pattern_addr = (uint16_t)(pattern_base + sprite->tile * 16u + local_y);
+        }
+
+        row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
+        for (int sx = 0; sx < 8; ++sx) {
+            int screen_x = sprite->x + sx;
+            int source_x = (sprite->attributes & 0x40u) ? (7 - sx) : sx;
+            uint8_t color_bits;
+
+            if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) {
+                continue;
+            }
+            if (screen_x < 8 && !show_sprites_left) {
+                continue;
+            }
+
+            color_bits = row_pixels != NULL ? row_pixels[source_x] : 0;
+            if (row_pixels == NULL) {
+                uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
+                uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+                uint8_t bit = (uint8_t)(7 - source_x);
+                color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+            }
+            if (color_bits == 0) {
+                continue;
+            }
+
+            if (sprite->oam_index == 0 && bg_opaque[screen_x] && screen_x < 255) {
+                ppu_note_sprite0_hit(ppu, screen_x, y);
+            }
+
+            sprite_flags[screen_x] = (uint8_t)(
+                0x01u |
+                (((sprite->attributes & 0x20u) != 0) ? 0x02u : 0u) |
+                ((sprite->oam_index == 0) ? 0x04u : 0u)
+            );
+            sprite_color[screen_x] =
+                ppu->palette[(0x10u + ((sprite->attributes & 0x03u) << 2) + color_bits) & 0x1fu];
+        }
+    }
+
+    for (int x = 0; x < NES_FRAME_WIDTH; ++x) {
+        if ((sprite_flags[x] & 0x01u) != 0 && (((sprite_flags[x] & 0x02u) == 0) || !bg_opaque[x])) {
+            dst[x] = sprite_color[x];
+        }
+    }
+
+    ppu->scanline_buffer.y = (uint16_t)y;
+    ppu->scanline_buffer.frame_index = ppu->frame_count;
+    ppu->scanline_buffer.ready = true;
+    ppu->scanline_ready = true;
+    return;
+#else
     uint8_t *dst =
 #if SMB2350_ENABLE_FRAMEBUFFER
         nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);
@@ -982,6 +1140,7 @@ static void ppu_render_scanline(Ppu *ppu, NesCartridge *cartridge, int y) {
     ppu->scanline_buffer.frame_index = ppu->frame_count;
     ppu->scanline_buffer.ready = true;
     ppu->scanline_ready = true;
+#endif
 }
 
 void ppu_init(Ppu *ppu) {
