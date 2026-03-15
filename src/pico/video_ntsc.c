@@ -8,6 +8,7 @@
 
 #include "video_ntsc.pio.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 // This is a simplified 240p-style NTSC cadence for bring-up:
@@ -17,7 +18,7 @@
 enum {
     VIDEO_VSYNC_LINES = 3,
     VIDEO_TOP_BLANK_LINES = 16,
-    VIDEO_VISIBLE_LINES = 240,
+    VIDEO_VISIBLE_LINES = SMB2350_VIDEO_VISIBLE_HEIGHT,
     VIDEO_BOTTOM_BLANK_LINES = 3,
     VIDEO_LINES_PER_FRAME = VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES +
                             VIDEO_VISIBLE_LINES + VIDEO_BOTTOM_BLANK_LINES,
@@ -32,20 +33,28 @@ enum {
     VIDEO_SAMPLE_RATE_HZ = 8056010,
     VIDEO_BORDER_X = 10,
     VIDEO_BORDER_Y = 8,
+    VIDEO_BUFFER_COUNT = 2,
 };
 
 typedef enum {
     VIDEO_LEVEL_SYNC = 0x0,
     VIDEO_LEVEL_BLACK = 0x1,
+    VIDEO_LEVEL_GRAY = 0x2,
     VIDEO_LEVEL_WHITE = 0x3,
 } video_level_t;
 
-static uint32_t frame_words[VIDEO_FRAME_WORDS];
+static uint32_t blank_frame_words[VIDEO_FRAME_WORDS];
+static uint32_t frame_words[VIDEO_BUFFER_COUNT][VIDEO_FRAME_WORDS];
 static int video_sm;
 static int video_dma_data;
+static volatile uint8_t video_scanout_buffer_index;
+static volatile uint8_t video_build_buffer_index;
+static volatile bool video_swap_pending;
+static volatile bool video_started;
+static Smb2350VideoNtscPerfStats video_perf_stats;
 
-static inline uint32_t *video_line_ptr(int line) {
-    return &frame_words[line * VIDEO_WORDS_PER_LINE];
+static inline uint32_t *video_buffer_line_ptr(uint8_t buffer_index, int line) {
+    return &frame_words[buffer_index][line * VIDEO_WORDS_PER_LINE];
 }
 
 static void video_put_sample(uint32_t *line_words, int sample_index, video_level_t level) {
@@ -95,11 +104,9 @@ static bool video_pattern_pixel(int x, int y) {
     return false;
 }
 
-static void video_build_line(uint32_t *line_words, int frame_line) {
+static void video_build_blank_line(uint32_t *line_words, int frame_line) {
     memset(line_words, 0, VIDEO_WORDS_PER_LINE * sizeof(uint32_t));
 
-    // A short broad-sync region is simpler than full equalizing/serration pulses
-    // and is usually good enough for first-pass NTSC monitor bring-up.
     if (frame_line < VIDEO_VSYNC_LINES) {
         video_fill_range(line_words, 0, VIDEO_SAMPLES_PER_LINE, VIDEO_LEVEL_SYNC);
         return;
@@ -119,46 +126,57 @@ static void video_build_line(uint32_t *line_words, int frame_line) {
         VIDEO_FRONT_PORCH_SAMPLES,
         VIDEO_LEVEL_BLACK
     );
+}
 
-    int visible_line = frame_line - (VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES);
-    if (visible_line < 0 || visible_line >= VIDEO_VISIBLE_LINES) {
-        return;
-    }
-
-    int active_start = VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES;
-    for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
-        if (video_pattern_pixel(x, visible_line)) {
-            video_put_sample(line_words, active_start + x, VIDEO_LEVEL_WHITE);
-        }
+static void video_build_blank_template(void) {
+    for (int line = 0; line < VIDEO_LINES_PER_FRAME; ++line) {
+        video_build_blank_line(&blank_frame_words[line * VIDEO_WORDS_PER_LINE], line);
     }
 }
 
-static void video_build_frame(void) {
-    for (int line = 0; line < VIDEO_LINES_PER_FRAME; ++line) {
-        video_build_line(video_line_ptr(line), line);
-    }
+static void video_copy_blank_template(uint8_t buffer_index) {
+    memcpy(frame_words[buffer_index], blank_frame_words, sizeof(blank_frame_words));
+}
+
+static inline uint32_t *video_visible_line_ptr(uint8_t buffer_index, int visible_y) {
+    int frame_line = VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES + visible_y;
+    return video_buffer_line_ptr(buffer_index, frame_line);
 }
 
 static void video_restart_dma(void) {
-    dma_channel_set_read_addr(video_dma_data, frame_words, false);
+    dma_channel_set_read_addr(video_dma_data, frame_words[video_scanout_buffer_index], false);
     dma_channel_set_trans_count(video_dma_data, VIDEO_FRAME_WORDS, true);
 }
 
 static void video_dma_handler(void) {
     dma_hw->ints0 = 1u << video_dma_data;
+
+    if (video_swap_pending) {
+        video_scanout_buffer_index = video_build_buffer_index;
+        video_build_buffer_index = (uint8_t)(video_scanout_buffer_index ^ 1u);
+        video_swap_pending = false;
+    }
+
     video_restart_dma();
 }
 
 void video_ntsc_init(void) {
     PIO pio = pio0;
     uint offset = pio_add_program(pio, &video_ntsc_program);
+    pio_sm_config config;
+    dma_channel_config data_config;
+
     video_sm = pio_claim_unused_sm(pio, true);
+    video_scanout_buffer_index = 0;
+    video_build_buffer_index = 1;
+    video_swap_pending = false;
+    video_started = false;
 
     for (uint pin = SMB2350_VIDEO_PIN_BASE; pin < SMB2350_VIDEO_PIN_BASE + SMB2350_VIDEO_PIN_COUNT; ++pin) {
         pio_gpio_init(pio, pin);
     }
 
-    pio_sm_config config = video_ntsc_program_get_default_config(offset);
+    config = video_ntsc_program_get_default_config(offset);
     sm_config_set_out_pins(&config, SMB2350_VIDEO_PIN_BASE, SMB2350_VIDEO_PIN_COUNT);
     sm_config_set_out_shift(&config, true, true, 32);
     sm_config_set_fifo_join(&config, PIO_FIFO_JOIN_TX);
@@ -167,11 +185,13 @@ void video_ntsc_init(void) {
     pio_sm_set_consecutive_pindirs(pio, video_sm, SMB2350_VIDEO_PIN_BASE, SMB2350_VIDEO_PIN_COUNT, true);
     pio_sm_init(pio, video_sm, offset, &config);
 
-    video_build_frame();
+    video_build_blank_template();
+    video_copy_blank_template(0);
+    video_copy_blank_template(1);
 
     video_dma_data = dma_claim_unused_channel(true);
 
-    dma_channel_config data_config = dma_channel_get_default_config(video_dma_data);
+    data_config = dma_channel_get_default_config(video_dma_data);
     channel_config_set_transfer_data_size(&data_config, DMA_SIZE_32);
     channel_config_set_read_increment(&data_config, true);
     channel_config_set_write_increment(&data_config, false);
@@ -181,7 +201,7 @@ void video_ntsc_init(void) {
         video_dma_data,
         &data_config,
         &pio->txf[video_sm],
-        frame_words,
+        frame_words[video_scanout_buffer_index],
         VIDEO_FRAME_WORDS,
         false
     );
@@ -195,5 +215,94 @@ void video_ntsc_start(void) {
     PIO pio = pio0;
 
     pio_sm_set_enabled(pio, video_sm, true);
+    video_started = true;
     video_restart_dma();
+}
+
+void video_ntsc_begin_frame(void) {
+    uint64_t wait_started_us = 0;
+
+    ++video_perf_stats.begin_frame_calls;
+    // The emulator can render faster than scanout. If the previous frame has
+    // been queued for display but not yet swapped at the DMA frame boundary,
+    // reusing the build buffer here would erase it before it ever appears.
+    if (video_started && video_swap_pending) {
+        wait_started_us = time_us_64();
+    }
+    while (video_started && video_swap_pending) {
+        tight_loop_contents();
+    }
+    if (wait_started_us != 0) {
+        uint64_t wait_us = time_us_64() - wait_started_us;
+        ++video_perf_stats.swap_wait_events;
+        video_perf_stats.swap_wait_us_total += wait_us;
+        if (wait_us > video_perf_stats.swap_wait_us_max) {
+            video_perf_stats.swap_wait_us_max = wait_us;
+        }
+    }
+    video_copy_blank_template(video_build_buffer_index);
+}
+
+void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels, int pixel_count) {
+    uint32_t *line_words;
+    int active_start;
+
+    if (visible_y < 0 || visible_y >= VIDEO_VISIBLE_LINES || pixels == NULL || pixel_count <= 0) {
+        return;
+    }
+
+    line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
+    active_start = VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES;
+
+    for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
+        int src_x = (x * pixel_count) / VIDEO_ACTIVE_SAMPLES;
+        video_level_t level = VIDEO_LEVEL_BLACK;
+
+        switch (pixels[src_x]) {
+            case SMB2350_VIDEO_LUMA_WHITE:
+                level = VIDEO_LEVEL_WHITE;
+                break;
+            case SMB2350_VIDEO_LUMA_GRAY:
+                level = VIDEO_LEVEL_GRAY;
+                break;
+            case SMB2350_VIDEO_LUMA_BLACK:
+            default:
+                level = VIDEO_LEVEL_BLACK;
+                break;
+        }
+        video_put_sample(line_words, active_start + x, level);
+    }
+}
+
+void video_ntsc_write_visible_scanline_mono(int visible_y, const uint8_t *pixels, int pixel_count) {
+    video_ntsc_write_visible_scanline_luma(visible_y, pixels, pixel_count);
+}
+
+void video_ntsc_present(void) {
+    ++video_perf_stats.present_calls;
+    video_swap_pending = true;
+}
+
+void video_ntsc_build_test_pattern_frame(void) {
+    video_ntsc_begin_frame();
+
+    for (int visible_y = 0; visible_y < VIDEO_VISIBLE_LINES; ++visible_y) {
+        uint32_t *line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
+        int active_start = VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES;
+
+        for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
+            if (video_pattern_pixel(x, visible_y)) {
+                video_put_sample(line_words, active_start + x, VIDEO_LEVEL_WHITE);
+            }
+        }
+    }
+
+    video_ntsc_present();
+}
+
+void video_ntsc_perf_get(Smb2350VideoNtscPerfStats *stats_out) {
+    if (stats_out == NULL) {
+        return;
+    }
+    *stats_out = video_perf_stats;
 }

@@ -51,6 +51,7 @@ static const uint32_t k_apu_test_tone_step_triangle =
     (uint32_t)((220ull << 32) / APU_OUTPUT_SAMPLE_RATE);
 
 static void apu_stats_note(ApuDebugSampleStats *stats, int32_t value) {
+#if SMB2350_ENABLE_APU_DEBUG_METRICS
     if (stats->sample_count == 0) {
         stats->min_value = value;
         stats->max_value = value;
@@ -67,6 +68,10 @@ static void apu_stats_note(ApuDebugSampleStats *stats, int32_t value) {
         ++stats->nonzero_sample_count;
     }
     stats->abs_sum += (uint64_t)(value < 0 ? -value : value);
+#else
+    (void)stats;
+    (void)value;
+#endif
 }
 
 static void apu_pcm_push(Apu *apu, int16_t sample) {
@@ -462,11 +467,15 @@ static int16_t apu_mix_sample(Apu *apu) {
 }
 
 static void apu_clock_sample_output(Apu *apu) {
+#if SMB2350_ENABLE_APU_PCM_OUTPUT
     apu->sample_phase += APU_OUTPUT_SAMPLE_RATE;
     while (apu->sample_phase >= APU_CPU_CLOCK_HZ) {
         apu->sample_phase -= APU_CPU_CLOCK_HZ;
         apu_pcm_push(apu, apu_mix_sample(apu));
     }
+#else
+    (void)apu;
+#endif
 }
 
 void apu_init(Apu *apu) {

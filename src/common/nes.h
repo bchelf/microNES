@@ -8,6 +8,7 @@
 #include "framebuffer.h"
 #include "input.h"
 #include "ppu.h"
+#include "runtime_config.h"
 #include "scanline.h"
 
 #include <stdbool.h>
@@ -59,6 +60,7 @@ typedef struct Nes {
 void nes_init(Nes *nes);
 void nes_destroy(Nes *nes);
 bool nes_load_cartridge_file(Nes *nes, const char *path);
+bool nes_load_cartridge_memory(Nes *nes, const uint8_t *rom_image, size_t rom_image_size);
 void nes_reset(Nes *nes);
 void nes_set_controller_state(Nes *nes, unsigned controller_index, NesControllerState state);
 void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_end);

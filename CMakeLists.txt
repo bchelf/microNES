@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.16)
 
 set(SMB2350_PLATFORM "pico" CACHE STRING "Build platform: host or pico")
 set_property(CACHE SMB2350_PLATFORM PROPERTY STRINGS host pico)
+set(SMB2350_PICO_VIDEO_MODE "test_pattern" CACHE STRING "Pico video mode: test_pattern or emulator")
+set_property(CACHE SMB2350_PICO_VIDEO_MODE PROPERTY STRINGS test_pattern emulator)
+set(SMB2350_PICO_ROM_PATH "" CACHE FILEPATH "Path to an iNES ROM image to embed for Pico emulator video mode")
 
 if (SMB2350_PLATFORM STREQUAL "pico")
     set(PICO_BOARD pico2 CACHE STRING "Target board")
@@ -65,11 +68,39 @@ if (SMB2350_PLATFORM STREQUAL "host")
 elseif (SMB2350_PLATFORM STREQUAL "pico")
     pico_sdk_init()
 
-    add_executable(smb2350
+    target_compile_definitions(smb2350_core PUBLIC
+        SMB2350_ENABLE_RUNTIME_DIAGNOSTICS=0
+        SMB2350_ENABLE_APU_DEBUG_METRICS=0
+        SMB2350_ENABLE_APU_PCM_OUTPUT=0
+    )
+
+    set(SMB2350_PICO_SOURCES
         src/pico/audio_pwm.c
         src/pico/main.c
         src/pico/pico_time.c
         src/pico/video_ntsc.c
+    )
+
+    if (SMB2350_PICO_VIDEO_MODE STREQUAL "emulator")
+        if (SMB2350_PICO_ROM_PATH STREQUAL "")
+            message(FATAL_ERROR "SMB2350_PICO_ROM_PATH must be set when SMB2350_PICO_VIDEO_MODE=emulator")
+        endif ()
+
+        file(READ "${SMB2350_PICO_ROM_PATH}" SMB2350_PICO_ROM_HEX HEX)
+        string(LENGTH "${SMB2350_PICO_ROM_HEX}" SMB2350_PICO_ROM_HEX_LEN)
+        math(EXPR SMB2350_PICO_ROM_BYTE_COUNT "${SMB2350_PICO_ROM_HEX_LEN} / 2")
+        string(REGEX REPLACE "([0-9A-Fa-f][0-9A-Fa-f])" "0x\\1, " SMB2350_PICO_ROM_BYTES "${SMB2350_PICO_ROM_HEX}")
+        set(SMB2350_PICO_ROM_C "${CMAKE_CURRENT_BINARY_DIR}/smb2350_pico_embedded_rom.c")
+        file(WRITE "${SMB2350_PICO_ROM_C}"
+"unsigned char smb2350_pico_embedded_rom[] = { ${SMB2350_PICO_ROM_BYTES} };\nunsigned int smb2350_pico_embedded_rom_len = ${SMB2350_PICO_ROM_BYTE_COUNT}u;\n")
+        list(APPEND SMB2350_PICO_SOURCES
+            src/pico/emulator_video_adapter.c
+            "${SMB2350_PICO_ROM_C}"
+        )
+    endif ()
+
+    add_executable(smb2350
+        ${SMB2350_PICO_SOURCES}
     )
 
     pico_generate_pio_header(smb2350
@@ -88,7 +119,14 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
         hardware_pwm
         m
         pico_stdlib
+        smb2350_core
     )
+
+    if (SMB2350_PICO_VIDEO_MODE STREQUAL "emulator")
+        target_compile_definitions(smb2350 PRIVATE SMB2350_PICO_VIDEO_MODE_EMULATOR=1)
+    else ()
+        target_compile_definitions(smb2350 PRIVATE SMB2350_PICO_VIDEO_MODE_TEST_PATTERN=1)
+    endif ()
 
     pico_enable_stdio_usb(smb2350 1)
     pico_enable_stdio_uart(smb2350 0)

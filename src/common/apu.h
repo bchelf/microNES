@@ -1,6 +1,8 @@
 #ifndef SMB2350_APU_H
 #define SMB2350_APU_H
 
+#include "runtime_config.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

@@ -17,9 +17,14 @@ static void nes_set_error(Nes *nes, const char *fmt, ...) {
 static void nes_clear_runtime_state(Nes *nes) {
     memset(&nes->stats, 0, sizeof(nes->stats));
     memset(&nes->stop_info, 0, sizeof(nes->stop_info));
+#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
     memset(nes->trace, 0, sizeof(nes->trace));
     nes->trace_head = 0;
     nes->trace_count = 0;
+#else
+    nes->trace_head = 0;
+    nes->trace_count = 0;
+#endif
 }
 
 static bool nes_has_cartridge(const Nes *nes) {
@@ -45,6 +50,19 @@ bool nes_load_cartridge_file(Nes *nes, const char *path) {
     char error[160];
 
     if (!cart_load_ines_file(&nes->cartridge, path, error, sizeof(error))) {
+        nes_set_error(nes, "%s", error);
+        return false;
+    }
+
+    nes_clear_runtime_state(nes);
+    nes_set_error(nes, "");
+    return true;
+}
+
+bool nes_load_cartridge_memory(Nes *nes, const uint8_t *rom_image, size_t rom_image_size) {
+    char error[160];
+
+    if (!cart_load_ines_memory(&nes->cartridge, rom_image, rom_image_size, error, sizeof(error))) {
         nes_set_error(nes, "%s", error);
         return false;
     }
@@ -186,6 +204,12 @@ const NesStopInfo *nes_stop_info(const Nes *nes) {
 }
 
 size_t nes_trace_copy(const Nes *nes, Cpu6502TraceEntry *out_entries, size_t max_entries) {
+#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+    (void)nes;
+    (void)out_entries;
+    (void)max_entries;
+    return 0;
+#else
     size_t count = nes->trace_count;
     size_t start;
 
@@ -198,9 +222,14 @@ size_t nes_trace_copy(const Nes *nes, Cpu6502TraceEntry *out_entries, size_t max
         out_entries[i] = nes->trace[(start + i) % NES_TRACE_CAPACITY];
     }
     return count;
+#endif
 }
 
 uint64_t nes_state_hash(const Nes *nes) {
+#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+    (void)nes;
+    return 0;
+#else
     uint64_t hash = 1469598103934665603ull;
 
 #define HASH_BYTE(v) do { hash ^= (uint8_t)(v); hash *= 1099511628211ull; } while (0)
@@ -290,6 +319,7 @@ uint64_t nes_state_hash(const Nes *nes) {
 #undef HASH_BYTE
 
     return hash;
+#endif
 }
 
 const char *nes_stop_reason_name(NesStopReason reason) {

@@ -3,6 +3,7 @@
 
 #include "cart.h"
 #include "framebuffer.h"
+#include "runtime_config.h"
 #include "scanline.h"
 
 #include <stdbool.h>

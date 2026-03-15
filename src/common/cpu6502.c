@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 static void cpu_record_trace(Nes *nes, const Cpu6502 *cpu, uint16_t pc, uint8_t opcode) {
+#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
     Cpu6502TraceEntry *entry = &nes->trace[nes->trace_head];
 
     entry->instruction_index = nes->stats.instruction_count + 1;
@@ -21,9 +22,16 @@ static void cpu_record_trace(Nes *nes, const Cpu6502 *cpu, uint16_t pc, uint8_t 
     if (nes->trace_count < NES_TRACE_CAPACITY) {
         ++nes->trace_count;
     }
+#else
+    (void)nes;
+    (void)cpu;
+    (void)pc;
+    (void)opcode;
+#endif
 }
 
 static void cpu_note_opcode(Nes *nes, uint16_t pc, uint8_t opcode) {
+#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
     const Cpu6502OpcodeInfo *info = cpu6502_opcode_info(opcode);
 
     if (nes->stats.opcode_counts[opcode]++ == 0) {
@@ -36,6 +44,11 @@ static void cpu_note_opcode(Nes *nes, uint16_t pc, uint8_t opcode) {
         nes->stop_info.opcode_is_supported = info->supported;
         nes->stop_info.instruction_index = nes->stats.instruction_count + 1;
     }
+#else
+    (void)nes;
+    (void)pc;
+    (void)opcode;
+#endif
 }
 
 static inline uint8_t cpu_read(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
@@ -285,8 +298,10 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
             nes->stop_info.reason = NES_STOP_CPU_JAMMED;
             nes->stop_info.pc = cpu->pc;
             nes->stop_info.opcode = cpu->last_opcode;
+#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
             nes->stop_info.opcode_is_official = cpu6502_opcode_info(cpu->last_opcode)->official;
             nes->stop_info.opcode_is_supported = cpu6502_opcode_info(cpu->last_opcode)->supported;
+#endif
             nes->stop_info.instruction_index = nes->stats.instruction_count;
         }
         snprintf(nes->last_error, sizeof(nes->last_error), "CPU is jammed");
@@ -1067,8 +1082,10 @@ bool cpu6502_step(Cpu6502 *cpu, Nes *nes) {
             nes->stop_info.reason = opcode_info->official ? NES_STOP_UNSUPPORTED_OPCODE : NES_STOP_ILLEGAL_OPCODE;
             nes->stop_info.pc = pc_before;
             nes->stop_info.opcode = cpu->last_opcode;
+#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
             nes->stop_info.opcode_is_official = opcode_info->official;
             nes->stop_info.opcode_is_supported = opcode_info->supported;
+#endif
             nes->stop_info.instruction_index = nes->stats.instruction_count + 1;
         }
         snprintf(

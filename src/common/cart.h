@@ -25,6 +25,13 @@ typedef struct {
 } NesCartridge;
 
 bool cart_load_ines_file(NesCartridge *cartridge, const char *path, char *error, size_t error_size);
+bool cart_load_ines_memory(
+    NesCartridge *cartridge,
+    const uint8_t *rom_image,
+    size_t rom_image_size,
+    char *error,
+    size_t error_size
+);
 void cart_unload(NesCartridge *cartridge);
 bool cart_is_loaded(const NesCartridge *cartridge);
 
