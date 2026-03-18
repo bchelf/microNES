@@ -65,6 +65,7 @@ typedef struct Nes {
     smb2350_profile_now_us_fn profile_now_us;
     void *profile_now_user;
     NesStepProfile step_profile;
+    uint32_t pending_apu_cycles;  /* accumulated CPU cycles not yet flushed to apu_step */
     char last_error[1024];
 } Nes;
 

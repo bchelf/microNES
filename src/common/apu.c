@@ -11,8 +11,8 @@ enum {
     APU_FRAME_STEP_5 = 18641,
 };
 
-static const double k_apu_triangle_mix_boost = 1.35;
-static const double k_apu_noise_mix_boost = 1.10;
+static const float k_apu_triangle_mix_boost = 1.35f;
+static const float k_apu_noise_mix_boost = 1.10f;
 
 static const uint8_t k_apu_length_table[32] = {
     10, 254, 20,  2, 40,  4, 80,  6,
@@ -389,20 +389,20 @@ static uint8_t apu_noise_output(const ApuNoiseChannel *noise) {
     return apu_noise_volume(noise);
 }
 
-static int16_t apu_mix_sample(Apu *apu) {
+static int16_t __attribute__((noinline)) SMB2350_HOT_FUNC(apu_mix_sample)(Apu *apu) {
     int32_t pulse1_raw = (int32_t)apu_pulse_output(&apu->pulse[0]);
     int32_t pulse2_raw = (int32_t)apu_pulse_output(&apu->pulse[1]);
     int32_t triangle_raw = (int32_t)apu_triangle_output(&apu->triangle);
     int32_t noise_raw = (int32_t)apu_noise_output(&apu->noise);
     int32_t dmc_raw = 0;
-    double pulse1;
-    double pulse2;
-    double triangle;
-    double noise;
-    double pulse_sum;
-    double pulse_out = 0.0;
-    double tnd_out = 0.0;
-    double mixed;
+    float pulse1;
+    float pulse2;
+    float triangle;
+    float noise;
+    float pulse_sum;
+    float pulse_out = 0.0f;
+    float tnd_out = 0.0f;
+    float mixed;
     int sample;
 
     if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_PULSE1) {
@@ -432,19 +432,19 @@ static int16_t apu_mix_sample(Apu *apu) {
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_NOISE], noise_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], dmc_raw);
 
-    pulse1 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1) ? (double)pulse1_raw : 0.0;
-    pulse2 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2) ? (double)pulse2_raw : 0.0;
+    pulse1 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1) ? (float)pulse1_raw : 0.0f;
+    pulse2 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2) ? (float)pulse2_raw : 0.0f;
     triangle = (apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE) ?
-        (double)triangle_raw * k_apu_triangle_mix_boost : 0.0;
+        (float)triangle_raw * k_apu_triangle_mix_boost : 0.0f;
     noise = (apu->mix_enable_mask & APU_DEBUG_MASK_NOISE) ?
-        (double)noise_raw * k_apu_noise_mix_boost : 0.0;
+        (float)noise_raw * k_apu_noise_mix_boost : 0.0f;
     pulse_sum = pulse1 + pulse2;
 
-    if (pulse_sum > 0.0) {
-        pulse_out = 95.88 / ((8128.0 / pulse_sum) + 100.0);
+    if (pulse_sum > 0.0f) {
+        pulse_out = 95.88f / ((8128.0f / pulse_sum) + 100.0f);
     }
-    if ((triangle + noise) > 0.0) {
-        tnd_out = 159.79 / ((1.0 / ((triangle / 8227.0) + (noise / 12241.0))) + 100.0);
+    if ((triangle + noise) > 0.0f) {
+        tnd_out = 159.79f / ((1.0f / ((triangle / 8227.0f) + (noise / 12241.0f))) + 100.0f);
     }
 
     mixed = pulse_out + tnd_out;
@@ -454,7 +454,7 @@ static int16_t apu_mix_sample(Apu *apu) {
      * (e.g. length counter silencing a channel mid-waveform). That spike decays
      * over ~26ms at this sample rate, audible as a thump at effect end. The NES
      * mixer output is already 0 at true silence so there is no DC to remove. */
-    sample = (int)lrint(mixed * 32767.0 * 0.85);
+    sample = (int)lrintf(mixed * 32767.0f * 6.0f);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -466,16 +466,21 @@ static int16_t apu_mix_sample(Apu *apu) {
     return (int16_t)sample;
 }
 
-static void apu_clock_sample_output(Apu *apu) {
-#if SMB2350_ENABLE_APU_PCM_OUTPUT
-    apu->sample_phase += APU_OUTPUT_SAMPLE_RATE;
-    while (apu->sample_phase >= APU_CPU_CLOCK_HZ) {
-        apu->sample_phase -= APU_CPU_CLOCK_HZ;
-        apu_pcm_push(apu, apu_mix_sample(apu));
+/* Advance a channel timer by n_cycles. Returns the number of times it fired.
+ * Timers count down from period to 0, fire, then reset to period.
+ * Period length in cycles = timer_period + 1. */
+static uint32_t SMB2350_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
+                                                     uint16_t  period,
+                                                     uint32_t  n_cycles) {
+    if (*counter >= n_cycles) {
+        *counter -= (uint16_t)n_cycles;
+        return 0;
     }
-#else
-    (void)apu;
-#endif
+    uint32_t remaining = n_cycles - (uint32_t)*counter - 1u;
+    uint32_t period1   = (uint32_t)period + 1u;
+    uint32_t fires     = 1u + remaining / period1;
+    *counter = (uint16_t)(period - remaining % period1);
+    return fires;
 }
 
 void apu_init(Apu *apu) {
@@ -493,20 +498,94 @@ void apu_reset(Apu *apu) {
 }
 
 #if SMB2350_ENABLE_APU_EMULATION
-void apu_step(Apu *apu, uint32_t cpu_cycles) {
-    for (uint32_t i = 0; i < cpu_cycles; ++i) {
-        ++apu->cpu_cycles;
-        apu_clock_triangle_timer(&apu->triangle);
-        /* Pulse timers, noise, and frame counter are all clocked at APU rate
-         * (every other CPU cycle). Frame counter thresholds are in APU cycles. */
-        if ((apu->cpu_cycles & 1u) == 0u) {
-            apu_clock_frame_counter(apu);
-            apu_clock_pulse_timer(&apu->pulse[0]);
-            apu_clock_pulse_timer(&apu->pulse[1]);
-            apu_clock_noise_timer(&apu->noise);
+void SMB2350_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
+    if (cpu_cycles == 0) return;
+
+    /* --- Triangle timer: clocked every CPU cycle --- */
+    {
+        ApuTriangleChannel *tri = &apu->triangle;
+        uint32_t fires = apu_timer_advance(&tri->timer_counter, tri->timer_period, cpu_cycles);
+        if (fires > 0 && tri->enabled && tri->length_counter > 0 &&
+                tri->linear_counter > 0 && tri->timer_period >= 2u) {
+            tri->sequence_step = (uint8_t)((tri->sequence_step + fires) & 0x1fu);
         }
-        apu_clock_sample_output(apu);
     }
+
+    /* Compute APU-rate cycles (half CPU rate, fired when cpu_cycles is even).
+     * apu_cycles = number of even values in (old, old+cpu_cycles]. */
+    uint32_t old_cpu  = (uint32_t)apu->cpu_cycles;
+    apu->cpu_cycles  += cpu_cycles;
+    uint32_t apu_cycles = (old_cpu + cpu_cycles) / 2u - old_cpu / 2u;
+
+    if (apu_cycles > 0) {
+        /* --- Frame counter: clocked at APU rate --- */
+        {
+            uint32_t old_fc = (uint32_t)apu->frame_counter_cycle;
+            uint32_t new_fc = old_fc + apu_cycles;
+            /* Each batch is 1-4 APU cycles; thresholds are 3728+ apart, so at
+             * most one threshold crossing per call. Check from high to low so
+             * the reset case is handled first. */
+            if (!apu->frame_counter_mode_5) {
+                if (old_fc < APU_FRAME_STEP_4 && new_fc >= APU_FRAME_STEP_4) {
+                    apu_quarter_frame(apu); apu_half_frame(apu);
+                    ++apu->frame_counter_steps;
+                    new_fc = 0;
+                } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
+                    apu_quarter_frame(apu);
+                } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
+                    apu_quarter_frame(apu); apu_half_frame(apu);
+                } else if (old_fc < APU_FRAME_STEP_1 && new_fc >= APU_FRAME_STEP_1) {
+                    apu_quarter_frame(apu);
+                }
+            } else {
+                if (old_fc < APU_FRAME_STEP_5 && new_fc >= APU_FRAME_STEP_5) {
+                    apu_quarter_frame(apu); apu_half_frame(apu);
+                    ++apu->frame_counter_steps;
+                    new_fc = 0;
+                } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
+                    apu_quarter_frame(apu);
+                } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
+                    apu_quarter_frame(apu); apu_half_frame(apu);
+                } else if (old_fc < APU_FRAME_STEP_1 && new_fc >= APU_FRAME_STEP_1) {
+                    apu_quarter_frame(apu);
+                }
+            }
+            apu->frame_counter_cycle = new_fc;
+        }
+
+        /* --- Pulse timers: clocked at APU rate --- */
+        {
+            ApuPulseChannel *p = &apu->pulse[0];
+            uint32_t fires = apu_timer_advance(&p->timer_counter, p->timer_period, apu_cycles);
+            p->duty_step = (uint8_t)((p->duty_step + fires) & 0x07u);
+        }
+        {
+            ApuPulseChannel *p = &apu->pulse[1];
+            uint32_t fires = apu_timer_advance(&p->timer_counter, p->timer_period, apu_cycles);
+            p->duty_step = (uint8_t)((p->duty_step + fires) & 0x07u);
+        }
+
+        /* --- Noise timer: clocked at APU rate --- */
+        {
+            ApuNoiseChannel *n = &apu->noise;
+            uint32_t fires = apu_timer_advance(&n->timer_counter, n->timer_period, apu_cycles);
+            uint8_t tap_bit = n->mode ? 6u : 1u;
+            for (uint32_t i = 0; i < fires; ++i) {
+                uint16_t feedback = (uint16_t)((n->shift_register & 1u) ^
+                                               ((n->shift_register >> tap_bit) & 1u));
+                n->shift_register = (n->shift_register >> 1) | (uint16_t)(feedback << 14u);
+            }
+        }
+    }
+
+#if SMB2350_ENABLE_APU_PCM_OUTPUT
+    /* --- Sample output: batched for the whole cpu_cycles block --- */
+    apu->sample_phase += APU_OUTPUT_SAMPLE_RATE * cpu_cycles;
+    while (apu->sample_phase >= APU_CPU_CLOCK_HZ) {
+        apu->sample_phase -= APU_CPU_CLOCK_HZ;
+        apu_pcm_push(apu, apu_mix_sample(apu));
+    }
+#endif
 }
 #endif
 

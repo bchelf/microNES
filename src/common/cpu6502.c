@@ -262,7 +262,7 @@ static void cpu_service_interrupt(Cpu6502 *cpu, Nes *nes, uint16_t vector, bool 
 #if SMB2350_ENABLE_STEP_PROFILING
     nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
-    apu_step(&nes->apu, 7);
+    nes->pending_apu_cycles += 7;
 #if SMB2350_ENABLE_STEP_PROFILING
     cpu_started_us = nes_profile_now_us(nes);
 #endif
@@ -1131,7 +1131,7 @@ bool SMB2350_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
 #if SMB2350_ENABLE_STEP_PROFILING
     nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
-    apu_step(&nes->apu, cycles);
+    nes->pending_apu_cycles += cycles;
 #if SMB2350_ENABLE_STEP_PROFILING
     cpu_started_us = nes_profile_now_us(nes);
 #endif
