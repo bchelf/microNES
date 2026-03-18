@@ -449,12 +449,15 @@ static int16_t __attribute__((noinline)) SMB2350_HOT_FUNC(apu_mix_sample)(Apu *a
 
     mixed = pulse_out + tnd_out;
 
-    /* No DC filter: the derivative-form filter (y = x - x_prev + a*y_prev)
-     * produces a full-amplitude negative spike whenever the mixer output drops
-     * (e.g. length counter silencing a channel mid-waveform). That spike decays
-     * over ~26ms at this sample rate, audible as a thump at effect end. The NES
-     * mixer output is already 0 at true silence so there is no DC to remove. */
-    sample = (int)lrintf(mixed * 32767.0f * 2.0f);
+    /* Single-pole IIR low-pass, α=0.2 → cutoff ≈ 1.7kHz at 48kHz.
+     * Mimics the RC low-pass filters on the real NES audio output path.
+     * Smooths square-wave transitions and eliminates aliased high-frequency
+     * harmonics that cause buzz in the PWM output. dc_prev_output holds the
+     * filter state (renamed in spirit; DC filter was removed). */
+    mixed = 0.2f * mixed + 0.8f * (float)apu->dc_prev_output;
+    apu->dc_prev_output = (double)mixed;
+
+    sample = (int)lrintf(mixed * 32767.0f * 0.7f);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
