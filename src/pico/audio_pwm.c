@@ -18,7 +18,7 @@ static volatile uint32_t audio_underruns = 0;
 
 static struct repeating_timer audio_timer;
 
-static uint8_t audio_last_duty = 128u; /* sample-and-hold across underruns */
+static uint8_t audio_last_duty = 0u; /* sample-and-hold across underruns; 0 = NES silence */
 
 static bool audio_timer_cb(struct repeating_timer *timer) {
     (void)timer;
@@ -32,11 +32,12 @@ static bool audio_timer_cb(struct repeating_timer *timer) {
         duty = audio_last_duty;
         ++audio_underruns;
     } else {
-        /* Convert int16 → unsigned 8-bit centred at 128.
-         * Reinterpret as uint16 and flip the sign bit: this maps
-         * [-32768..32767] → [0..255] without signed-shift UB. */
+        /* NES audio is unipolar: samples are in [0, 32767].
+         * Map to full 8-bit PWM range: [0..32767] → [0..255].
+         * This gives 8-bit effective resolution vs the 7-bit we'd get
+         * from the generic signed-centred mapping. */
         uint16_t raw = (uint16_t)audio_buf[head];
-        duty = (uint8_t)((raw >> 8) ^ 0x80u);
+        duty = (uint8_t)(raw >> 7);
         audio_last_duty = duty;
         audio_buf_head = (head + 1u) % AUDIO_BUF_SIZE;
     }
@@ -54,12 +55,12 @@ void audio_pwm_init(uint32_t sample_rate) {
     pwm_config_set_wrap(&config, AUDIO_PWM_WRAP);
     pwm_init(audio_slice, &config, true);
 
-    pwm_set_gpio_level(SMB2350_AUDIO_PIN, AUDIO_PWM_WRAP / 2);
+    pwm_set_gpio_level(SMB2350_AUDIO_PIN, 0);
 
     audio_buf_head = 0;
     audio_buf_tail = 0;
     audio_underruns = 0;
-    audio_last_duty = 128u;
+    audio_last_duty = 0u;
 
     /* Fire the playback timer at slightly below sample_rate so the buffer
      * fills rather than underruns as the APU produces at exactly sample_rate.

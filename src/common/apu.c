@@ -454,7 +454,7 @@ static int16_t __attribute__((noinline)) SMB2350_HOT_FUNC(apu_mix_sample)(Apu *a
      * (e.g. length counter silencing a channel mid-waveform). That spike decays
      * over ~26ms at this sample rate, audible as a thump at effect end. The NES
      * mixer output is already 0 at true silence so there is no DC to remove. */
-    sample = (int)lrintf(mixed * 32767.0f * 6.0f);
+    sample = (int)lrintf(mixed * 32767.0f * 2.0f);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;

@@ -206,7 +206,8 @@ int main(void) {
                     " underruns=%u buf_level=%u"
                     " apu_samples=%llu apu_p0_en=%u apu_p0_lc=%u"
                     " $4015_writes=%llu $4015_last=%02x"
-                    " $4003_writes=%llu fc_steps=%llu\n",
+                    " $4003_writes=%llu fc_steps=%llu"
+                    " clip=%llu\n",
                     report_samples_drained,
                     report_samples_dropped,
                     (unsigned)report_saw_nonzero_sample,
@@ -220,7 +221,8 @@ int main(void) {
                     emulator_video.nes.apu.register_write_count[0x15],
                     (unsigned)emulator_video.nes.apu.registers[0x15],
                     emulator_video.nes.apu.register_write_count[0x03],
-                    emulator_video.nes.apu.frame_counter_steps
+                    emulator_video.nes.apu.frame_counter_steps,
+                    emulator_video.nes.apu.clip_count
                 );
                 report_samples_drained = 0;
                 report_samples_dropped = 0;
