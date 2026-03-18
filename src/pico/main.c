@@ -4,6 +4,7 @@
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "pico/time.h"
+#include "pico_input.h"
 #include "video_ntsc.h"
 
 #include "pico/stdlib.h"
@@ -44,6 +45,7 @@ int main(void) {
     stdio_init_all();
     printf("sys clock: %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));
 
+    pico_input_init();
     video_ntsc_init();
     audio_pwm_init(440);
 
@@ -66,6 +68,7 @@ int main(void) {
         report_started_us = time_us_64();
 
         while (true) {
+            nes_set_controller_state(&emulator_video.nes, 0, pico_input_read());
             if (!emulator_video_adapter_render_frame(&emulator_video)) {
                 printf("emulator video failed: %s\n", emulator_video_adapter_last_error(&emulator_video));
                 break;

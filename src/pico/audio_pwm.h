@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-// GP2 is the first audio bring-up pin. The signal is PWM-based and intended
+// GP6 is the audio output pin. The signal is PWM-based and intended
 // to be passed through a simple resistor or optional passive RC filter.
-#define SMB2350_AUDIO_PIN 2u
+#define SMB2350_AUDIO_PIN 6u
 
 void audio_pwm_init(uint32_t tone_hz);
 

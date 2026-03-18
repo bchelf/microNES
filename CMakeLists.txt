@@ -85,6 +85,7 @@ elseif (SMB2350_PLATFORM STREQUAL "pico")
     set(SMB2350_PICO_SOURCES
         src/pico/audio_pwm.c
         src/pico/main.c
+        src/pico/pico_input.c
         src/pico/pico_time.c
         src/pico/video_ntsc.c
     )
