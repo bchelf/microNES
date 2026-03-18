@@ -24,7 +24,7 @@ static bool audio_timer_cb(struct repeating_timer *timer) {
     (void)timer;
 
     phase += phase_step;
-    pwm_set_gpio_level(SMB2350_AUDIO_PIN, audio_table[(phase >> 24) & (AUDIO_TABLE_SIZE - 1)]);
+    pwm_set_gpio_level(SMB2350_AUDIO_PIN, audio_table[phase >> 27]);
     return true;
 }
 
@@ -41,6 +41,8 @@ void audio_pwm_init(uint32_t tone_hz) {
     pwm_set_gpio_level(SMB2350_AUDIO_PIN, AUDIO_PWM_WRAP / 2);
 
     phase = 0;
-    phase_step = (uint)(((uint64_t)tone_hz << 24) / AUDIO_SAMPLE_RATE);
+    /* Standard DDS: one full 2^32 phase wrap = one waveform cycle.
+     * Table index uses top 5 bits (>> 27) for 32-entry table. */
+    phase_step = (uint32_t)(((uint64_t)tone_hz << 32) / AUDIO_SAMPLE_RATE);
     add_repeating_timer_us(-(1000000 / AUDIO_SAMPLE_RATE), audio_timer_cb, NULL, &audio_timer);
 }
