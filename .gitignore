@@ -9,9 +9,9 @@ roms/
 .cache/
 
 # RL training outputs
-checkpoints/
-eval_videos/
-logs/
+checkpoints*
+eval_videos*
+logs*
 
 # Python
 .venv/
