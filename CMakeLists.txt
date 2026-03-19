@@ -51,14 +51,14 @@ if (MICRONES_PLATFORM STREQUAL "host")
     )
 
     if (SDL3_FOUND)
-        add_executable(micrones_run
+        add_executable(micrones
             src/host/audio_sdl.c
             src/host/run_main.c
             src/host/wav_write.c
             src/host/window_sdl.c
         )
 
-        target_link_libraries(micrones_run PRIVATE
+        target_link_libraries(micrones PRIVATE
             SDL3::SDL3
             micrones_core
         )
