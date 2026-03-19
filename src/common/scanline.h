@@ -1,5 +1,5 @@
-#ifndef SMB2350_SCANLINE_H
-#define SMB2350_SCANLINE_H
+#ifndef MICRONES_SCANLINE_H
+#define MICRONES_SCANLINE_H
 
 #include "framebuffer.h"
 

@@ -1,5 +1,5 @@
-#ifndef SMB2350_FRAMEBUFFER_H
-#define SMB2350_FRAMEBUFFER_H
+#ifndef MICRONES_FRAMEBUFFER_H
+#define MICRONES_FRAMEBUFFER_H
 
 #include <stdint.h>
 

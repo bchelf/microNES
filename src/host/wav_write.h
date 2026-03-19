@@ -1,5 +1,5 @@
-#ifndef SMB2350_HOST_WAV_WRITE_H
-#define SMB2350_HOST_WAV_WRITE_H
+#ifndef MICRONES_HOST_WAV_WRITE_H
+#define MICRONES_HOST_WAV_WRITE_H
 
 #include <stdbool.h>
 #include <stddef.h>

@@ -41,20 +41,20 @@ static bool audio_timer_cb(struct repeating_timer *timer) {
         audio_buf_head = (head + 1u) % AUDIO_BUF_SIZE;
     }
 
-    pwm_set_gpio_level(SMB2350_AUDIO_PIN, duty);
+    pwm_set_gpio_level(MICRONES_AUDIO_PIN, duty);
     return true;
 }
 
 void audio_pwm_init(uint32_t sample_rate) {
-    gpio_set_function(SMB2350_AUDIO_PIN, GPIO_FUNC_PWM);
-    uint audio_slice = pwm_gpio_to_slice_num(SMB2350_AUDIO_PIN);
+    gpio_set_function(MICRONES_AUDIO_PIN, GPIO_FUNC_PWM);
+    uint audio_slice = pwm_gpio_to_slice_num(MICRONES_AUDIO_PIN);
 
     pwm_config config = pwm_get_default_config();
     pwm_config_set_clkdiv(&config, 1.0f);
     pwm_config_set_wrap(&config, AUDIO_PWM_WRAP);
     pwm_init(audio_slice, &config, true);
 
-    pwm_set_gpio_level(SMB2350_AUDIO_PIN, AUDIO_PWM_WRAP / 2);
+    pwm_set_gpio_level(MICRONES_AUDIO_PIN, AUDIO_PWM_WRAP / 2);
 
     audio_buf_head = 0;
     audio_buf_tail = 0;

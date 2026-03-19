@@ -18,7 +18,7 @@
 enum {
     VIDEO_VSYNC_LINES = 3,
     VIDEO_TOP_BLANK_LINES = 16,
-    VIDEO_VISIBLE_LINES = SMB2350_VIDEO_VISIBLE_HEIGHT,
+    VIDEO_VISIBLE_LINES = MICRONES_VIDEO_VISIBLE_HEIGHT,
     VIDEO_BOTTOM_BLANK_LINES = 3,
     VIDEO_LINES_PER_FRAME = VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES +
                             VIDEO_VISIBLE_LINES + VIDEO_BOTTOM_BLANK_LINES,
@@ -79,7 +79,7 @@ static volatile uint8_t video_scanout_buffer_index;
 static volatile uint8_t video_build_buffer_index;
 static volatile bool video_swap_pending;
 static volatile bool video_started;
-static Smb2350VideoNtscPerfStats video_perf_stats;
+static MicronesVideoNtscPerfStats video_perf_stats;
 
 // Precomputed table: for each (6-bit NES palette index, 2-bit dither phase),
 // the final 2-bit composite output level. Built by video_ntsc_precompute_palette().
@@ -96,14 +96,14 @@ static inline video_level_t video_gray_level_to_output_level(uint8_t gray_level,
     uint8_t luma;
     uint8_t bucket;
 
-    if (gray_level > SMB2350_VIDEO_LUMA_WHITE) {
-        gray_level = SMB2350_VIDEO_LUMA_WHITE;
+    if (gray_level > MICRONES_VIDEO_LUMA_WHITE) {
+        gray_level = MICRONES_VIDEO_LUMA_WHITE;
     }
 
     luma = k_video_gray_to_luma[gray_level];
     bucket = (uint8_t)(luma >> 5);
-    if (bucket > SMB2350_VIDEO_LUMA_WHITE) {
-        bucket = SMB2350_VIDEO_LUMA_WHITE;
+    if (bucket > MICRONES_VIDEO_LUMA_WHITE) {
+        bucket = MICRONES_VIDEO_LUMA_WHITE;
     }
     return (video_level_t)k_video_gray_phase_to_level[bucket][phase & 0x03];
 }
@@ -193,7 +193,7 @@ static void video_build_active_mapping(void) {
         int bit_index = (line_sample & 0x0f) * 2;
 
         video_active_sample_src_x[sample] =
-            (uint8_t)((sample * SMB2350_VIDEO_VISIBLE_WIDTH) / VIDEO_ACTIVE_SAMPLES);
+            (uint8_t)((sample * MICRONES_VIDEO_VISIBLE_WIDTH) / VIDEO_ACTIVE_SAMPLES);
         video_active_sample_word_slot[sample] = (uint8_t)word_slot;
         video_active_sample_shift[sample] = (uint8_t)bit_index;
         video_active_word_mask[word_slot] |= 0x3u << bit_index;
@@ -238,17 +238,17 @@ void video_ntsc_init(void) {
     video_swap_pending = false;
     video_started = false;
 
-    for (uint pin = SMB2350_VIDEO_PIN_BASE; pin < SMB2350_VIDEO_PIN_BASE + SMB2350_VIDEO_PIN_COUNT; ++pin) {
+    for (uint pin = MICRONES_VIDEO_PIN_BASE; pin < MICRONES_VIDEO_PIN_BASE + MICRONES_VIDEO_PIN_COUNT; ++pin) {
         pio_gpio_init(pio, pin);
     }
 
     config = video_ntsc_program_get_default_config(offset);
-    sm_config_set_out_pins(&config, SMB2350_VIDEO_PIN_BASE, SMB2350_VIDEO_PIN_COUNT);
+    sm_config_set_out_pins(&config, MICRONES_VIDEO_PIN_BASE, MICRONES_VIDEO_PIN_COUNT);
     sm_config_set_out_shift(&config, true, true, 32);
     sm_config_set_fifo_join(&config, PIO_FIFO_JOIN_TX);
     sm_config_set_clkdiv(&config, (float)clock_get_hz(clk_sys) / (float)VIDEO_SAMPLE_RATE_HZ);
 
-    pio_sm_set_consecutive_pindirs(pio, video_sm, SMB2350_VIDEO_PIN_BASE, SMB2350_VIDEO_PIN_COUNT, true);
+    pio_sm_set_consecutive_pindirs(pio, video_sm, MICRONES_VIDEO_PIN_BASE, MICRONES_VIDEO_PIN_COUNT, true);
     pio_sm_init(pio, video_sm, offset, &config);
 
     video_build_blank_template();
@@ -317,7 +317,7 @@ void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels
     }
 
     line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
-    if (pixel_count == SMB2350_VIDEO_VISIBLE_WIDTH) {
+    if (pixel_count == MICRONES_VIDEO_VISIBLE_WIDTH) {
         uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
 
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
@@ -374,7 +374,7 @@ void __not_in_flash_func(video_ntsc_write_visible_scanline_indexed_luma)(
     }
 
     line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
-    if (pixel_count == SMB2350_VIDEO_VISIBLE_WIDTH) {
+    if (pixel_count == MICRONES_VIDEO_VISIBLE_WIDTH) {
         uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
 
         for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
@@ -445,7 +445,7 @@ void video_ntsc_build_test_pattern_frame(void) {
     video_ntsc_present();
 }
 
-void video_ntsc_perf_get(Smb2350VideoNtscPerfStats *stats_out) {
+void video_ntsc_perf_get(MicronesVideoNtscPerfStats *stats_out) {
     if (stats_out == NULL) {
         return;
     }

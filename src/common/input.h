@@ -1,5 +1,5 @@
-#ifndef SMB2350_INPUT_H
-#define SMB2350_INPUT_H
+#ifndef MICRONES_INPUT_H
+#define MICRONES_INPUT_H
 
 #include <stdbool.h>
 #include <stdint.h>

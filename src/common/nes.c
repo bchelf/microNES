@@ -19,7 +19,7 @@ static void nes_clear_runtime_state(Nes *nes) {
     memset(&nes->stop_info, 0, sizeof(nes->stop_info));
     memset(&nes->step_profile, 0, sizeof(nes->step_profile));
     memset(&nes->ppu.step_profile, 0, sizeof(nes->ppu.step_profile));
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     memset(nes->trace, 0, sizeof(nes->trace));
     nes->trace_head = 0;
     nes->trace_count = 0;
@@ -85,7 +85,7 @@ void nes_reset(Nes *nes) {
     nes_set_error(nes, "");
 }
 
-void nes_set_profile_clock(Nes *nes, smb2350_profile_now_us_fn now_us, void *user) {
+void nes_set_profile_clock(Nes *nes, micrones_profile_now_us_fn now_us, void *user) {
     nes->profile_now_us = now_us;
     nes->profile_now_user = user;
     nes->ppu.profile_now_us = now_us;
@@ -102,7 +102,7 @@ void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_
     ppu_set_sprite0_diag_window(&nes->ppu, frame_start, frame_end);
 }
 
-bool SMB2350_HOT_FUNC(nes_step_instruction)(Nes *nes) {
+bool MICRONES_HOT_FUNC(nes_step_instruction)(Nes *nes) {
     bool ok = cpu6502_step(&nes->cpu, nes);
     if (nes->pending_apu_cycles > 0) {
         apu_step(&nes->apu, nes->pending_apu_cycles);
@@ -111,7 +111,7 @@ bool SMB2350_HOT_FUNC(nes_step_instruction)(Nes *nes) {
     return ok;
 }
 
-bool SMB2350_HOT_FUNC(nes_step_scanline)(Nes *nes) {
+bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
     uint64_t frame_before = nes->ppu.frame_count;
     uint64_t token = ((uint64_t)frame_before << 16) | (uint16_t)(nes->ppu.scanline_buffer.y & 0xffff);
 
@@ -218,7 +218,7 @@ const NesStopInfo *nes_stop_info(const Nes *nes) {
 }
 
 size_t nes_trace_copy(const Nes *nes, Cpu6502TraceEntry *out_entries, size_t max_entries) {
-#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     (void)nes;
     (void)out_entries;
     (void)max_entries;
@@ -240,7 +240,7 @@ size_t nes_trace_copy(const Nes *nes, Cpu6502TraceEntry *out_entries, size_t max
 }
 
 uint64_t nes_state_hash(const Nes *nes) {
-#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     (void)nes;
     return 0;
 #else

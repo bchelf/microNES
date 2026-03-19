@@ -12,25 +12,25 @@
 // This improves tonal separation on monochrome composite output while keeping
 // the fast path table-driven and cheap enough for Pico.
 const uint8_t k_emulator_video_palette_to_gray[64] = {
-    SMB2350_VIDEO_LUMA_MID,         SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,
-    SMB2350_VIDEO_LUMA_BLACK,       SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,
-    SMB2350_VIDEO_LUMA_BLACK,       SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,
-    SMB2350_VIDEO_LUMA_BLACK,       SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,      SMB2350_VIDEO_LUMA_BLACK,
+    MICRONES_VIDEO_LUMA_MID,         MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,
+    MICRONES_VIDEO_LUMA_BLACK,       MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,
+    MICRONES_VIDEO_LUMA_BLACK,       MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,
+    MICRONES_VIDEO_LUMA_BLACK,       MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,      MICRONES_VIDEO_LUMA_BLACK,
 
-    SMB2350_VIDEO_LUMA_BRIGHT,      SMB2350_VIDEO_LUMA_BRIGHT,     SMB2350_VIDEO_LUMA_MID_DARK,   SMB2350_VIDEO_LUMA_MID_DARK,
-    SMB2350_VIDEO_LUMA_BRIGHT,      SMB2350_VIDEO_LUMA_MID_DARK,   SMB2350_VIDEO_LUMA_MID,        SMB2350_VIDEO_LUMA_MID_BRIGHT,
-    SMB2350_VIDEO_LUMA_BRIGHT,      SMB2350_VIDEO_LUMA_BRIGHT,     SMB2350_VIDEO_LUMA_BRIGHT,     SMB2350_VIDEO_LUMA_BRIGHT,
-    SMB2350_VIDEO_LUMA_MID_DARK,    SMB2350_VIDEO_LUMA_MID_DARK,   SMB2350_VIDEO_LUMA_MID_DARK,   SMB2350_VIDEO_LUMA_MID_DARK,
+    MICRONES_VIDEO_LUMA_BRIGHT,      MICRONES_VIDEO_LUMA_BRIGHT,     MICRONES_VIDEO_LUMA_MID_DARK,   MICRONES_VIDEO_LUMA_MID_DARK,
+    MICRONES_VIDEO_LUMA_BRIGHT,      MICRONES_VIDEO_LUMA_MID_DARK,   MICRONES_VIDEO_LUMA_MID,        MICRONES_VIDEO_LUMA_MID_BRIGHT,
+    MICRONES_VIDEO_LUMA_BRIGHT,      MICRONES_VIDEO_LUMA_BRIGHT,     MICRONES_VIDEO_LUMA_BRIGHT,     MICRONES_VIDEO_LUMA_BRIGHT,
+    MICRONES_VIDEO_LUMA_MID_DARK,    MICRONES_VIDEO_LUMA_MID_DARK,   MICRONES_VIDEO_LUMA_MID_DARK,   MICRONES_VIDEO_LUMA_MID_DARK,
 
-    SMB2350_VIDEO_LUMA_WHITE,       SMB2350_VIDEO_LUMA_VERY_BRIGHT, SMB2350_VIDEO_LUMA_BRIGHT,    SMB2350_VIDEO_LUMA_BRIGHT,
-    SMB2350_VIDEO_LUMA_WHITE,       SMB2350_VIDEO_LUMA_VERY_BRIGHT, SMB2350_VIDEO_LUMA_VERY_BRIGHT, SMB2350_VIDEO_LUMA_WHITE,
-    SMB2350_VIDEO_LUMA_WHITE,       SMB2350_VIDEO_LUMA_WHITE,      SMB2350_VIDEO_LUMA_VERY_BRIGHT, SMB2350_VIDEO_LUMA_WHITE,
-    SMB2350_VIDEO_LUMA_BRIGHT,      SMB2350_VIDEO_LUMA_BRIGHT,     SMB2350_VIDEO_LUMA_MID_DARK,   SMB2350_VIDEO_LUMA_MID_DARK,
+    MICRONES_VIDEO_LUMA_WHITE,       MICRONES_VIDEO_LUMA_VERY_BRIGHT, MICRONES_VIDEO_LUMA_BRIGHT,    MICRONES_VIDEO_LUMA_BRIGHT,
+    MICRONES_VIDEO_LUMA_WHITE,       MICRONES_VIDEO_LUMA_VERY_BRIGHT, MICRONES_VIDEO_LUMA_VERY_BRIGHT, MICRONES_VIDEO_LUMA_WHITE,
+    MICRONES_VIDEO_LUMA_WHITE,       MICRONES_VIDEO_LUMA_WHITE,      MICRONES_VIDEO_LUMA_VERY_BRIGHT, MICRONES_VIDEO_LUMA_WHITE,
+    MICRONES_VIDEO_LUMA_BRIGHT,      MICRONES_VIDEO_LUMA_BRIGHT,     MICRONES_VIDEO_LUMA_MID_DARK,   MICRONES_VIDEO_LUMA_MID_DARK,
 
-    SMB2350_VIDEO_LUMA_WHITE,       SMB2350_VIDEO_LUMA_WHITE,      SMB2350_VIDEO_LUMA_WHITE,      SMB2350_VIDEO_LUMA_WHITE,
-    SMB2350_VIDEO_LUMA_WHITE,       SMB2350_VIDEO_LUMA_WHITE,      SMB2350_VIDEO_LUMA_WHITE,      SMB2350_VIDEO_LUMA_WHITE,
-    SMB2350_VIDEO_LUMA_WHITE,       SMB2350_VIDEO_LUMA_WHITE,      SMB2350_VIDEO_LUMA_VERY_BRIGHT, SMB2350_VIDEO_LUMA_WHITE,
-    SMB2350_VIDEO_LUMA_BRIGHT,      SMB2350_VIDEO_LUMA_BRIGHT,     SMB2350_VIDEO_LUMA_MID_DARK,   SMB2350_VIDEO_LUMA_MID_DARK,
+    MICRONES_VIDEO_LUMA_WHITE,       MICRONES_VIDEO_LUMA_WHITE,      MICRONES_VIDEO_LUMA_WHITE,      MICRONES_VIDEO_LUMA_WHITE,
+    MICRONES_VIDEO_LUMA_WHITE,       MICRONES_VIDEO_LUMA_WHITE,      MICRONES_VIDEO_LUMA_WHITE,      MICRONES_VIDEO_LUMA_WHITE,
+    MICRONES_VIDEO_LUMA_WHITE,       MICRONES_VIDEO_LUMA_WHITE,      MICRONES_VIDEO_LUMA_VERY_BRIGHT, MICRONES_VIDEO_LUMA_WHITE,
+    MICRONES_VIDEO_LUMA_BRIGHT,      MICRONES_VIDEO_LUMA_BRIGHT,     MICRONES_VIDEO_LUMA_MID_DARK,   MICRONES_VIDEO_LUMA_MID_DARK,
 };
 
 static void emulator_video_adapter_set_error(PicoEmulatorVideoAdapter *adapter, const char *message) {
@@ -42,7 +42,7 @@ static uint64_t emulator_video_adapter_now_us(void *user) {
     return time_us_64();
 }
 
-#if SMB2350_ENABLE_PICO_VIDEO_STATS
+#if MICRONES_ENABLE_PICO_VIDEO_STATS
 static uint8_t emulator_video_adapter_pixel_to_luma(uint8_t nes_pixel) {
     return k_emulator_video_palette_to_gray[nes_pixel & 0x3fu];
 }
@@ -84,11 +84,11 @@ bool emulator_video_adapter_init(
 
 bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     uint64_t frame_started_us;
-#if SMB2350_ENABLE_STEP_PROFILING
+#if MICRONES_ENABLE_STEP_PROFILING
     uint64_t step_scanline_us_total = 0;
 #endif
     ScanlineQueue *queue;
-#if SMB2350_ENABLE_PICO_VIDEO_STATS
+#if MICRONES_ENABLE_PICO_VIDEO_STATS
     uint64_t color_mask = 0;
     uint32_t source_nonzero_pixels = 0;
     uint32_t visible_nonblack_pixels = 0;
@@ -111,23 +111,23 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     // Step all 240 visible scanlines and push pixel data to the queue.
     // Core 1 converts each scanline to composite format concurrently.
     // begin_frame / present are handled by core 1.
-    for (int line = 0; line < SMB2350_VIDEO_VISIBLE_HEIGHT; ++line) {
+    for (int line = 0; line < MICRONES_VIDEO_VISIBLE_HEIGHT; ++line) {
         const NesScanline *scanline;
-#if SMB2350_ENABLE_STEP_PROFILING
+#if MICRONES_ENABLE_STEP_PROFILING
         uint64_t started_us = time_us_64();
 #endif
         if (!nes_step_scanline(&adapter->nes)) {
             emulator_video_adapter_set_error(adapter, nes_last_error(&adapter->nes));
             return false;
         }
-#if SMB2350_ENABLE_STEP_PROFILING
+#if MICRONES_ENABLE_STEP_PROFILING
         step_scanline_us_total += time_us_64() - started_us;
 #endif
 
         scanline = nes_scanline_buffer(&adapter->nes);
 
-#if SMB2350_ENABLE_PICO_VIDEO_STATS
-        for (int x = 0; x < SMB2350_VIDEO_VISIBLE_WIDTH; ++x) {
+#if MICRONES_ENABLE_PICO_VIDEO_STATS
+        for (int x = 0; x < MICRONES_VIDEO_VISIBLE_WIDTH; ++x) {
             uint8_t nes_pixel = scanline->pixels[x];
             uint8_t luma = emulator_video_adapter_pixel_to_luma(nes_pixel);
 
@@ -141,16 +141,16 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
             if (nes_pixel > max_pixel) {
                 max_pixel = nes_pixel;
             }
-            if (luma != SMB2350_VIDEO_LUMA_BLACK) {
+            if (luma != MICRONES_VIDEO_LUMA_BLACK) {
                 ++visible_nonblack_pixels;
                 if (first_visible_x < 0) {
                     first_visible_x = (int16_t)x;
                     first_visible_y = (int16_t)scanline->y;
                 }
             }
-            if (luma >= SMB2350_VIDEO_LUMA_BRIGHT) {
+            if (luma >= MICRONES_VIDEO_LUMA_BRIGHT) {
                 ++visible_white_pixels;
-            } else if (luma != SMB2350_VIDEO_LUMA_BLACK) {
+            } else if (luma != MICRONES_VIDEO_LUMA_BLACK) {
                 ++visible_gray_pixels;
             }
         }
@@ -162,11 +162,11 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
 
     ++adapter->rendered_frames;
     adapter->profile_render_frame_us_total += time_us_64() - frame_started_us;
-#if SMB2350_ENABLE_STEP_PROFILING
+#if MICRONES_ENABLE_STEP_PROFILING
     adapter->profile_step_scanline_us_total += step_scanline_us_total;
 #endif
 
-#if SMB2350_ENABLE_PICO_VIDEO_STATS
+#if MICRONES_ENABLE_PICO_VIDEO_STATS
     adapter->last_frame_source_nonzero_pixels = source_nonzero_pixels;
     adapter->last_frame_visible_nonblack_pixels = visible_nonblack_pixels;
     adapter->last_frame_visible_white_pixels = visible_white_pixels;

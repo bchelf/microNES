@@ -51,7 +51,7 @@ static const uint32_t k_apu_test_tone_step_triangle =
     (uint32_t)((220ull << 32) / APU_OUTPUT_SAMPLE_RATE);
 
 static void apu_stats_note(ApuDebugSampleStats *stats, int32_t value) {
-#if SMB2350_ENABLE_APU_DEBUG_METRICS
+#if MICRONES_ENABLE_APU_DEBUG_METRICS
     if (stats->sample_count == 0) {
         stats->min_value = value;
         stats->max_value = value;
@@ -389,7 +389,7 @@ static uint8_t apu_noise_output(const ApuNoiseChannel *noise) {
     return apu_noise_volume(noise);
 }
 
-static int16_t __attribute__((noinline)) SMB2350_HOT_FUNC(apu_mix_sample)(Apu *apu) {
+static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
     int32_t pulse1_raw = (int32_t)apu_pulse_output(&apu->pulse[0]);
     int32_t pulse2_raw = (int32_t)apu_pulse_output(&apu->pulse[1]);
     int32_t triangle_raw = (int32_t)apu_triangle_output(&apu->triangle);
@@ -457,7 +457,7 @@ static int16_t __attribute__((noinline)) SMB2350_HOT_FUNC(apu_mix_sample)(Apu *a
     mixed = 0.2f * mixed + 0.8f * (float)apu->dc_prev_output;
     apu->dc_prev_output = (double)mixed;
 
-    sample = (int)lrintf(mixed * 32767.0f * 0.7f);
+    sample = (int)lrintf(mixed * 32767.0f * 1.1f);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -472,7 +472,7 @@ static int16_t __attribute__((noinline)) SMB2350_HOT_FUNC(apu_mix_sample)(Apu *a
 /* Advance a channel timer by n_cycles. Returns the number of times it fired.
  * Timers count down from period to 0, fire, then reset to period.
  * Period length in cycles = timer_period + 1. */
-static uint32_t SMB2350_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
+static uint32_t MICRONES_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
                                                      uint16_t  period,
                                                      uint32_t  n_cycles) {
     if (*counter >= n_cycles) {
@@ -500,8 +500,8 @@ void apu_reset(Apu *apu) {
     apu_reset_debug_defaults(apu);
 }
 
-#if SMB2350_ENABLE_APU_EMULATION
-void SMB2350_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
+#if MICRONES_ENABLE_APU_EMULATION
+void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
     if (cpu_cycles == 0) return;
 
     /* --- Triangle timer: clocked every CPU cycle --- */
@@ -581,7 +581,7 @@ void SMB2350_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
         }
     }
 
-#if SMB2350_ENABLE_APU_PCM_OUTPUT
+#if MICRONES_ENABLE_APU_PCM_OUTPUT
     /* --- Sample output: batched for the whole cpu_cycles block --- */
     apu->sample_phase += APU_OUTPUT_SAMPLE_RATE * cpu_cycles;
     while (apu->sample_phase >= APU_CPU_CLOCK_HZ) {

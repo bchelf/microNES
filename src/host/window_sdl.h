@@ -1,5 +1,5 @@
-#ifndef SMB2350_HOST_WINDOW_SDL_H
-#define SMB2350_HOST_WINDOW_SDL_H
+#ifndef MICRONES_HOST_WINDOW_SDL_H
+#define MICRONES_HOST_WINDOW_SDL_H
 
 #include <stdbool.h>
 #include <stdint.h>

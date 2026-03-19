@@ -1,5 +1,5 @@
-#ifndef SMB2350_HOST_VIDEO_CAPTURE_H
-#define SMB2350_HOST_VIDEO_CAPTURE_H
+#ifndef MICRONES_HOST_VIDEO_CAPTURE_H
+#define MICRONES_HOST_VIDEO_CAPTURE_H
 
 #include <stdbool.h>
 #include <stdint.h>

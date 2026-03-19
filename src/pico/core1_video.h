@@ -1,5 +1,5 @@
-#ifndef SMB2350_CORE1_VIDEO_H
-#define SMB2350_CORE1_VIDEO_H
+#ifndef MICRONES_CORE1_VIDEO_H
+#define MICRONES_CORE1_VIDEO_H
 
 #include "scanline_queue.h"
 

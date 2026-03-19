@@ -1,5 +1,5 @@
-#ifndef SMB2350_PICO_INPUT_H
-#define SMB2350_PICO_INPUT_H
+#ifndef MICRONES_PICO_INPUT_H
+#define MICRONES_PICO_INPUT_H
 
 #include "input.h"
 

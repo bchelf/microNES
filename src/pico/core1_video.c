@@ -35,21 +35,21 @@ static void __not_in_flash_func(core1_entry)(void) {
         // Pull scanlines from the queue and convert them into the composite
         // build buffer. Frame boundaries are detected by y == 0 (begin_frame
         // was already called above before the first scanline) and
-        // y == SMB2350_VIDEO_VISIBLE_HEIGHT-1 (present + begin_frame).
+        // y == MICRONES_VIDEO_VISIBLE_HEIGHT-1 (present + begin_frame).
         scanline_queue_pop_blocking(&s_queue, &slot);
 
         uint64_t convert_start = time_us_64();
         video_ntsc_write_visible_scanline_indexed_luma(
             (int)slot.y,
             slot.pixels,
-            SMB2350_VIDEO_VISIBLE_WIDTH,
+            MICRONES_VIDEO_VISIBLE_WIDTH,
             s_palette_to_luma,
             s_palette_size
         );
         s_stats.convert_us_total += time_us_64() - convert_start;
         ++s_stats.scanlines_converted;
 
-        if (slot.y == (uint16_t)(SMB2350_VIDEO_VISIBLE_HEIGHT - 1)) {
+        if (slot.y == (uint16_t)(MICRONES_VIDEO_VISIBLE_HEIGHT - 1)) {
             // Last visible scanline of this frame: present it and
             // pre-acquire the next build buffer. The begin_frame call
             // may spin briefly waiting for DMA to complete the swap.

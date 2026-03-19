@@ -44,7 +44,7 @@ typedef struct {
 enum { PPU_MAX_SCANLINE_SPRITES = 8 };
 
 static inline uint64_t ppu_profile_now_us(const Ppu *ppu) {
-#if SMB2350_ENABLE_STEP_PROFILING
+#if MICRONES_ENABLE_STEP_PROFILING
     if (ppu->profile_now_us != NULL) {
         return ppu->profile_now_us(ppu->profile_now_user);
     }
@@ -54,7 +54,7 @@ static inline uint64_t ppu_profile_now_us(const Ppu *ppu) {
     return 0;
 }
 
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
 static uint64_t ppu_hash_framebuffer(const NesFrameBuffer *frame_buffer) {
     uint64_t hash = 1469598103934665603ull;
 
@@ -73,7 +73,7 @@ static uint64_t ppu_hash_framebuffer(const NesFrameBuffer *frame_buffer) {
 #endif
 
 static bool ppu_sprite0_diag_collect_this_frame(const Ppu *ppu) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     return (ppu->sprite0_diag.enabled &&
             ppu->frame_count >= ppu->sprite0_diag.frame_start &&
             ppu->frame_count <= ppu->sprite0_diag.frame_end) ||
@@ -85,7 +85,7 @@ static bool ppu_sprite0_diag_collect_this_frame(const Ppu *ppu) {
 }
 
 static void ppu_sprite0_diag_add_example(PpuSprite0FrameDiag *diag, uint8_t reason, int x, int y) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     if (!diag->valid || diag->example_count >= PPU_SPRITE0_DIAG_MAX_EXAMPLES) {
         return;
     }
@@ -103,7 +103,7 @@ static void ppu_sprite0_diag_add_example(PpuSprite0FrameDiag *diag, uint8_t reas
 }
 
 static void ppu_sprite0_diag_begin_frame(Ppu *ppu) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     PpuSprite0FrameDiag *diag = &ppu->sprite0_diag.current_frame;
 
     memset(diag, 0, sizeof(*diag));
@@ -151,7 +151,7 @@ static void ppu_sprite0_diag_begin_frame(Ppu *ppu) {
 }
 
 static void ppu_sprite0_diag_commit_frame(Ppu *ppu) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     PpuSprite0FrameDiag *diag = &ppu->sprite0_diag.current_frame;
 
     if (!diag->valid) {
@@ -189,7 +189,7 @@ static void ppu_sprite0_diag_commit_frame(Ppu *ppu) {
 }
 
 static void ppu_record_sprite0_status_set(Ppu *ppu, int x, int y) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     PpuSprite0FrameDiag *diag = &ppu->sprite0_diag.current_frame;
 
     ++ppu->sprite0_diag.total_status_set_count;
@@ -214,7 +214,7 @@ static void ppu_record_sprite0_status_set(Ppu *ppu, int x, int y) {
 }
 
 static void ppu_record_sprite0_status_clear(Ppu *ppu, bool expected) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     ++ppu->sprite0_diag.total_status_clear_count;
     ppu->sprite0_diag.last_status_clear_render_frame = ppu->frame_count;
     ppu->sprite0_diag.last_status_clear_scanline = ppu->scanline;
@@ -290,7 +290,7 @@ static void ppu_increment_vertical_v(Ppu *ppu) {
 }
 
 static void ppu_finalize_frame(Ppu *ppu) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     uint32_t nonzero_pixels = 0;
     uint32_t sprite_pixels = 0;
 
@@ -333,7 +333,7 @@ static void ppu_finalize_frame(Ppu *ppu) {
 }
 
 static void ppu_record_visible_write_diag(Ppu *ppu, uint8_t reg, uint8_t value) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     PpuVisibleWriteDiag *diag;
 
     if (ppu->scanline < 0 || ppu->scanline >= NES_FRAME_HEIGHT) {
@@ -501,7 +501,7 @@ static void ppu_detect_render_artifact(
     int y,
     const uint8_t *row
 ) {
-#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     (void)ppu;
     (void)cartridge;
     (void)y;
@@ -829,7 +829,7 @@ static void ppu_note_sprite0_hit(Ppu *ppu, int x, int y) {
     }
 
     ppu->status |= PPU_STATUS_SPRITE0_HIT;
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     ppu_record_sprite0_status_set(ppu, x, y);
     ++ppu->sprite0_hit_count;
     if (!ppu->sprite0_hit_ever) {
@@ -845,7 +845,7 @@ static void ppu_note_sprite0_hit(Ppu *ppu, int x, int y) {
 }
 
 static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     ++ppu->sprite0_opaque_pixel_count;
     if (ppu->first_sprite0_opaque_scanline < 0) {
         ppu->first_sprite0_opaque_frame = ppu->frame_count;
@@ -859,8 +859,8 @@ static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
 #endif
 }
 
-static void SMB2350_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartridge, int y) {
-#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS && !SMB2350_ENABLE_FRAMEBUFFER
+static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartridge, int y) {
+#if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS && !MICRONES_ENABLE_FRAMEBUFFER
     uint8_t *dst = ppu->scanline_buffer.pixels;
     uint8_t bg_opaque[NES_FRAME_WIDTH];
     uint8_t sprite_prio[NES_FRAME_WIDTH]; /* 1 = pixel claimed by a sprite */
@@ -1030,7 +1030,7 @@ static void SMB2350_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartri
     return;
 #else
     uint8_t *dst =
-#if SMB2350_ENABLE_FRAMEBUFFER
+#if MICRONES_ENABLE_FRAMEBUFFER
         nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);
 #else
         NULL;
@@ -1064,7 +1064,7 @@ static void SMB2350_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartri
         ppu->max_scanline_sprite_count = sprite_count;
     }
 
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     if (ppu->sprite0_diag.current_frame.valid && sprite0_visible_on_scanline) {
         ++ppu->sprite0_diag.current_frame.sprite0_visible_scanline_count;
     }
@@ -1122,7 +1122,7 @@ static void SMB2350_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartri
             }
         }
         sprite = ppu_visible_sprite_pixel(ppu, cartridge, sprites, sprite_count, x, y);
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
         ppu_diag_note_sprite0_pixel(ppu, cartridge, sprites, sprite_count, &sprite, x, y);
         if (sprite.opaque && sprite.sprite0) {
             ppu_note_sprite0_opaque(ppu, x, y);
@@ -1130,7 +1130,7 @@ static void SMB2350_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartri
 #endif
 
         if (x < 255 && background.opaque && sprite.opaque && sprite.sprite0) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
             ++ppu->sprite0_background_overlap_count;
 #endif
             ppu_note_sprite0_hit(ppu, x, y);
@@ -1143,18 +1143,18 @@ static void SMB2350_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartri
         }
 
         if (use_sprite) {
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
             ++ppu->sprite_composited_pixel_count;
 #endif
         }
 
-#if SMB2350_ENABLE_FRAMEBUFFER
+#if MICRONES_ENABLE_FRAMEBUFFER
         dst[x] = color;
 #endif
         ppu->scanline_buffer.pixels[x] = color;
     }
 
-#if SMB2350_ENABLE_FRAMEBUFFER
+#if MICRONES_ENABLE_FRAMEBUFFER
     ppu_detect_render_artifact(ppu, cartridge, y, dst);
 #else
     (void)cartridge;
@@ -1225,7 +1225,7 @@ void ppu_reset(Ppu *ppu) {
     ppu->sprite0_diag.frame_start = diag_start;
     ppu->sprite0_diag.frame_end = diag_end;
     memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
-#if SMB2350_ENABLE_FRAMEBUFFER
+#if MICRONES_ENABLE_FRAMEBUFFER
     ppu->frame_buffer.frame_index = 0;
 #endif
     ppu->scanline_buffer.frame_index = 0;
@@ -1234,7 +1234,7 @@ void ppu_reset(Ppu *ppu) {
     memset(ppu->oam, 0, sizeof(ppu->oam));
     memset(ppu->nametables, 0, sizeof(ppu->nametables));
     memset(ppu->palette, 0, sizeof(ppu->palette));
-#if SMB2350_ENABLE_FRAMEBUFFER
+#if MICRONES_ENABLE_FRAMEBUFFER
     memset(ppu->frame_buffer.pixels, 0, sizeof(ppu->frame_buffer.pixels));
 #endif
     memset(ppu->scanline_buffer.pixels, 0, sizeof(ppu->scanline_buffer.pixels));
@@ -1255,7 +1255,7 @@ void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_
 void ppu_oam_write_byte(Ppu *ppu, uint8_t index, uint8_t value, bool via_dma) {
     ppu->oam[index] = value;
 
-#if !SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     (void)via_dma;
     return;
 #else
@@ -1315,11 +1315,11 @@ static inline void ppu_step_cycle_1(Ppu *ppu) {
 
 static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
     if (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
-#if SMB2350_ENABLE_STEP_PROFILING
+#if MICRONES_ENABLE_STEP_PROFILING
         uint64_t render_started_us = ppu_profile_now_us(ppu);
 #endif
         ppu_render_scanline(ppu, cartridge, ppu->scanline);
-#if SMB2350_ENABLE_STEP_PROFILING
+#if MICRONES_ENABLE_STEP_PROFILING
         ppu->step_profile.render_us_total += ppu_profile_now_us(ppu) - render_started_us;
         ++ppu->step_profile.scanline_render_count;
 #endif
@@ -1333,9 +1333,9 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
     if (ppu->scanline > 261) {
         ppu->scanline = 0;
         ++ppu->frame_count;
-#if SMB2350_ENABLE_RUNTIME_DIAGNOSTICS
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
         ppu->sprite_composited_pixel_count = 0;
-#if SMB2350_ENABLE_FRAMEBUFFER
+#if MICRONES_ENABLE_FRAMEBUFFER
         ppu->frame_buffer.frame_index = ppu->frame_count;
 #endif
         memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
@@ -1347,7 +1347,7 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
     }
 }
 
-void SMB2350_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
+void MICRONES_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
     // Fast path: the vast majority of calls don't cross a scanline boundary.
     // Avoid loop and branch overhead by returning immediately for the common case.
     if (ppu->cycle != 0) {

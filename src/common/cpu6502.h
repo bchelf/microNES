@@ -1,5 +1,5 @@
-#ifndef SMB2350_CPU6502_H
-#define SMB2350_CPU6502_H
+#ifndef MICRONES_CPU6502_H
+#define MICRONES_CPU6502_H
 
 #include <stdbool.h>
 #include <stdint.h>

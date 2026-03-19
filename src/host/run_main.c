@@ -474,8 +474,8 @@ int main(int argc, char **argv) {
     HostSdlWindow *window = NULL;
     HostAudioSdl *audio = NULL;
     HostInputState input = { { 0 } };
-    Smb2350FramePacer pacer;
-    Smb2350FramePacerStats pacer_stats;
+    MicronesFramePacer pacer;
+    MicronesFramePacerStats pacer_stats;
     Nes nes;
     bool running = true;
     uint64_t presented_frames = 0;
@@ -491,7 +491,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    window = host_sdl_window_create("smb2350 - SMB1", options.scale, options.enable_vsync, options.enable_color);
+    window = host_sdl_window_create("micrones - SMB1", options.scale, options.enable_vsync, options.enable_color);
     if (window == NULL) {
         fprintf(stderr, "SDL window init failed: %s\n", host_sdl_window_last_error());
         return 2;
@@ -517,13 +517,13 @@ int main(int argc, char **argv) {
     }
 
     now_ns = host_now_ns();
-    smb2350_frame_pacer_init(&pacer, options.throttled, now_ns);
+    micrones_frame_pacer_init(&pacer, options.throttled, now_ns);
     stats_window_start_ns = now_ns;
 
     printf("ROM: %s\n", options.rom_path);
     printf("window scale: %d\n", options.scale);
     printf("pacing: %s\n", options.throttled ? "throttled" : "unthrottled");
-    printf("target fps: %.4f\n", smb2350_frame_pacer_target_fps());
+    printf("target fps: %.4f\n", micrones_frame_pacer_target_fps());
     printf("vsync: %s\n", options.enable_vsync ? "on" : "off");
     printf("display mode: %s\n", options.enable_color ? "color" : "grayscale");
     printf("audio: %s", host_audio_sdl_is_enabled(audio) ? "on" : "off");
@@ -614,10 +614,10 @@ int main(int argc, char **argv) {
 
         ++presented_frames;
         now_ns = host_now_ns();
-        smb2350_frame_pacer_frame_done(&pacer, now_ns);
+        micrones_frame_pacer_frame_done(&pacer, now_ns);
 
         if (now_ns - stats_window_start_ns >= HOST_FPS_SAMPLE_MS * 1000000ull) {
-            smb2350_frame_pacer_get_stats(&pacer, now_ns, &pacer_stats);
+            micrones_frame_pacer_get_stats(&pacer, now_ns, &pacer_stats);
             printf(
                 "fps: %.2f/%.2f frame_ms(avg/last/worst)=%.3f/%.3f/%.3f late=%" PRIu64 " max_late=%.3fms frames=%" PRIu64 "\n",
                 pacer_stats.measured_fps,
@@ -640,7 +640,7 @@ int main(int argc, char **argv) {
             snprintf(
                 title,
                 sizeof(title),
-                "smb2350 - SMB1 | %.2f fps | late=%" PRIu64,
+                "micrones - SMB1 | %.2f fps | late=%" PRIu64,
                 pacer_stats.measured_fps,
                 pacer_stats.late_frame_count
             );
@@ -652,9 +652,9 @@ int main(int argc, char **argv) {
             break;
         }
 
-        if (smb2350_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
+        if (micrones_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
             host_wait_until_ns(pacer.wait_until_ns);
-            smb2350_frame_pacer_note_wait_complete(&pacer, host_now_ns());
+            micrones_frame_pacer_note_wait_complete(&pacer, host_now_ns());
         }
     }
 

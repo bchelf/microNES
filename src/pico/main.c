@@ -11,13 +11,13 @@
 
 #include <stdio.h>
 
-#define SMB2350_PICO_OVERCLOCK_KHZ 252000u
-#define SMB2350_PICO_OVERCLOCK_VREG VREG_VOLTAGE_1_20
+#define MICRONES_PICO_OVERCLOCK_KHZ 252000u
+#define MICRONES_PICO_OVERCLOCK_VREG VREG_VOLTAGE_1_20
 
 int main(void) {
-#if defined(SMB2350_PICO_VIDEO_MODE_EMULATOR)
-    extern unsigned char smb2350_pico_embedded_rom[];
-    extern unsigned int smb2350_pico_embedded_rom_len;
+#if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
+    extern unsigned char micrones_pico_embedded_rom[];
+    extern unsigned int micrones_pico_embedded_rom_len;
     static PicoEmulatorVideoAdapter emulator_video;
     uint64_t report_started_us = 0;
     uint64_t report_render_us = 0;
@@ -33,7 +33,7 @@ int main(void) {
     uint64_t report_c1_frames = 0;
     uint32_t report_q_stall_count = 0;
     uint64_t report_q_stall_us = 0;
-    Smb2350VideoNtscPerfStats report_video_stats = { 0 };
+    MicronesVideoNtscPerfStats report_video_stats = { 0 };
     /* Exp A/B: audio pipeline shape + sample correctness */
     uint64_t report_samples_drained = 0;
     uint64_t report_samples_dropped = 0;
@@ -41,10 +41,10 @@ int main(void) {
     bool     report_saw_nonzero_sample = false;
 #endif
 
-    vreg_set_voltage(SMB2350_PICO_OVERCLOCK_VREG);
+    vreg_set_voltage(MICRONES_PICO_OVERCLOCK_VREG);
     sleep_ms(10);
-    if (!set_sys_clock_khz(SMB2350_PICO_OVERCLOCK_KHZ, true)) {
-        panic("failed to set sys clock to %u kHz", SMB2350_PICO_OVERCLOCK_KHZ);
+    if (!set_sys_clock_khz(MICRONES_PICO_OVERCLOCK_KHZ, true)) {
+        panic("failed to set sys clock to %u kHz", MICRONES_PICO_OVERCLOCK_KHZ);
     }
 
     stdio_init_all();
@@ -54,11 +54,11 @@ int main(void) {
     video_ntsc_init();
     audio_pwm_init(48000);
 
-#if defined(SMB2350_PICO_VIDEO_MODE_EMULATOR)
+#if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
     if (emulator_video_adapter_init(
             &emulator_video,
-            smb2350_pico_embedded_rom,
-            (size_t)smb2350_pico_embedded_rom_len)) {
+            micrones_pico_embedded_rom,
+            (size_t)micrones_pico_embedded_rom_len)) {
         printf("video mode: emulator (dual-core)\n");
 
         // Seed the DMA with a blank frame, start scanout, then launch core 1.
@@ -103,7 +103,7 @@ int main(void) {
             }
             if ((emulator_video.rendered_frames % 60u) == 0u) {
                 uint64_t now_us = time_us_64();
-                Smb2350VideoNtscPerfStats current_video_stats;
+                MicronesVideoNtscPerfStats current_video_stats;
                 Core1VideoStats c1_stats;
                 ScanlineQueue *q = core1_video_get_queue();
                 uint64_t delta_us = now_us - report_started_us;

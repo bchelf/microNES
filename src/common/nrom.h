@@ -1,5 +1,5 @@
-#ifndef SMB2350_NROM_H
-#define SMB2350_NROM_H
+#ifndef MICRONES_NROM_H
+#define MICRONES_NROM_H
 
 #include "cart.h"
 

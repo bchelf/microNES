@@ -2,12 +2,12 @@
 
 #include "pico/time.h"
 
-uint64_t smb2350_pico_clock_now_ns(void) {
+uint64_t micrones_pico_clock_now_ns(void) {
     return time_us_64() * 1000ull;
 }
 
-void smb2350_pico_sleep_until_ns(uint64_t deadline_ns) {
-    uint64_t now_ns = smb2350_pico_clock_now_ns();
+void micrones_pico_sleep_until_ns(uint64_t deadline_ns) {
+    uint64_t now_ns = micrones_pico_clock_now_ns();
 
     if (deadline_ns <= now_ns) {
         return;

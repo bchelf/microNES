@@ -1,5 +1,5 @@
-#ifndef SMB2350_HOST_AUDIO_SDL_H
-#define SMB2350_HOST_AUDIO_SDL_H
+#ifndef MICRONES_HOST_AUDIO_SDL_H
+#define MICRONES_HOST_AUDIO_SDL_H
 
 #include <stdbool.h>
 #include <stddef.h>

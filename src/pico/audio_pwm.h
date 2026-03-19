@@ -1,5 +1,5 @@
-#ifndef SMB2350_AUDIO_PWM_H
-#define SMB2350_AUDIO_PWM_H
+#ifndef MICRONES_AUDIO_PWM_H
+#define MICRONES_AUDIO_PWM_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -7,7 +7,7 @@
 /* GP5 audio output pin.  PWM carrier at clk_sys/256 (~984 kHz at 252 MHz),
  * duty-cycle modulated at sample_rate Hz.  Pass through an RC low-pass filter
  * (e.g. 1 kΩ + 10 nF) before the output jack. */
-#define SMB2350_AUDIO_PIN 5u
+#define MICRONES_AUDIO_PIN 5u
 
 /* Initialise PWM audio output and start the playback timer.
  * sample_rate is the PCM sample rate in Hz (typically 48000). */

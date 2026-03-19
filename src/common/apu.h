@@ -1,5 +1,5 @@
-#ifndef SMB2350_APU_H
-#define SMB2350_APU_H
+#ifndef MICRONES_APU_H
+#define MICRONES_APU_H
 
 #include "runtime_config.h"
 
@@ -191,7 +191,7 @@ typedef struct {
 
 void apu_init(Apu *apu);
 void apu_reset(Apu *apu);
-#if SMB2350_ENABLE_APU_EMULATION
+#if MICRONES_ENABLE_APU_EMULATION
 void apu_step(Apu *apu, uint32_t cpu_cycles);
 #else
 static inline void apu_step(Apu *apu, uint32_t cpu_cycles) { (void)apu; (void)cpu_cycles; }

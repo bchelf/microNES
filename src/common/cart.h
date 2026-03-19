@@ -1,5 +1,5 @@
-#ifndef SMB2350_CART_H
-#define SMB2350_CART_H
+#ifndef MICRONES_CART_H
+#define MICRONES_CART_H
 
 #include <stdbool.h>
 #include <stddef.h>

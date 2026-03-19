@@ -1,5 +1,5 @@
-#ifndef SMB2350_PPU_H
-#define SMB2350_PPU_H
+#ifndef MICRONES_PPU_H
+#define MICRONES_PPU_H
 
 #include "cart.h"
 #include "framebuffer.h"
@@ -225,7 +225,7 @@ typedef struct {
     uint8_t visible_write_diag_count;
     PpuVisibleWriteDiag last_completed_visible_write_diag[PPU_VISIBLE_WRITE_DIAG_MAX];
     uint8_t last_completed_visible_write_diag_count;
-    smb2350_profile_now_us_fn profile_now_us;
+    micrones_profile_now_us_fn profile_now_us;
     void *profile_now_user;
     PpuStepProfile step_profile;
     NesFrameBuffer frame_buffer;

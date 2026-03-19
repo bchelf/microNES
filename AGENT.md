@@ -1,10 +1,10 @@
-# smb2350 Agent Notes
+# micrones Agent Notes
 
-This file summarizes the current state of `smb2350`, what has already been implemented and validated, what has been learned during debugging, and what remains.
+This file summarizes the current state of `micrones`, what has already been implemented and validated, what has been learned during debugging, and what remains.
 
 ## Project Intent
 
-`smb2350` is intentionally narrow:
+`micrones` is intentionally narrow:
 
 - It is not a general NES emulator.
 - It targets the original Super Mario Bros ROM.
@@ -32,12 +32,12 @@ The current architecture is:
 ### Build / Targets
 
 - Host smoke target builds and runs:
-  - `build-host/smb2350_smoke`
+  - `build-host/micrones_smoke`
 - Host SDL interactive runner builds and runs:
-  - `build-host/smb2350_run`
+  - `build-host/micrones_run`
 - Pico firmware builds and produces:
-  - `build-pico/smb2350.uf2`
-  - `build-pico/smb2350.elf`
+  - `build-pico/micrones.uf2`
+  - `build-pico/micrones.elf`
 
 ### Core Emulator
 
@@ -181,28 +181,28 @@ Validated repeatedly:
 Useful smoke commands:
 
 ```sh
-cd /Users/bchelf/smb2350
+cd /Users/bchelf/microNES
 cmake --build build-host -j
-./build-host/smb2350_smoke roms/smb1.nes
+./build-host/micrones_smoke roms/smb1.nes
 ```
 
 Frame dump examples:
 
 ```sh
-./build-host/smb2350_smoke roms/smb1.nes 5000000 /tmp/smb2350_8s.png
-./build-host/smb2350_smoke roms/smb1.nes 6200000 /tmp/smb2350_10s.png
+./build-host/micrones_smoke roms/smb1.nes 5000000 /tmp/micrones_8s.png
+./build-host/micrones_smoke roms/smb1.nes 6200000 /tmp/micrones_10s.png
 ```
 
 Video capture example:
 
 ```sh
-./build-host/smb2350_smoke roms/smb1.nes --steps 17670500 --video-out build-host/smb_30s.mp4
+./build-host/micrones_smoke roms/smb1.nes --steps 17670500 --video-out build-host/smb_30s.mp4
 ```
 
 SDL runner:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes
+./build-host/micrones_run roms/smb1.nes
 ```
 
 ## Current Audio Status
@@ -324,35 +324,35 @@ The next work should stay disciplined:
 Build host:
 
 ```sh
-cd /Users/bchelf/smb2350
-cmake -S . -B build-host -DSMB2350_PLATFORM=host
+cd /Users/bchelf/microNES
+cmake -S . -B build-host -DMICRONES_PLATFORM=host
 cmake --build build-host -j
 ```
 
 Build Pico:
 
 ```sh
-cd /Users/bchelf/smb2350
+cd /Users/bchelf/microNES
 source ~/.zshrc
-cmake -S . -B build-pico -DSMB2350_PLATFORM=pico -Dpicotool_DIR=/Users/bchelf/smb2350/build/_deps/picotool
+cmake -S . -B build-pico -DMICRONES_PLATFORM=pico -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
 cmake --build build-pico -j
 ```
 
 Run SDL:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes
+./build-host/micrones_run roms/smb1.nes
 ```
 
 Run smoke:
 
 ```sh
-./build-host/smb2350_smoke roms/smb1.nes
+./build-host/micrones_smoke roms/smb1.nes
 ```
 
 ## Current Bottom Line
 
-`smb2350` now has:
+`micrones` now has:
 
 - a serious shared SMB1/NROM runtime
 - deterministic host validation

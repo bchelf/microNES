@@ -2,33 +2,33 @@
 
 #include <string.h>
 
-static void smb2350_frame_pacer_advance_deadline(Smb2350FramePacer *pacer) {
+static void micrones_frame_pacer_advance_deadline(MicronesFramePacer *pacer) {
     pacer->next_deadline_ns += pacer->frame_duration_floor_ns;
     pacer->frame_duration_error_accumulator += pacer->frame_duration_remainder_ns;
-    if (pacer->frame_duration_error_accumulator >= SMB2350_NTSC_FRAME_DURATION_DENOMINATOR) {
+    if (pacer->frame_duration_error_accumulator >= MICRONES_NTSC_FRAME_DURATION_DENOMINATOR) {
         ++pacer->next_deadline_ns;
-        pacer->frame_duration_error_accumulator -= SMB2350_NTSC_FRAME_DURATION_DENOMINATOR;
+        pacer->frame_duration_error_accumulator -= MICRONES_NTSC_FRAME_DURATION_DENOMINATOR;
     }
 }
 
-void smb2350_frame_pacer_init(Smb2350FramePacer *pacer, bool throttled, uint64_t start_time_ns) {
+void micrones_frame_pacer_init(MicronesFramePacer *pacer, bool throttled, uint64_t start_time_ns) {
     memset(pacer, 0, sizeof(*pacer));
     pacer->throttled = throttled;
     pacer->start_time_ns = start_time_ns;
     pacer->wait_until_ns = start_time_ns;
     pacer->next_deadline_ns = start_time_ns;
     pacer->frame_duration_floor_ns =
-        SMB2350_NTSC_FRAME_DURATION_NUMERATOR_NS / SMB2350_NTSC_FRAME_DURATION_DENOMINATOR;
+        MICRONES_NTSC_FRAME_DURATION_NUMERATOR_NS / MICRONES_NTSC_FRAME_DURATION_DENOMINATOR;
     pacer->frame_duration_remainder_ns =
-        SMB2350_NTSC_FRAME_DURATION_NUMERATOR_NS % SMB2350_NTSC_FRAME_DURATION_DENOMINATOR;
-    smb2350_frame_pacer_advance_deadline(pacer);
+        MICRONES_NTSC_FRAME_DURATION_NUMERATOR_NS % MICRONES_NTSC_FRAME_DURATION_DENOMINATOR;
+    micrones_frame_pacer_advance_deadline(pacer);
 }
 
-void smb2350_frame_pacer_set_throttled(Smb2350FramePacer *pacer, bool throttled) {
+void micrones_frame_pacer_set_throttled(MicronesFramePacer *pacer, bool throttled) {
     pacer->throttled = throttled;
 }
 
-void smb2350_frame_pacer_frame_done(Smb2350FramePacer *pacer, uint64_t now_ns) {
+void micrones_frame_pacer_frame_done(MicronesFramePacer *pacer, uint64_t now_ns) {
     ++pacer->frame_count;
 
     if (pacer->have_last_frame_done) {
@@ -61,10 +61,10 @@ void smb2350_frame_pacer_frame_done(Smb2350FramePacer *pacer, uint64_t now_ns) {
         pacer->last_late_ns = 0;
     }
 
-    smb2350_frame_pacer_advance_deadline(pacer);
+    micrones_frame_pacer_advance_deadline(pacer);
 }
 
-bool smb2350_frame_pacer_should_wait(const Smb2350FramePacer *pacer, uint64_t now_ns, uint64_t *wait_until_ns) {
+bool micrones_frame_pacer_should_wait(const MicronesFramePacer *pacer, uint64_t now_ns, uint64_t *wait_until_ns) {
     if (!pacer->throttled || now_ns >= pacer->wait_until_ns) {
         return false;
     }
@@ -75,15 +75,15 @@ bool smb2350_frame_pacer_should_wait(const Smb2350FramePacer *pacer, uint64_t no
     return true;
 }
 
-void smb2350_frame_pacer_note_wait_complete(Smb2350FramePacer *pacer, uint64_t now_ns) {
+void micrones_frame_pacer_note_wait_complete(MicronesFramePacer *pacer, uint64_t now_ns) {
     (void)pacer;
     (void)now_ns;
 }
 
-void smb2350_frame_pacer_get_stats(
-    const Smb2350FramePacer *pacer,
+void micrones_frame_pacer_get_stats(
+    const MicronesFramePacer *pacer,
     uint64_t now_ns,
-    Smb2350FramePacerStats *stats_out
+    MicronesFramePacerStats *stats_out
 ) {
     double elapsed_seconds = 0.0;
 
@@ -95,7 +95,7 @@ void smb2350_frame_pacer_get_stats(
     stats_out->worst_frame_time_ns = pacer->worst_frame_time_ns;
     stats_out->last_late_ns = pacer->last_late_ns;
     stats_out->max_late_ns = pacer->max_late_ns;
-    stats_out->target_fps = smb2350_frame_pacer_target_fps();
+    stats_out->target_fps = micrones_frame_pacer_target_fps();
     stats_out->last_frame_ms = (double)pacer->last_frame_time_ns / 1000000.0;
     stats_out->worst_frame_ms = (double)pacer->worst_frame_time_ns / 1000000.0;
     stats_out->last_late_ms = (double)pacer->last_late_ns / 1000000.0;
@@ -114,7 +114,7 @@ void smb2350_frame_pacer_get_stats(
     }
 }
 
-double smb2350_frame_pacer_target_fps(void) {
-    return (double)SMB2350_NTSC_FRAME_DURATION_DENOMINATOR /
-           ((double)SMB2350_NTSC_FRAME_DURATION_NUMERATOR_NS / 1000000000.0);
+double micrones_frame_pacer_target_fps(void) {
+    return (double)MICRONES_NTSC_FRAME_DURATION_DENOMINATOR /
+           ((double)MICRONES_NTSC_FRAME_DURATION_NUMERATOR_NS / 1000000000.0);
 }

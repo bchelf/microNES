@@ -121,13 +121,13 @@ The shared core does not depend on:
 
 `src/host` contains tools and adapters only for local development:
 
-- `smb2350_smoke`
+- `micrones_smoke`
   - deterministic validation
   - state and frame hashes
   - debug summaries
   - PNG output
   - ffmpeg video capture
-- `smb2350_run`
+- `micrones_run`
   - live SDL window
   - keyboard input
   - host-side color mapping
@@ -144,30 +144,30 @@ The shared core does not depend on:
 ### Host
 
 ```sh
-cd /Users/bchelf/smb2350
-cmake -S . -B build-host -DSMB2350_PLATFORM=host
+cd /Users/bchelf/microNES
+cmake -S . -B build-host -DMICRONES_PLATFORM=host
 cmake --build build-host -j
 ```
 
 This builds:
 
-- `build-host/smb2350_smoke`
-- `build-host/smb2350_run`
+- `build-host/micrones_smoke`
+- `build-host/micrones_run`
 
 ### Pico
 
 ```sh
-cd /Users/bchelf/smb2350
+cd /Users/bchelf/microNES
 source ~/.zshrc
-cmake -S . -B build-pico -DSMB2350_PLATFORM=pico -Dpicotool_DIR=/Users/bchelf/smb2350/build/_deps/picotool
+cmake -S . -B build-pico -DMICRONES_PLATFORM=pico -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
 cmake --build build-pico -j
 ```
 
 This builds:
 
-- `build-pico/smb2350.uf2`
-- `build-pico/smb2350.elf`
-- `build-pico/smb2350.bin`
+- `build-pico/micrones.uf2`
+- `build-pico/micrones.elf`
+- `build-pico/micrones.bin`
 
 ## Useful Host Commands
 
@@ -176,19 +176,19 @@ This builds:
 Run a deterministic bounded validation:
 
 ```sh
-./build-host/smb2350_smoke roms/smb1.nes
+./build-host/micrones_smoke roms/smb1.nes
 ```
 
 Run longer and dump a frame:
 
 ```sh
-./build-host/smb2350_smoke roms/smb1.nes 6200000 /tmp/smb2350_10s.png
+./build-host/micrones_smoke roms/smb1.nes 6200000 /tmp/micrones_10s.png
 ```
 
 Capture video through ffmpeg:
 
 ```sh
-./build-host/smb2350_smoke roms/smb1.nes --steps 17670500 --video-out build-host/smb_30s.mp4
+./build-host/micrones_smoke roms/smb1.nes --steps 17670500 --video-out build-host/smb_30s.mp4
 ```
 
 ### Interactive Runner
@@ -196,16 +196,16 @@ Capture video through ffmpeg:
 Run the SDL window:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes
+./build-host/micrones_run roms/smb1.nes
 ```
 
 Helpful options:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes --vsync
-./build-host/smb2350_run roms/smb1.nes --no-vsync --unthrottled
-./build-host/smb2350_run roms/smb1.nes --scale 5
-./build-host/smb2350_run roms/smb1.nes --max-frames 600
+./build-host/micrones_run roms/smb1.nes --vsync
+./build-host/micrones_run roms/smb1.nes --no-vsync --unthrottled
+./build-host/micrones_run roms/smb1.nes --scale 5
+./build-host/micrones_run roms/smb1.nes --max-frames 600
 ```
 
 Keyboard mapping:
@@ -244,33 +244,33 @@ Examples:
 Dump a short gameplay window to WAV:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes --dump-wav /tmp/smb_gameplay.wav --dump-wav-seconds 2
+./build-host/micrones_run roms/smb1.nes --dump-wav /tmp/smb_gameplay.wav --dump-wav-seconds 2
 ```
 
 Solo a channel:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes --audio-solo pulse1 --apu-stats
-./build-host/smb2350_run roms/smb1.nes --audio-solo triangle --apu-stats
+./build-host/micrones_run roms/smb1.nes --audio-solo pulse1 --apu-stats
+./build-host/micrones_run roms/smb1.nes --audio-solo triangle --apu-stats
 ```
 
 Mute a channel:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes --audio-mute triangle --apu-stats
+./build-host/micrones_run roms/smb1.nes --audio-mute triangle --apu-stats
 ```
 
 Forced validation tones:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes --audio-solo pulse1 --apu-test-tone pulse1 --dump-wav /tmp/pulse1.wav --dump-wav-seconds 1 --apu-stats
-./build-host/smb2350_run roms/smb1.nes --audio-solo triangle --apu-test-tone triangle --dump-wav /tmp/triangle.wav --dump-wav-seconds 1 --apu-stats
+./build-host/micrones_run roms/smb1.nes --audio-solo pulse1 --apu-test-tone pulse1 --dump-wav /tmp/pulse1.wav --dump-wav-seconds 1 --apu-stats
+./build-host/micrones_run roms/smb1.nes --audio-solo triangle --apu-test-tone triangle --dump-wav /tmp/triangle.wav --dump-wav-seconds 1 --apu-stats
 ```
 
 Write summary:
 
 ```sh
-./build-host/smb2350_run roms/smb1.nes --apu-write-summary
+./build-host/micrones_run roms/smb1.nes --apu-write-summary
 ```
 
 Current main conclusion from the harness:

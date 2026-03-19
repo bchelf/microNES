@@ -7,13 +7,13 @@
 // Ensures all memory accesses before the barrier are visible to other cores
 // before any accesses after the barrier. Required around head/tail updates
 // in a SPSC queue shared across cores.
-#define SMB2350_DMB() __asm volatile ("dmb ish" ::: "memory")
+#define MICRONES_DMB() __asm volatile ("dmb ish" ::: "memory")
 
 // Send event to wake a core sleeping in WFE.
-#define SMB2350_SEV() __asm volatile ("sev" ::: "memory")
+#define MICRONES_SEV() __asm volatile ("sev" ::: "memory")
 
 // Wait for event (low-power sleep until SEV or IRQ fires).
-#define SMB2350_WFE() __asm volatile ("wfe" ::: "memory")
+#define MICRONES_WFE() __asm volatile ("wfe" ::: "memory")
 
 void scanline_queue_init(ScanlineQueue *q) {
     q->head = 0;
@@ -44,11 +44,11 @@ void scanline_queue_push(ScanlineQueue *q, const uint8_t *pixels, uint16_t y) {
     slot->y = y;
 
     // Barrier: ensure slot data is written before head is incremented.
-    SMB2350_DMB();
+    MICRONES_DMB();
     q->head = next_head;
 
     // Wake consumer if it is sleeping in WFE.
-    SMB2350_SEV();
+    MICRONES_SEV();
 }
 
 void scanline_queue_pop_blocking(ScanlineQueue *q, ScanlineQueueSlot *out_slot) {
@@ -56,11 +56,11 @@ void scanline_queue_pop_blocking(ScanlineQueue *q, ScanlineQueueSlot *out_slot) 
 
     // Wait until at least one slot is available.
     while (q->head == tail) {
-        SMB2350_WFE();
+        MICRONES_WFE();
     }
 
     // Barrier: ensure head read happened before we read the slot data.
-    SMB2350_DMB();
+    MICRONES_DMB();
 
     *out_slot = q->slots[tail % SCANLINE_QUEUE_CAPACITY];
     q->tail = tail + 1u;
