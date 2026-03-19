@@ -7,3 +7,14 @@ roms/
 *.map
 .vscode/
 .cache/
+
+# RL training outputs
+checkpoints/
+eval_videos/
+logs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo

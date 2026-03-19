@@ -40,6 +40,58 @@ target_include_directories(micrones_core PUBLIC
 if (MICRONES_PLATFORM STREQUAL "host")
     find_package(SDL3 QUIET CONFIG)
 
+    # RL-optimised core: APU and framebuffer disabled — maximum training speed.
+    add_library(micrones_core_rl STATIC
+        ${MICRONES_COMMON_SOURCES}
+    )
+    target_include_directories(micrones_core_rl PUBLIC
+        ${CMAKE_CURRENT_LIST_DIR}/src/common
+    )
+    target_compile_definitions(micrones_core_rl PUBLIC
+        MICRONES_ENABLE_APU_EMULATION=0
+        MICRONES_ENABLE_APU_DEBUG_METRICS=0
+        MICRONES_ENABLE_APU_PCM_OUTPUT=0
+        MICRONES_ENABLE_FRAMEBUFFER=0
+        MICRONES_ENABLE_RUNTIME_DIAGNOSTICS=0
+        MICRONES_ENABLE_STEP_PROFILING=0
+    )
+
+    # Render core: framebuffer enabled, APU still off — used for eval video capture.
+    add_library(micrones_core_render STATIC
+        ${MICRONES_COMMON_SOURCES}
+    )
+    target_include_directories(micrones_core_render PUBLIC
+        ${CMAKE_CURRENT_LIST_DIR}/src/common
+    )
+    target_compile_definitions(micrones_core_render PUBLIC
+        MICRONES_ENABLE_APU_EMULATION=0
+        MICRONES_ENABLE_APU_DEBUG_METRICS=0
+        MICRONES_ENABLE_APU_PCM_OUTPUT=0
+        MICRONES_ENABLE_FRAMEBUFFER=1
+        MICRONES_ENABLE_RUNTIME_DIAGNOSTICS=0
+        MICRONES_ENABLE_STEP_PROFILING=0
+    )
+
+    # Fast headless library for training.
+    add_library(micrones_rl SHARED
+        rl/micrones_rl.c
+    )
+    target_include_directories(micrones_rl PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/src/common
+        ${CMAKE_CURRENT_LIST_DIR}/rl
+    )
+    target_link_libraries(micrones_rl PRIVATE micrones_core_rl)
+
+    # Render-capable library for eval video capture.
+    add_library(micrones_rl_render SHARED
+        rl/micrones_rl.c
+    )
+    target_include_directories(micrones_rl_render PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/src/common
+        ${CMAKE_CURRENT_LIST_DIR}/rl
+    )
+    target_link_libraries(micrones_rl_render PRIVATE micrones_core_render)
+
     add_executable(micrones_smoke
         src/host/png_write.c
         src/host/smoke_main.c
