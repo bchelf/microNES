@@ -110,18 +110,24 @@ class EvalVideoCallback(BaseCallback):
         video_fps: int = 20,
         max_eval_steps: int = 5_000,
         render_lib_path: str | None = None,
+        frame_skip: int = 3,
+        use_platform_obs: bool = False,
+        platform_shaping: float = 0.0,  # shaping off during eval
         verbose: int = 1,
     ):
         super().__init__(verbose)
-        self._rom_path       = rom_path
-        self._checkpoint_dir = checkpoint_dir
-        self._video_dir      = video_dir
-        self._eval_interval  = eval_interval
-        self._eval_levels    = eval_levels if eval_levels else ["1-1"]
-        self._video_fps      = video_fps
-        self._max_eval_steps = max_eval_steps
-        self._render_lib     = render_lib_path or _find_render_lib()
-        self._next_eval_at   = eval_interval
+        self._rom_path         = rom_path
+        self._checkpoint_dir   = checkpoint_dir
+        self._video_dir        = video_dir
+        self._eval_interval    = eval_interval
+        self._eval_levels      = eval_levels if eval_levels else ["1-1"]
+        self._video_fps        = video_fps if video_fps != 20 else max(1, 60 // frame_skip)
+        self._max_eval_steps   = max_eval_steps
+        self._render_lib       = render_lib_path or _find_render_lib()
+        self._frame_skip       = frame_skip
+        self._use_platform_obs = use_platform_obs
+        self._platform_shaping = platform_shaping
+        self._next_eval_at     = eval_interval
 
     def _on_training_start(self) -> None:
         os.makedirs(self._checkpoint_dir, exist_ok=True)
@@ -164,9 +170,12 @@ class EvalVideoCallback(BaseCallback):
     def _eval_level(self, step: int, level: str) -> None:
         """Run one deterministic episode on `level` and write an MP4."""
         env = SMBEnv(
-            rom_path    = self._rom_path,
-            lib_path    = self._render_lib,
-            render_mode = "rgb_array",
+            rom_path         = self._rom_path,
+            lib_path         = self._render_lib,
+            render_mode      = "rgb_array",
+            frame_skip       = self._frame_skip,
+            use_platform_obs = self._use_platform_obs,
+            platform_shaping = self._platform_shaping,
         )
 
         frames: list[np.ndarray] = []

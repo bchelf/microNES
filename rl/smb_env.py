@@ -162,12 +162,16 @@ class SMBEnv(gym.Env):
         frame_skip: int = FRAME_SKIP,
         levels: list[str] | None = None,
         level_weights: list[float] | None = None,
+        use_platform_obs: bool = False,
+        platform_shaping: float = 1.0,
     ):
         super().__init__()
 
-        self._rom_path    = rom_path
-        self._frame_skip  = frame_skip
-        self._render_mode = render_mode
+        self._rom_path         = rom_path
+        self._frame_skip       = frame_skip
+        self._render_mode      = render_mode
+        self._use_platform_obs = use_platform_obs
+        self._platform_shaping = platform_shaping
 
         # Curriculum level list: ["1-1", "1-2", ...]; defaults to 1-1 only.
         self._levels = levels if levels else ["1-1"]
@@ -195,6 +199,11 @@ class SMBEnv(gym.Env):
         self._action_history: deque[int] = deque([0, 0, 0, 0], maxlen=4)
         self._prev_reward_x: int = 0
 
+        # Platform shaping state (always tracked, used for reward regardless of obs flag)
+        self._prev_over_void: bool = False
+        self._crossed_void:   bool = False
+        self._cur_plat: dict       = {}
+
         self.action_space = spaces.Discrete(N_ACTIONS)
         self.observation_space = self._build_obs_space()
 
@@ -220,6 +229,9 @@ class SMBEnv(gym.Env):
         self._world_x_history.append(self._prev_world_x)
         self._prev_enemy_screen_x[:] = 0
         self._action_history.extend([0, 0, 0, 0])
+        self._prev_over_void = False
+        self._crossed_void   = False
+        self._cur_plat       = {}
 
         obs = self._get_obs()
         return obs, {}
@@ -274,10 +286,9 @@ class SMBEnv(gym.Env):
     # ------------------------------------------------------------------
     # Observation space
     # ------------------------------------------------------------------
-    @staticmethod
-    def _build_obs_space() -> spaces.Dict:
+    def _build_obs_space(self) -> spaces.Dict:
         f32 = np.float32
-        return spaces.Dict({
+        base = {
             # Continuous player physics + power state (12 values)
             "player_state":   spaces.Box(-1.0, 1.0, (12,), f32),
             # World/level context (6 values)
@@ -304,7 +315,16 @@ class SMBEnv(gym.Env):
             "enemies":    spaces.Box(-1.0, 1.0, (5, 7), f32),
             # Interactive objects: powerup (4) + fireball×2 (3 each) = 10
             "objects":    spaces.Box(-1.0, 1.0, (10,), f32),
-        })
+        }
+        if self._use_platform_obs:
+            # Platform-aware features (8 cols of support scan ahead)
+            # platform_signals: [support_below, over_void, runway_remaining,
+            #                    must_jump_soon, next_landing_dx,
+            #                    next_landing_dy, landing_window_width]
+            base["platform_signals"] = spaces.Box(-1.0, 1.0, (7,), f32)
+            # Per-column support presence for 8 tiles ahead
+            base["support_ahead"]    = spaces.Box( 0.0, 1.0, (8,), f32)
+        return spaces.Dict(base)
 
     # ------------------------------------------------------------------
     # Observation extraction
@@ -438,7 +458,10 @@ class SMBEnv(gym.Env):
             fb1_act, fb1_rx, fb1_ry,
         ], dtype=np.float32)
 
-        return {
+        # Platform-aware features — always computed (reward uses them), obs optional.
+        self._cur_plat = self._compute_platform_state(grid)
+
+        obs = {
             "player_state":       player_state,
             "level_context":      level_context,
             "game_flags":         game_flags,
@@ -455,6 +478,110 @@ class SMBEnv(gym.Env):
             "tile_grid":          grid.astype(np.float32) / 7.0,
             "enemies":            enemies_arr,
             "objects":            objects,
+        }
+        if self._use_platform_obs:
+            obs["platform_signals"] = self._cur_plat["platform_signals"]
+            obs["support_ahead"]    = self._cur_plat["support_ahead"]
+        return obs
+
+    # ------------------------------------------------------------------
+    # Platform-aware feature computation
+    # ------------------------------------------------------------------
+    def _compute_platform_state(self, grid: np.ndarray) -> dict:
+        """
+        Compute platform-geometry features from the tile grid.
+
+        Always called (result cached in self._cur_plat) so reward shaping
+        can use it even when use_platform_obs=False.
+
+        Ground rows are MARIO_ROW+2 onward (consistent with _compute_gap_obstacle).
+        """
+        ground_start = MARIO_ROW + 2   # first row below feet
+        mc = MARIO_COL
+
+        def has_support(col: int) -> bool:
+            if col < 0 or col >= GRID_COLS:
+                return False
+            return any(
+                _SEMANTIC_IS_SOLID[int(grid[r, col])]
+                for r in range(ground_start, GRID_ROWS)
+            )
+
+        # --- support_below / over_void ---
+        support_below = float(has_support(mc))
+        over_void     = 1.0 - support_below  # void = no solid at all below
+
+        # --- runway_remaining: tiles of solid support ahead before first gap ---
+        runway = 0
+        for i in range(1, 9):
+            if has_support(mc + i):
+                runway = i
+            else:
+                break
+        runway_remaining = float(runway) / 8.0
+
+        # --- must_jump_soon: runway < 2 tiles ---
+        must_jump_soon = 1.0 if runway < 2 else 0.0
+
+        # --- support_ahead: 8-bucket forward support scan ---
+        support_ahead = np.array(
+            [float(has_support(mc + 1 + i)) for i in range(8)],
+            dtype=np.float32,
+        )
+
+        # --- next_landing: find first solid landing beyond first gap ---
+        in_gap         = False
+        next_land_col  = None
+        for i in range(1, GRID_COLS - mc):
+            col = mc + i
+            s   = has_support(col)
+            if not in_gap:
+                if not s:
+                    in_gap = True
+            else:
+                if s:
+                    next_land_col = i
+                    break
+
+        if next_land_col is not None:
+            next_landing_dx = float(next_land_col) / float(GRID_COLS)
+            # vertical offset: find the top solid row at that column
+            lc = mc + next_land_col
+            landing_row = next(
+                (r for r in range(ground_start, GRID_ROWS)
+                 if _SEMANTIC_IS_SOLID[int(grid[r, lc])]),
+                ground_start,
+            )
+            dy = (landing_row - ground_start) / float(max(GRID_ROWS - ground_start, 1))
+            next_landing_dy = float(np.clip(dy * 2.0 - 1.0, -1.0, 1.0))  # centre around 0
+            # landing width
+            width = 0
+            for j in range(next_land_col, GRID_COLS - mc):
+                if has_support(mc + j):
+                    width += 1
+                else:
+                    break
+            landing_window_width = float(min(width, 8)) / 8.0
+        else:
+            next_landing_dx      = 1.0
+            next_landing_dy      = 0.0
+            landing_window_width = 0.0
+
+        platform_signals = np.array([
+            support_below,
+            over_void,
+            runway_remaining,
+            must_jump_soon,
+            next_landing_dx,
+            next_landing_dy,
+            landing_window_width,
+        ], dtype=np.float32)
+
+        return {
+            "platform_signals": platform_signals,
+            "support_ahead":    support_ahead,
+            "over_void":        bool(over_void > 0.5),
+            "support_below":    bool(support_below > 0.5),
         }
 
     # ------------------------------------------------------------------
@@ -659,6 +786,28 @@ class SMBEnv(gym.Env):
             obstacle_any   = float(obs["obstacle_ahead"].max()) > 0.1
             if on_ground and not gap_any and not obstacle_any:
                 r -= 0.005
+
+        # --- Platform-aware shaping (disabled when platform_shaping=0.0) ---
+        if self._platform_shaping > 0.0 and self._cur_plat:
+            ps          = self._platform_shaping
+            over_void   = self._cur_plat.get("over_void", False)
+
+            # Penalty for stepping off solid ground into lethal void
+            # (support → void transition while grounded; not a jump).
+            in_air = obs["player_state"][5] < 0.5   # not on_ground flag
+            if over_void and not self._prev_over_void and not in_air:
+                r -= 0.4 * ps   # small runoff penalty
+
+            # Track whether we've been over void since last support
+            if over_void:
+                self._crossed_void = True
+
+            # Bonus for landing safely on a new platform after crossing void
+            if not over_void and self._prev_over_void and self._crossed_void:
+                r += 0.5 * ps   # landing bonus
+                self._crossed_void = False
+
+            self._prev_over_void = over_void
 
         return float(np.clip(r, -15.0, 15.0))
 

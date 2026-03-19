@@ -4,17 +4,24 @@ Train a PPO agent on SMBEnv using Stable-Baselines3.
 Usage:
     python rl/train_smb_rl.py --rom roms/smb1.nes
 
-    # Two-stage curriculum: 1-1/1-2 for 2M steps, then add 1-3/1-4 forever
+    # 1-3-focused World 1 curriculum (resume-compatible, no obs change):
     python rl/train_smb_rl.py --rom roms/smb1.nes \\
-        --levels 1-1 1-2 --level-weights 2 1 \\
-        --stage1-steps 2_000_000 \\
-        --stage2-levels 1-1 1-2 1-3 1-4 --stage2-weights 4 3 2 1
+        --levels 1-1 1-2 1-3 1-4 --level-weights 0.15 0.15 0.5 0.2 \\
+        --resume checkpoints/model_XXXXXXXXXX.zip \\
+        --checkpoint-dir checkpoints_13/ --video-dir eval_videos_13/
+
+    # Same with new platform observations (requires fresh start):
+    python rl/train_smb_rl.py --rom roms/smb1.nes \\
+        --levels 1-1 1-2 1-3 1-4 --level-weights 0.15 0.15 0.5 0.2 \\
+        --platform-obs --frame-skip 2 \\
+        --checkpoint-dir checkpoints_13_fs2/ --video-dir eval_videos_13_fs2/
 
 Options:
     --rom PATH              Path to SMB1 iNES ROM (required)
     --lib PATH              Path to libmicrones_rl.{so,dylib} (auto-detected)
     --timesteps N           Total env steps (default: 10_000_000)
     --n-envs N              Parallel envs via SubprocVecEnv (default: 8)
+    --frame-skip N          NES frames to skip per step (default: 3)
     --eval-interval N       Steps between eval video + checkpoint (default: 100_000)
     --max-eval-steps N      Max steps per eval episode (default: 5_000)
     --checkpoint-dir D      Directory for checkpoints (default: checkpoints/)
@@ -27,6 +34,8 @@ Options:
     --stage2-levels LEVEL . Stage-2 level list (required if --stage1-steps set)
     --stage2-weights W ...  Sampling weights for --stage2-levels (default: uniform)
     --eval-levels LEVEL ... Levels to record eval videos for (default: all stage levels)
+    --platform-obs          Add platform-aware obs features (default: off)
+    --platform-shaping F    Scale for platform reward shaping, 0=disable (default: 1.0)
 """
 
 import argparse
@@ -74,6 +83,9 @@ def make_env_fn(
     lib_path: str | None,
     levels: list[str] | None = None,
     level_weights: list[float] | None = None,
+    frame_skip: int = 3,
+    use_platform_obs: bool = False,
+    platform_shaping: float = 1.0,
 ):
     """Factory for SubprocVecEnv — runs headless, no rendering."""
     def _init():
@@ -81,8 +93,11 @@ def make_env_fn(
             rom_path=rom_path,
             lib_path=lib_path,
             render_mode=None,
+            frame_skip=frame_skip,
             levels=levels,
             level_weights=level_weights,
+            use_platform_obs=use_platform_obs,
+            platform_shaping=platform_shaping,
         )
     return _init
 
@@ -93,6 +108,8 @@ def main():
     parser.add_argument("--lib",             default=None,        help="Path to libmicrones_rl")
     parser.add_argument("--timesteps",       type=int, default=10_000_000)
     parser.add_argument("--n-envs",          type=int, default=8)
+    parser.add_argument("--frame-skip",      type=int, default=3,
+                        help="NES frames to advance per env step (default: 3)")
     parser.add_argument("--eval-interval",   type=int, default=100_000,
                         help="Steps between eval video + checkpoint")
     parser.add_argument("--max-eval-steps",  type=int, default=5_000,
@@ -101,6 +118,10 @@ def main():
     parser.add_argument("--video-dir",       default="eval_videos")
     parser.add_argument("--log-dir",         default="logs")
     parser.add_argument("--resume",          default=None, help="Resume from .zip")
+    parser.add_argument("--platform-obs",    action="store_true", default=False,
+                        help="Add platform-aware observation features (breaks ckpt compat)")
+    parser.add_argument("--platform-shaping", type=float, default=1.0,
+                        help="Scale for platform reward shaping terms (0=disabled)")
     parser.add_argument(
         "--levels",
         nargs="+",
@@ -189,10 +210,15 @@ def main():
     with open(os.path.join(args.checkpoint_dir, "curriculum.json"), "w") as f:
         json.dump(curriculum_meta, f, indent=2)
 
-    print(f"ROM:            {args.rom}")
-    print(f"Envs:           {args.n_envs}")
-    print(f"Timesteps:      {args.timesteps:,}")
-    print(f"Stage-1 levels: {', '.join(stage1_levels)}")
+    print(f"ROM:              {args.rom}")
+    print(f"Envs:             {args.n_envs}")
+    print(f"Frame skip:       {args.frame_skip}")
+    print(f"Timesteps:        {args.timesteps:,}")
+    print(f"Platform obs:     {args.platform_obs}")
+    print(f"Platform shaping: {args.platform_shaping}")
+    print(f"Stage-1 levels:   {', '.join(stage1_levels)}")
+    if stage1_weights:
+        print(f"Stage-1 weights:  {stage1_weights}")
     if two_stage:
         print(f"Stage-1 steps:  {args.stage1_steps:,}")
         print(f"Stage-2 levels: {', '.join(stage2_levels)}")
@@ -201,9 +227,21 @@ def main():
     print(f"Checkpoints:    {args.checkpoint_dir}/")
     print(f"Eval videos:    {args.video_dir}/")
 
+    # Save frame_skip and obs config alongside curriculum metadata.
+    curriculum_meta["frame_skip"]        = args.frame_skip
+    curriculum_meta["platform_obs"]      = args.platform_obs
+    curriculum_meta["platform_shaping"]  = args.platform_shaping
+
     # Headless training envs (start with stage-1 curriculum).
     env_fns = [
-        make_env_fn(args.rom, args.lib, levels=stage1_levels, level_weights=stage1_weights)
+        make_env_fn(
+            args.rom, args.lib,
+            levels=stage1_levels,
+            level_weights=stage1_weights,
+            frame_skip=args.frame_skip,
+            use_platform_obs=args.platform_obs,
+            platform_shaping=args.platform_shaping,
+        )
         for _ in range(args.n_envs)
     ]
     vec_env = SubprocVecEnv(env_fns)
@@ -240,13 +278,16 @@ def main():
 
     callbacks = [
         EvalVideoCallback(
-            rom_path       = args.rom,
-            checkpoint_dir = args.checkpoint_dir,
-            video_dir      = args.video_dir,
-            eval_interval  = args.eval_interval,
-            eval_levels    = eval_levels,
-            max_eval_steps = args.max_eval_steps,
-            verbose        = 1,
+            rom_path         = args.rom,
+            checkpoint_dir   = args.checkpoint_dir,
+            video_dir        = args.video_dir,
+            eval_interval    = args.eval_interval,
+            eval_levels      = eval_levels,
+            max_eval_steps   = args.max_eval_steps,
+            frame_skip       = args.frame_skip,
+            use_platform_obs = args.platform_obs,
+            platform_shaping = args.platform_shaping,
+            verbose          = 1,
         ),
         SpeedCallback(report_every=10_000),
     ]
