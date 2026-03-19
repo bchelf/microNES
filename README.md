@@ -1,6 +1,6 @@
-# smb2350
+# microNES
 
-`smb2350` is a narrow NES runtime project aimed at running the original Super Mario Bros on RP2350 / Raspberry Pi Pico 2.
+`microNES` is a narrow NES runtime project aimed at running the original Super Mario Bros on RP2350 / Raspberry Pi Pico 2.
 
 It is intentionally not a general NES emulator.
 
