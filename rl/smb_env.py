@@ -160,12 +160,22 @@ class SMBEnv(gym.Env):
         lib_path: str | None = None,
         render_mode: str | None = None,
         frame_skip: int = FRAME_SKIP,
+        levels: list[str] | None = None,
+        level_weights: list[float] | None = None,
     ):
         super().__init__()
 
-        self._rom_path   = rom_path
-        self._frame_skip = frame_skip
+        self._rom_path    = rom_path
+        self._frame_skip  = frame_skip
         self._render_mode = render_mode
+
+        # Curriculum level list: ["1-1", "1-2", ...]; defaults to 1-1 only.
+        self._levels = levels if levels else ["1-1"]
+        if level_weights is not None:
+            w = np.array(level_weights, dtype=np.float64)
+            self._level_weights = w / w.sum()
+        else:
+            self._level_weights = None  # uniform
 
         # Load shared library and create emulator instance.
         self._lib = NesLib(lib_path)
@@ -194,7 +204,14 @@ class SMBEnv(gym.Env):
     def reset(self, *, seed=None, options=None) -> tuple[dict, dict]:
         super().reset(seed=seed)
 
-        self._warm_reset(options)
+        # options["level"] overrides curriculum sampling.
+        if options and "level" in options:
+            level = options["level"]
+        else:
+            rng = self.np_random if self.np_random is not None else np.random.default_rng()
+            level = rng.choice(self._levels, p=self._level_weights)
+
+        self._warm_reset(level)
 
         self._step_count   = 0
         self._prev_world_x = self._read_world_x()
@@ -651,10 +668,60 @@ class SMBEnv(gym.Env):
     def _read_world_x(self) -> int:
         return int(self._ram[0x006D]) * 256 + int(self._ram[0x0086])
 
-    def _warm_reset(self, options: dict | None):
+    def set_curriculum(
+        self,
+        levels: list[str],
+        level_weights: list[float] | None = None,
+    ) -> None:
+        """Hot-swap the curriculum without resetting the env. Called by CurriculumStageCallback."""
+        self._levels = levels
+        if level_weights is not None:
+            w = np.array(level_weights, dtype=np.float64)
+            self._level_weights = w / w.sum()
+        else:
+            self._level_weights = None
+
+    # Level string → (WorldNumber, LevelNumber) — both 0-indexed as stored in RAM.
+    # $075F = WorldNumber (0-7), $075C = LevelNumber (0-3)
+    _LEVEL_MAP: dict[str, tuple[int, int]] = {
+        "1-1": (0, 0), "1-2": (0, 1), "1-3": (0, 2), "1-4": (0, 3),
+        "2-1": (1, 0), "2-2": (1, 1), "2-3": (1, 2), "2-4": (1, 3),
+        "3-1": (2, 0), "3-2": (2, 1), "3-3": (2, 2), "3-4": (2, 3),
+        "4-1": (3, 0), "4-2": (3, 1), "4-3": (3, 2), "4-4": (3, 3),
+        "5-1": (4, 0), "5-2": (4, 1), "5-3": (4, 2), "5-4": (4, 3),
+        "6-1": (5, 0), "6-2": (5, 1), "6-3": (5, 2), "6-4": (5, 3),
+        "7-1": (6, 0), "7-2": (6, 1), "7-3": (6, 2), "7-4": (6, 3),
+        "8-1": (7, 0), "8-2": (7, 1), "8-3": (7, 2), "8-4": (7, 3),
+    }
+
+    # $0750 = packed area identifier used by LoadAreaPointer to compute the area
+    # data pointer.  $0760 = relative area offset within the world's $9CBC section
+    # (may wrap as uint8 for worlds 3+).
+    #
+    # Derived from SMB1 ROM:
+    #   abs_idx = WorldAddrOffsets[$CCC7][world*4+level]  (absolute $9CBC index)
+    #   $0750   = $9CBC[abs_idx]
+    #   $0760   = (abs_idx - $9CB4[WorldNumber]) & 0xFF
+    _AREA_REGS: dict[str, tuple[int, int]] = {
+        # level : ($0750, $0760)
+        "1-1": (0x25, 0x00), "1-2": (0x29, 0x01), "1-3": (0x26, 0x03), "1-4": (0x60, 0x04),
+        "2-1": (0x28, 0x00), "2-2": (0x29, 0x01), "2-3": (0x01, 0x02), "2-4": (0x01, 0x02),
+        "3-1": (0x27, 0xFE), "3-2": (0x25, 0xF6), "3-3": (0x26, 0xF9), "3-4": (0x29, 0xFC),
+        "4-1": (0x62, 0xFB), "4-2": (0x35, 0xFD), "4-3": (0x63, 0xFF), "4-4": (0x22, 0x00),
+        "5-1": (0x29, 0xFC), "5-2": (0x41, 0xFD), "5-3": (0x25, 0xED), "5-4": (0x60, 0xF1),
+        "6-1": (0x62, 0xF2), "6-2": (0x63, 0xF6), "6-3": (0x41, 0xF9), "6-4": (0x2A, 0xFC),
+        "7-1": (0x62, 0xFB), "7-2": (0x2E, 0xFC), "7-3": (0x23, 0xFD), "7-4": (0x25, 0xE5),
+        "8-1": (0x29, 0xE6), "8-2": (0x20, 0xEC), "8-3": (0x61, 0xF2), "8-4": (0x62, 0xF6),
+    }
+
+    def _warm_reset(self, level: str = "1-1"):
         """
-        Reset the NES and advance to active gameplay.
-        Handles curriculum options: {"level": "1-1", "start_x": int}.
+        Reset the NES and advance to active gameplay on the requested level.
+
+        $0750 (packed area identifier) is the key RAM address: LoadAreaPointer
+        reads it to compute the area data pointer.  $075F/$075C (world/level)
+        control the HUD display.  Both must be set correctly before the area
+        reload is triggered.
         """
         self._lib.reset(self._h)
 
@@ -663,42 +730,41 @@ class SMBEnv(gym.Env):
         self._nametables = self._lib.nametables_view(self._h)
         self._oam        = self._lib.oam_view(self._h)
 
-        # Advance through NES power-on boot (~60 frames blank screen)
+        # Advance through NES power-on boot (~80 frames blank screen)
         for _ in range(80):
             self._lib.step(self._h)
 
-        # Press START to begin game
-        start_buttons = ACTION_BUTTONS[0]  # will replace with START below
+        world_idx, level_idx = self._LEVEL_MAP.get(level, (0, 0))
+        area_val, area_760   = self._AREA_REGS.get(level, (0x25, 0x00))
+
+        # Press START to kick off InitGame (20 frames)
         for _ in range(20):
             self._lib.set_buttons(self._h, NES_BUTTON_START)
             self._lib.step(self._h)
         self._lib.set_buttons(self._h, 0)
 
-        # Wait until OperMode ($0770) == 1 (game active), max 300 frames
+        # Wait until OperMode ($0770) == 1 (game active), max 300 frames.
         for _ in range(300):
             self._lib.step(self._h)
             if int(self._ram[0x0770]) == 1:
                 break
 
-        # Brief settling period
-        for _ in range(10):
-            self._lib.step(self._h)
+        # Inject the target level.
+        #   $0750 = packed area identifier (read by LoadAreaPointer)
+        #   $0760 = relative area offset within world's $9CBC section
+        #   $075F/$075C = WorldNumber/LevelNumber (HUD display)
+        # Reset OperMode_Task ($0772) to 0 to force LoadAreaPointer to re-run.
+        self._lib.write_ram(self._h, 0x0750, area_val)
+        self._lib.write_ram(self._h, 0x0760, area_760)
+        self._lib.write_ram(self._h, 0x075F, world_idx)
+        self._lib.write_ram(self._h, 0x075C, level_idx)
+        self._lib.write_ram(self._h, 0x0772, 0x00)
 
-        # Curriculum: level selection (stub — logs intent, can't warp directly)
-        if options:
-            level_str = options.get("level", None)
-            start_x   = options.get("start_x", None)
-            if level_str and level_str != "1-1":
-                # TODO: implement level-select via warp zone navigation or ROM
-                # state injection. For now, always starts at 1-1.
-                import warnings
-                warnings.warn(
-                    f"Curriculum level '{level_str}' not yet implemented; "
-                    "starting at 1-1.", stacklevel=3
-                )
-            if start_x is not None:
-                # TODO: fast-forward to start_x by running a scripted policy.
-                import warnings
-                warnings.warn(
-                    f"start_x={start_x} not yet implemented.", stacklevel=3
-                )
+        # Settle 60 frames; keep re-asserting injected values so incidental
+        # task-0 writes don't clobber them before LoadAreaPointer completes.
+        for _ in range(60):
+            self._lib.write_ram(self._h, 0x0750, area_val)
+            self._lib.write_ram(self._h, 0x0760, area_760)
+            self._lib.write_ram(self._h, 0x075F, world_idx)
+            self._lib.write_ram(self._h, 0x075C, level_idx)
+            self._lib.step(self._h)

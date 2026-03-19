@@ -23,6 +23,9 @@ int  micrones_rl_step(MicronesRLHandle *h);
 // Set controller 0 button mask (NES_BUTTON_* flags from input.h).
 void micrones_rl_set_buttons(MicronesRLHandle *h, uint8_t buttons);
 
+// Write one byte to CPU RAM (addr must be in range 0x0000–0x07FF).
+void micrones_rl_write_ram(MicronesRLHandle *h, uint16_t addr, uint8_t value);
+
 // Direct read-only pointers into emulator memory — valid until next call.
 const uint8_t *micrones_rl_ram(const MicronesRLHandle *h);         // 2048 bytes
 const uint8_t *micrones_rl_nametables(const MicronesRLHandle *h);  // 2048 bytes

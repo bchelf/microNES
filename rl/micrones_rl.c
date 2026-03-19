@@ -49,6 +49,10 @@ void micrones_rl_set_buttons(MicronesRLHandle *h, uint8_t buttons) {
     nes_set_controller_state(&h->nes, 0, state);
 }
 
+void micrones_rl_write_ram(MicronesRLHandle *h, uint16_t addr, uint8_t value) {
+    h->nes.cpu_ram[addr & 0x07FFu] = value;
+}
+
 const uint8_t *micrones_rl_ram(const MicronesRLHandle *h) {
     return h->nes.cpu_ram;
 }

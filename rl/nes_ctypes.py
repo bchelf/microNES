@@ -100,6 +100,9 @@ class NesLib:
         lib.micrones_rl_last_error.restype  = ctypes.c_char_p
         lib.micrones_rl_last_error.argtypes = [vp]
 
+        lib.micrones_rl_write_ram.restype  = None
+        lib.micrones_rl_write_ram.argtypes = [vp, ctypes.c_uint16, ctypes.c_uint8]
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -127,6 +130,9 @@ class NesLib:
 
     def set_buttons(self, h: int, buttons: int):
         self._lib.micrones_rl_set_buttons(h, ctypes.c_uint8(buttons))
+
+    def write_ram(self, h: int, addr: int, value: int):
+        self._lib.micrones_rl_write_ram(h, ctypes.c_uint16(addr), ctypes.c_uint8(value))
 
     def frame_count(self, h: int) -> int:
         return int(self._lib.micrones_rl_frame_count(h))
