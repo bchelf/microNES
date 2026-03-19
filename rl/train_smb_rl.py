@@ -53,28 +53,41 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
 from eval_callback import CurriculumStageCallback, EvalVideoCallback
+from plateau_detector import PlateauConfig
 from smb_env import SMBEnv
 
 
 class SpeedCallback(BaseCallback):
-    """Prints env steps/sec every `report_every` timesteps."""
+    """Prints env steps/sec and rolling max_x every `report_every` timesteps."""
 
     def __init__(self, report_every: int = 10_000, verbose: int = 0):
         super().__init__(verbose)
-        self._report_every = report_every
-        self._last_steps   = 0
-        self._last_time    = time.monotonic()
+        self._report_every  = report_every
+        self._last_steps    = 0
+        self._last_time     = time.monotonic()
+        self._window_max_x  = 0   # max world_x seen in current reporting window
+        self._alltime_max_x = 0   # max world_x seen across entire training run
 
     def _on_step(self) -> bool:
+        # Track max world_x from all envs this step.
+        for info in self.locals.get("infos", []):
+            wx = info.get("world_x", 0)
+            if wx > self._window_max_x:
+                self._window_max_x = wx
+            if wx > self._alltime_max_x:
+                self._alltime_max_x = wx
+
         n = self.num_timesteps
         if n - self._last_steps >= self._report_every:
             now     = time.monotonic()
             elapsed = now - self._last_time
             sps     = (n - self._last_steps) / elapsed if elapsed > 0 else 0
             print(f"  steps={n:>10,}  sps={sps:>8,.0f}  "
-                  f"({sps / 60:.1f}x real-time per env)")
-            self._last_steps = n
-            self._last_time  = now
+                  f"({sps / 60:.1f}x real-time per env)  "
+                  f"max_x_window={self._window_max_x}  max_x_alltime={self._alltime_max_x}")
+            self._last_steps   = n
+            self._last_time    = now
+            self._window_max_x = 0   # reset window for next interval
         return True
 
 
@@ -166,6 +179,69 @@ def main():
         metavar="W",
         help="Sampling weights for --stage2-levels (default: uniform).",
     )
+    # ---- Eval / plateau detection ----
+    parser.add_argument(
+        "--eval-episodes",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Deterministic eval episodes per level per checkpoint (default: 5).",
+    )
+    parser.add_argument(
+        "--opening-thresholds",
+        nargs="+",
+        default=None,
+        metavar="LEVEL:X",
+        help="Override opening section x threshold per level, e.g. 1-3:600 1-1:800.",
+    )
+    parser.add_argument(
+        "--plateau-window",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Rolling window of eval snapshots for plateau detection (default: 8).",
+    )
+    parser.add_argument(
+        "--plateau-max-x-gain",
+        type=float,
+        default=50.0,
+        metavar="F",
+        help="Min max_x_mean gain over plateau window to avoid plateau flag (default: 50).",
+    )
+    parser.add_argument(
+        "--plateau-passed-opening-gain",
+        type=float,
+        default=0.05,
+        metavar="F",
+        help="Min passed_opening_rate gain over window (default: 0.05).",
+    )
+    parser.add_argument(
+        "--plateau-success-gain",
+        type=float,
+        default=0.02,
+        metavar="F",
+        help="Min success_rate gain over window (default: 0.02).",
+    )
+    parser.add_argument(
+        "--plateau-stop-level",
+        default=None,
+        metavar="LEVEL",
+        help="Stop training when this level plateaus for --plateau-stop-patience windows.",
+    )
+    parser.add_argument(
+        "--plateau-stop-patience",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Consecutive plateau windows before stopping (0 = disabled, default: 0).",
+    )
+    parser.add_argument(
+        "--ent-coef",
+        type=float,
+        default=0.01,
+        metavar="F",
+        help="PPO entropy coefficient (default: 0.01; try 0.02-0.05 to combat entropy collapse).",
+    )
     args = parser.parse_args()
 
     # ---- Validate and resolve curriculum settings ----
@@ -224,8 +300,16 @@ def main():
         print(f"Stage-2 levels: {', '.join(stage2_levels)}")
     print(f"Eval levels:    {', '.join(eval_levels)}")
     print(f"Eval interval:  {args.eval_interval:,} steps")
+    print(f"Eval episodes:  {args.eval_episodes} per level")
     print(f"Checkpoints:    {args.checkpoint_dir}/")
     print(f"Eval videos:    {args.video_dir}/")
+    print(f"Plateau window: {args.plateau_window}  "
+          f"max_x_gain={args.plateau_max_x_gain}  "
+          f"passed_gain={args.plateau_passed_opening_gain}  "
+          f"success_gain={args.plateau_success_gain}")
+    if args.plateau_stop_level:
+        print(f"Plateau stop:   {args.plateau_stop_level} "
+              f"after {args.plateau_stop_patience} consecutive windows")
 
     # Save frame_skip and obs config alongside curriculum metadata.
     curriculum_meta["frame_skip"]        = args.frame_skip
@@ -257,7 +341,7 @@ def main():
         gamma           = 0.99,
         gae_lambda      = 0.95,
         clip_range      = 0.2,
-        ent_coef        = 0.01,
+        ent_coef        = args.ent_coef,
         vf_coef         = 0.5,
         max_grad_norm   = 0.5,
         tensorboard_log = args.log_dir,
@@ -276,18 +360,37 @@ def main():
     else:
         model = PPO(**ppo_kwargs)
 
+    # Parse opening thresholds overrides.
+    opening_thresholds_override: dict[str, int] = {}
+    if args.opening_thresholds:
+        for item in args.opening_thresholds:
+            lvl, x = item.split(":")
+            opening_thresholds_override[lvl.strip()] = int(x.strip())
+
+    plateau_cfg = PlateauConfig(
+        window                    = args.plateau_window,
+        min_max_x_gain            = args.plateau_max_x_gain,
+        min_passed_opening_gain   = args.plateau_passed_opening_gain,
+        min_success_rate_gain     = args.plateau_success_gain,
+        stop_patience             = args.plateau_stop_patience,
+    )
+
     callbacks = [
         EvalVideoCallback(
-            rom_path         = args.rom,
-            checkpoint_dir   = args.checkpoint_dir,
-            video_dir        = args.video_dir,
-            eval_interval    = args.eval_interval,
-            eval_levels      = eval_levels,
-            max_eval_steps   = args.max_eval_steps,
-            frame_skip       = args.frame_skip,
-            use_platform_obs = args.platform_obs,
-            platform_shaping = args.platform_shaping,
-            verbose          = 1,
+            rom_path            = args.rom,
+            checkpoint_dir      = args.checkpoint_dir,
+            video_dir           = args.video_dir,
+            eval_interval       = args.eval_interval,
+            eval_levels         = eval_levels,
+            max_eval_steps      = args.max_eval_steps,
+            frame_skip          = args.frame_skip,
+            use_platform_obs    = args.platform_obs,
+            platform_shaping    = args.platform_shaping,
+            n_eval_episodes     = args.eval_episodes,
+            opening_thresholds  = opening_thresholds_override or None,
+            plateau_config      = plateau_cfg,
+            plateau_stop_level  = args.plateau_stop_level,
+            verbose             = 1,
         ),
         SpeedCallback(report_every=10_000),
     ]

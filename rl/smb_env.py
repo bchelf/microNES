@@ -45,6 +45,9 @@ from nes_ctypes import (
     NES_BUTTON_LEFT, NES_BUTTON_RIGHT, NES_BUTTON_START,
     NesLib,
 )
+from level_config import (
+    LEVEL_CHECKPOINTS, ROUTE_VIABILITY_CONFIGS, StartMode, RouteViabilityConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Action space
@@ -135,6 +138,16 @@ LOOKAHEAD_N = 5   # columns ahead to check for gap/obstacle/enemy signals
 # Max tile search distance for progress-to-next-object signals (in tiles)
 _DIST_MAX_TILES = 16
 
+# ---------------------------------------------------------------------------
+# Temporal tracking window
+# ---------------------------------------------------------------------------
+TEMPORAL_WINDOW = 16  # steps of history for temporal context features
+
+# Jump action indices (any action that presses A)
+_JUMP_ACTIONS = frozenset([3, 4, 7, 8, 9])
+# Left-movement action indices
+_LEFT_ACTIONS = frozenset([5, 6, 7, 8])
+
 
 # ---------------------------------------------------------------------------
 # SMBEnv
@@ -150,9 +163,15 @@ class SMBEnv(gym.Env):
     FRAME_SKIP = 3
     MAX_STEPS  = 20_000
 
-    # Stagnation: if max progress over this many steps < threshold, truncate.
-    STAGNATION_WINDOW = 100   # steps (~5 seconds at frame_skip=3)
-    STAGNATION_PIXELS = 64    # must advance 64px within the window
+    # Stagnation: if x-span over this many steps < threshold AND no valid
+    # recovery pattern detected, truncate the episode.
+    STAGNATION_WINDOW   = 120   # steps (~6 seconds at frame_skip=3)
+    STAGNATION_PIXELS   = 80    # must cover 80px of x-span within the window
+    # Recovery: if Mario backed up >= this many px from peak x and is now
+    # trending forward, suppress stagnation (legitimate recovery in progress).
+    RECOVERY_BACKWARD_THRESHOLD = 24  # px backed up from window max_x
+    # Fast-forward max frames per pixel when advancing to checkpoint start
+    _CHECKPOINT_FF_FRAMES_PER_PX = 8
 
     def __init__(
         self,
@@ -198,11 +217,29 @@ class SMBEnv(gym.Env):
         self._prev_enemy_screen_x = np.zeros(5, dtype=np.int32)
         self._action_history: deque[int] = deque([0, 0, 0, 0], maxlen=4)
         self._prev_reward_x: int = 0
+        self._episode_max_x: int = 0
 
         # Platform shaping state (always tracked, used for reward regardless of obs flag)
         self._prev_over_void: bool = False
         self._crossed_void:   bool = False
         self._cur_plat: dict       = {}
+
+        # Per-episode death latches — set inside step(), read via info dict.
+        self._recent_frames: deque      = deque(maxlen=20)
+        self._episode_died:        bool = False
+        self._episode_fall_death:  bool = False
+        self._episode_death_x: int | None = None
+
+        # Temporal tracking (updated each step inside _get_obs)
+        self._temporal_x:       deque[int]  = deque([0]*TEMPORAL_WINDOW,   maxlen=TEMPORAL_WINDOW)
+        self._temporal_y:       deque[int]  = deque([128]*TEMPORAL_WINDOW, maxlen=TEMPORAL_WINDOW)
+        self._temporal_ground:  deque[int]  = deque([1]*TEMPORAL_WINDOW,   maxlen=TEMPORAL_WINDOW)
+        self._temporal_facing:  deque[int]  = deque([1]*TEMPORAL_WINDOW,   maxlen=TEMPORAL_WINDOW)
+        self._temporal_actions: deque[int]  = deque([0]*TEMPORAL_WINDOW,   maxlen=TEMPORAL_WINDOW)
+
+        # Curriculum start-mode tracking (for info dict / logging)
+        self._current_level:   str = self._levels[0]
+        self._last_start_mode: int = int(StartMode.FULL_LEVEL_START)
 
         self.action_space = spaces.Discrete(N_ACTIONS)
         self.observation_space = self._build_obs_space()
@@ -214,17 +251,32 @@ class SMBEnv(gym.Env):
         super().reset(seed=seed)
 
         # options["level"] overrides curriculum sampling.
+        # options["start_mode"] (int/StartMode) overrides start-mode sampling.
+        # When only "level" is given (e.g. eval), always use FULL_LEVEL_START.
         if options and "level" in options:
             level = options["level"]
+            start_mode_val = int(options.get("start_mode", StartMode.FULL_LEVEL_START))
+            target_x = 0
+            if start_mode_val != int(StartMode.FULL_LEVEL_START):
+                # Explicit start_mode: look up target_x from registry.
+                for sm, tx, _ in LEVEL_CHECKPOINTS.get(level, []):
+                    if int(sm) == start_mode_val:
+                        target_x = tx
+                        break
         else:
             rng = self.np_random if self.np_random is not None else np.random.default_rng()
             level = rng.choice(self._levels, p=self._level_weights)
+            start_mode_val, target_x = self._sample_start_mode(level, rng)
 
-        self._warm_reset(level)
+        self._current_level   = level
+        self._last_start_mode = start_mode_val
+
+        self._warm_reset_with_mode(level, target_x)
 
         self._step_count   = 0
         self._prev_world_x = self._read_world_x()
         self._prev_reward_x = self._prev_world_x
+        self._episode_max_x = self._prev_world_x
         self._world_x_history.clear()
         self._world_x_history.append(self._prev_world_x)
         self._prev_enemy_screen_x[:] = 0
@@ -232,9 +284,23 @@ class SMBEnv(gym.Env):
         self._prev_over_void = False
         self._crossed_void   = False
         self._cur_plat       = {}
+        self._recent_frames.clear()
+        self._episode_died       = False
+        self._episode_fall_death = False
+        self._episode_death_x    = None
+
+        # Reset temporal tracking to current state
+        wx = self._read_world_x()
+        sy = int(self._ram[0x00CE])
+        for _ in range(TEMPORAL_WINDOW):
+            self._temporal_x.append(wx)
+            self._temporal_y.append(sy)
+            self._temporal_ground.append(1)
+            self._temporal_facing.append(1)
+            self._temporal_actions.append(0)
 
         obs = self._get_obs()
-        return obs, {}
+        return obs, {"level": level, "start_mode": start_mode_val, "start_x": wx}
 
     def step(self, action: int) -> tuple[dict, float, bool, bool, dict]:
         buttons = ACTION_BUTTONS[action]
@@ -244,6 +310,7 @@ class SMBEnv(gym.Env):
         self._lib.set_buttons(self._h, 0)
 
         self._action_history.append(int(action))
+        self._temporal_actions.append(int(action))
         self._step_count += 1
 
         obs = self._get_obs()
@@ -251,23 +318,58 @@ class SMBEnv(gym.Env):
         world_x = self._read_world_x()
         self._world_x_history.append(world_x)
 
-        reward = self._compute_reward(obs, action, world_x)
-        self._prev_world_x = world_x
-
         dead     = bool(obs["game_flags"][0])
         complete = bool(obs["game_flags"][1])
         terminated = dead or complete
 
-        stagnating = (
-            len(self._world_x_history) >= self.STAGNATION_WINDOW
-            and (max(self._world_x_history) - min(self._world_x_history)) < self.STAGNATION_PIXELS
-        )
+        stagnating, stagnation_reason = self._check_stagnation()
         truncated = (self._step_count >= self.MAX_STEPS) or stagnating
 
-        info: dict[str, Any] = {
+        # --- Per-step frame record (for death classification) ---
+        # Appended BEFORE death latching so the current frame is in the buffer.
+        # over_void is read here while self._cur_plat reflects this exact step.
+        _over_void_now = bool(self._cur_plat.get("over_void", False)) if self._cur_plat else False
+        self._recent_frames.append({
             "world_x":    world_x,
-            "frame":      self._lib.frame_count(self._h),
-            "stagnating": stagnating,
+            "screen_y":   int(self._ram[0x00CE]),
+            "vy":         int(np.int8(self._ram[0x009F])),
+            "over_void":  _over_void_now,
+            "on_ground":  bool(obs["player_state"][5] > 0.5),
+        })
+
+        # --- Death latching ---
+        # Two triggers:
+        # 1. Explicit game death: ram[0x000E]==0x0B fires (terminated=True).
+        # 2. Stagnation-while-falling: the stagnation window fires (truncated)
+        #    while Mario is mid-fall. world_x stays constant during a pit fall
+        #    so stagnation fires before the game registers the official death state.
+        #    Detected by recent-frame evidence of sustained unsupported descent.
+        if not self._episode_died:
+            _recent_over_void = any(f["over_void"] for f in self._recent_frames)
+            _recent_falling   = sum(
+                1 for f in self._recent_frames
+                if not f["on_ground"] and f["vy"] > 2
+            ) >= 3
+            _fall_evidence = _recent_over_void or _recent_falling
+
+            if dead or (stagnating and _fall_evidence):
+                self._episode_died       = True
+                self._episode_death_x    = world_x
+                self._episode_fall_death = _fall_evidence
+
+        reward = self._compute_reward(obs, action, world_x, stagnating and not terminated)
+        self._prev_world_x = world_x
+
+        info: dict[str, Any] = {
+            "world_x":            world_x,
+            "frame":              self._lib.frame_count(self._h),
+            "stagnating":         stagnating,
+            "stagnation_reason":  stagnation_reason,
+            "level":              self._current_level,
+            "start_mode":         self._last_start_mode,
+            "episode_died":       self._episode_died,
+            "episode_fall_death": self._episode_fall_death,
+            "episode_death_x":    self._episode_death_x,
         }
         return obs, float(reward), terminated, truncated, info
 
@@ -320,10 +422,23 @@ class SMBEnv(gym.Env):
             # Platform-aware features (8 cols of support scan ahead)
             # platform_signals: [support_below, over_void, runway_remaining,
             #                    must_jump_soon, next_landing_dx,
-            #                    next_landing_dy, landing_window_width]
+            #                    next_landing_dy, ceiling_clearance]
             base["platform_signals"] = spaces.Box(-1.0, 1.0, (7,), f32)
             # Per-column support presence for 8 tiles ahead
             base["support_ahead"]    = spaces.Box( 0.0, 1.0, (8,), f32)
+
+        # Temporal context (always present): 10 features derived from recent history
+        # [recent_dx_mean, recent_dy_mean, time_since_ground, time_since_jump,
+        #  time_since_dir_change, moved_backward_recently, lost_support_recently,
+        #  net_forward_8, direction_changes_8, recent_jump_density]
+        base["temporal_context"] = spaces.Box(-1.0, 1.0, (10,), f32)
+
+        # Route viability (always present): 7 features, zeros for levels without config
+        # [passed_commit_window, recovery_still_possible, on_upper_route,
+        #  on_lower_doomed_route, dist_to_commit_norm, dist_past_commit_norm,
+        #  viable_route_encoded]
+        base["route_viability"]  = spaces.Box( 0.0, 1.0, (7,), f32)
+
         return spaces.Dict(base)
 
     # ------------------------------------------------------------------
@@ -349,8 +464,20 @@ class SMBEnv(gym.Env):
 
         speed       = abs(float(vx_raw)) / 40.0
 
+        # --- Tile grid (computed first to derive on_ground) ---
+        mario_tx = (scroll_px + mario_sx) // 8
+        mario_ty = mario_sy // 8
+        grid = self._build_tile_grid(mario_tx, mario_ty)
+
+        # on_ground: tile-based support proxy.
+        # ram[0x001C] is always 0 in practice; derive from solid tiles below feet.
+        _support_below_raw = any(
+            _SEMANTIC_IS_SOLID[int(grid[r, MARIO_COL])]
+            for r in range(MARIO_ROW + 2, GRID_ROWS)
+        )
+        on_ground = int(_support_below_raw)
+
         # Jump phase: 0=grounded, 1=rising, 2=apex, 3=falling
-        on_ground = int(ram[0x001C] != 0)
         if on_ground:
             jump_phase = 0
         elif vy_raw < -2:
@@ -359,11 +486,6 @@ class SMBEnv(gym.Env):
             jump_phase = 2
         else:
             jump_phase = 3
-
-        # --- Tile grid ---
-        mario_tx = (scroll_px + mario_sx) // 8
-        mario_ty = mario_sy // 8
-        grid = self._build_tile_grid(mario_tx, mario_ty)
 
         # --- Distance to ground (from Mario's feet downward) ---
         dist_to_ground = self._scan_down_for_solid(grid, MARIO_ROW + 1)
@@ -432,7 +554,7 @@ class SMBEnv(gym.Env):
         level_context = np.array([
             float(int(ram[0x075F]) / 7.0),
             float(int(ram[0x075C]) / 3.0),
-            float(int(ram[0x0760]) / 3.0),
+            float(int(ram[0x0760]) / 255.0),
             float(np.clip(scroll_px / 8192.0, 0, 1)),
             float(np.clip(time_val  / 400.0,  0, 1)),
             float(int(ram[0x071B])  / 31.0),
@@ -461,6 +583,18 @@ class SMBEnv(gym.Env):
         # Platform-aware features — always computed (reward uses them), obs optional.
         self._cur_plat = self._compute_platform_state(grid)
 
+        # --- Update temporal tracking with this step's values ---
+        facing_right = int(int(ram[0x0033]) == 0)
+        self._temporal_x.append(world_x)
+        self._temporal_y.append(mario_sy)
+        self._temporal_ground.append(on_ground)
+        self._temporal_facing.append(facing_right)
+        # Note: _temporal_actions already updated in step() before _get_obs() is called.
+        # For the reset() case the deque is pre-filled, so the latest action (0=noop) is fine.
+
+        temporal_ctx   = self._compute_temporal_features()
+        route_viab     = self._compute_route_viability(world_x, mario_sy)
+
         obs = {
             "player_state":       player_state,
             "level_context":      level_context,
@@ -478,6 +612,8 @@ class SMBEnv(gym.Env):
             "tile_grid":          grid.astype(np.float32) / 7.0,
             "enemies":            enemies_arr,
             "objects":            objects,
+            "temporal_context":   temporal_ctx,
+            "route_viability":    route_viab,
         }
         if self._use_platform_obs:
             obs["platform_signals"] = self._cur_plat["platform_signals"]
@@ -554,18 +690,19 @@ class SMBEnv(gym.Env):
             )
             dy = (landing_row - ground_start) / float(max(GRID_ROWS - ground_start, 1))
             next_landing_dy = float(np.clip(dy * 2.0 - 1.0, -1.0, 1.0))  # centre around 0
-            # landing width
-            width = 0
-            for j in range(next_land_col, GRID_COLS - mc):
-                if has_support(mc + j):
-                    width += 1
-                else:
-                    break
-            landing_window_width = float(min(width, 8)) / 8.0
         else:
-            next_landing_dx      = 1.0
-            next_landing_dy      = 0.0
-            landing_window_width = 0.0
+            next_landing_dx = 1.0
+            next_landing_dy = 0.0
+
+        # --- ceiling_clearance: rows of open space directly above Mario ---
+        # Replaces landing_window_width (less useful than ceiling info for 1-4/castles).
+        # 1.0 = fully open overhead, 0.0 = ceiling tile right above Mario.
+        ceiling_clearance = MARIO_ROW  # default: all rows above are open
+        for r in range(MARIO_ROW - 1, -1, -1):
+            if _SEMANTIC_IS_SOLID[int(grid[r, mc])]:
+                ceiling_clearance = MARIO_ROW - 1 - r
+                break
+        ceiling_clearance_norm = float(ceiling_clearance) / float(MARIO_ROW)
 
         platform_signals = np.array([
             support_below,
@@ -574,7 +711,7 @@ class SMBEnv(gym.Env):
             must_jump_soon,
             next_landing_dx,
             next_landing_dy,
-            landing_window_width,
+            ceiling_clearance_norm,
         ], dtype=np.float32)
 
         return {
@@ -583,6 +720,312 @@ class SMBEnv(gym.Env):
             "over_void":        bool(over_void > 0.5),
             "support_below":    bool(support_below > 0.5),
         }
+
+    # ------------------------------------------------------------------
+    # Temporal context features
+    # ------------------------------------------------------------------
+    def _compute_temporal_features(self) -> np.ndarray:
+        """
+        Compute 10 temporal-context features from recent history deques.
+
+        Features (all float32, range [-1,1] or [0,1]):
+          0  recent_dx_mean:       mean x-delta over last 8 steps / 10  → [-1,1]
+          1  recent_dy_mean:       mean y-delta over last 8 steps / 10  → [-1,1]
+          2  time_since_ground:    steps since on_ground / 40           → [0,1]
+          3  time_since_jump:      steps since jump action / 40         → [0,1]
+          4  time_since_dir_chg:   steps since facing changed / 40      → [0,1]
+          5  moved_backward_recent: any leftward step in last 16         → {0,1}
+          6  lost_support_recent:  any not-on-ground in last 8          → {0,1}
+          7  net_forward_8:        (x[-1]-x[-8]) / 80                  → [-1,1]
+          8  dir_changes_8:        facing changes in last 8 / 4         → [0,1]
+          9  jump_density_8:       frac of last 8 actions with jump     → [0,1]
+        """
+        tx = list(self._temporal_x)
+        ty = list(self._temporal_y)
+        tg = list(self._temporal_ground)
+        tf = list(self._temporal_facing)
+        ta = list(self._temporal_actions)
+        n  = len(tx)
+
+        # Deltas over last 8 entries
+        k = min(8, n)
+        if k >= 2:
+            dx_vals = [tx[-(k-1)+i] - tx[-(k-1)+i-1] if i > 0 else 0
+                       for i in range(k)]
+            dy_vals = [ty[-(k-1)+i] - ty[-(k-1)+i-1] if i > 0 else 0
+                       for i in range(k)]
+            recent_dx = float(np.clip(np.mean(dx_vals[1:]) / 10.0, -1, 1))
+            recent_dy = float(np.clip(np.mean(dy_vals[1:]) / 10.0, -1, 1))
+        else:
+            recent_dx = 0.0
+            recent_dy = 0.0
+
+        # Time-since counters (scan from newest backward)
+        time_ground  = 0
+        time_jump    = 0
+        time_dir_chg = 0
+        found_ground = found_jump = found_dir = False
+        for i in range(n - 1, -1, -1):
+            if not found_ground:
+                if tg[i]:
+                    found_ground = True
+                else:
+                    time_ground += 1
+            if not found_jump:
+                if ta[i] in _JUMP_ACTIONS:
+                    found_jump = True
+                else:
+                    time_jump += 1
+            if not found_dir:
+                # Look for a facing change between step i and i+1
+                if i + 1 < n and tf[i] != tf[i + 1]:
+                    found_dir = True
+                else:
+                    time_dir_chg += 1
+            if found_ground and found_jump and found_dir:
+                break
+
+        time_ground_n  = float(np.clip(time_ground  / 40.0, 0, 1))
+        time_jump_n    = float(np.clip(time_jump    / 40.0, 0, 1))
+        time_dir_chg_n = float(np.clip(time_dir_chg / 40.0, 0, 1))
+
+        # Moved backward recently (any leftward x-delta in last 16 steps)
+        moved_back = 0.0
+        for i in range(max(1, n - 16), n):
+            if tx[i] < tx[i - 1] - 1:
+                moved_back = 1.0
+                break
+
+        # Lost support recently (any not-on-ground in last 8)
+        lost_support = 0.0
+        for i in range(max(0, n - 8), n):
+            if not tg[i]:
+                lost_support = 1.0
+                break
+
+        # Net forward progress over last 8
+        if n >= 8:
+            net_fwd = float(np.clip((tx[-1] - tx[-8]) / 80.0, -1, 1))
+        else:
+            net_fwd = 0.0
+
+        # Direction changes in last 8 facing values
+        dir_changes = 0
+        k8 = min(8, n)
+        for i in range(max(0, n - k8), n - 1):
+            if tf[i] != tf[i + 1]:
+                dir_changes += 1
+        dir_changes_n = float(np.clip(dir_changes / 4.0, 0, 1))
+
+        # Jump density in last 8 actions
+        k8a = min(8, n)
+        jump_density = float(sum(1 for a in ta[-k8a:] if a in _JUMP_ACTIONS)) / max(k8a, 1)
+
+        return np.array([
+            recent_dx,
+            recent_dy,
+            time_ground_n,
+            time_jump_n,
+            time_dir_chg_n,
+            moved_back,
+            lost_support,
+            net_fwd,
+            dir_changes_n,
+            jump_density,
+        ], dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    # Route viability features
+    # ------------------------------------------------------------------
+    def _compute_route_viability(self, world_x: int, mario_sy: int) -> np.ndarray:
+        """
+        Compute 7 route-viability features for hard-motif levels.
+
+        Returns all zeros for levels without a RouteViabilityConfig entry.
+
+        Features (all float32, range [0,1]):
+          0  passed_commit_window:    1 if world_x > commit_window_end_x
+          1  recovery_still_possible: 1 if can still backtrack to upper route
+          2  on_upper_route:          1 if mario_sy <= upper_route_screen_y
+          3  on_lower_doomed_route:   1 if on lower path AND past commit window
+          4  dist_to_commit_norm:     distance to window start / 1024  (0 if past)
+          5  dist_past_commit_norm:   distance past window end  / 1024 (0 if not past)
+          6  viable_route_encoded:    0=pre-commit, 0.33=upper, 0.66=recoverable, 1=doomed
+        """
+        cfg: RouteViabilityConfig | None = ROUTE_VIABILITY_CONFIGS.get(self._current_level)
+        if cfg is None:
+            return np.zeros(7, dtype=np.float32)
+
+        passed_commit = int(world_x > cfg.commit_window_end_x)
+        recovery_ok   = int(world_x <= cfg.recovery_impossible_x)
+        on_upper      = int(mario_sy <= cfg.upper_route_screen_y)
+        on_lower_doom = int(
+            passed_commit and mario_sy >= cfg.lower_doom_screen_y
+            and not on_upper
+        )
+
+        if world_x < cfg.commit_window_x:
+            dist_to = float(np.clip(
+                (cfg.commit_window_x - world_x) / 1024.0, 0, 1
+            ))
+        else:
+            dist_to = 0.0
+
+        if world_x > cfg.commit_window_end_x:
+            dist_past = float(np.clip(
+                (world_x - cfg.commit_window_end_x) / 1024.0, 0, 1
+            ))
+        else:
+            dist_past = 0.0
+
+        # Encoded route state: 0=pre-commit  0.33=upper  0.66=recoverable  1.0=doomed
+        if not passed_commit:
+            route_enc = 0.0
+        elif on_upper:
+            route_enc = 1.0 / 3.0
+        elif recovery_ok and not on_lower_doom:
+            route_enc = 2.0 / 3.0
+        else:
+            route_enc = 1.0
+
+        return np.array([
+            float(passed_commit),
+            float(recovery_ok),
+            float(on_upper),
+            float(on_lower_doom),
+            dist_to,
+            dist_past,
+            route_enc,
+        ], dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    # Stagnation detection (recovery-aware)
+    # ------------------------------------------------------------------
+    def _check_stagnation(self) -> tuple[bool, str]:
+        """
+        Returns (is_stagnating, reason_str).
+
+        Logic:
+          1. If x-span over STAGNATION_WINDOW >= STAGNATION_PIXELS → not stagnating.
+          2. If backed up from window-peak by >= RECOVERY_BACKWARD_THRESHOLD AND
+             the last 20 steps show a positive x-trend → valid recovery, not stagnating.
+          3. Otherwise → stagnating (dithering / stuck).
+        """
+        hist = self._world_x_history
+        if len(hist) < self.STAGNATION_WINDOW:
+            return False, ""
+
+        x_max  = max(hist)
+        x_min  = min(hist)
+        x_span = x_max - x_min
+
+        if x_span >= self.STAGNATION_PIXELS:
+            return False, ""
+
+        # x-span is small — check for meaningful recovery
+        hist_list = list(hist)
+        end_x     = hist_list[-1]
+
+        # Did the agent back up significantly from the window's peak?
+        backed_up = (x_max - end_x) >= self.RECOVERY_BACKWARD_THRESHOLD
+
+        # Is the agent currently trending forward over the last 20 steps?
+        recent = hist_list[-20:]
+        trending_fwd = len(recent) >= 4 and recent[-1] > recent[0]
+
+        if backed_up and trending_fwd:
+            # Backed off a higher position and is now moving forward → recovery.
+            return False, ""
+
+        # True stagnation: classify as dithering or stuck.
+        # Count direction reversals in x: many reversals = dithering.
+        deltas = [hist_list[i + 1] - hist_list[i] for i in range(len(hist_list) - 1)]
+        sign_flips = sum(
+            1 for i in range(len(deltas) - 1)
+            if deltas[i] != 0 and deltas[i + 1] != 0
+            and (deltas[i] > 0) != (deltas[i + 1] > 0)
+        )
+        reason = "dithering" if sign_flips > 8 else "stuck"
+        return True, reason
+
+    # ------------------------------------------------------------------
+    # Curriculum start-mode sampling
+    # ------------------------------------------------------------------
+    def _sample_start_mode(self, level: str, rng) -> tuple[int, int]:
+        """
+        Sample a (start_mode_val, target_x) pair from LEVEL_CHECKPOINTS.
+
+        For levels without checkpoint definitions, returns (FULL_LEVEL_START, 0).
+        """
+        entries = LEVEL_CHECKPOINTS.get(level)
+        if not entries:
+            return int(StartMode.FULL_LEVEL_START), 0
+
+        modes   = [e[0] for e in entries]
+        targets = [e[1] for e in entries]
+        weights = np.array([e[2] for e in entries], dtype=np.float64)
+        weights /= weights.sum()
+
+        idx = int(rng.choice(len(modes), p=weights))
+        return int(modes[idx]), targets[idx]
+
+    # ------------------------------------------------------------------
+    # Checkpoint fast-forward
+    # ------------------------------------------------------------------
+    def _warm_reset_with_mode(self, level: str, target_x: int) -> None:
+        """Normal warm reset, then optionally fast-forward to target_x."""
+        self._warm_reset(level)
+        if target_x <= 0:
+            return
+        reached = self._advance_to_target_x(target_x)
+        if not reached:
+            # Fast-forward failed (died mid-advance) → fall back to level start.
+            # Re-run a clean warm reset so state is valid.
+            self._warm_reset(level)
+
+    def _advance_to_target_x(self, target_x: int) -> bool:
+        """
+        Fast-forward Mario to target_x by scripted button presses.
+
+        Uses run-right + periodic jumps to clear most obstacles.
+        Returns True if target_x was reached, False if Mario died first.
+
+        This runs at the raw emulator level (not through env step), so
+        frame-skip and action_history are not involved.
+        """
+        run_right  = NES_BUTTON_RIGHT | NES_BUTTON_B
+        jump_right = NES_BUTTON_RIGHT | NES_BUTTON_B | NES_BUTTON_A
+        max_frames = target_x * self._CHECKPOINT_FF_FRAMES_PER_PX
+        jump_timer = 0   # counts down frames of held jump
+        jump_every = 24  # attempt a jump every N frames
+
+        for frame_idx in range(max_frames):
+            if int(self._ram[0x000E]) == 0x0B:
+                return False  # Mario died
+
+            wx = self._read_world_x()
+            if wx >= target_x:
+                break
+
+            # Alternate between run and periodic jump to clear obstacles.
+            if jump_timer > 0:
+                btns = jump_right
+                jump_timer -= 1
+            elif frame_idx % jump_every == 0:
+                btns = jump_right
+                jump_timer = 12  # hold jump for 12 frames
+            else:
+                btns = run_right
+
+            self._lib.set_buttons(self._h, btns)
+            self._lib.step(self._h)
+
+        self._lib.set_buttons(self._h, 0)
+        # Let a few frames settle so physics/tiles are stable.
+        for _ in range(20):
+            self._lib.step(self._h)
+
+        return self._read_world_x() >= target_x
 
     # ------------------------------------------------------------------
     # Tile grid construction
@@ -754,60 +1197,44 @@ class SMBEnv(gym.Env):
     # ------------------------------------------------------------------
     # Reward
     # ------------------------------------------------------------------
-    def _compute_reward(self, obs: dict, action: int, world_x: int) -> float:
+    def _compute_reward(self, obs: dict, action: int, world_x: int, stagnating: bool = False) -> float:
         r = 0.0
 
-        # Dense forward progress
+        # Dense forward progress (reduced weight vs old dx/40)
         dx = world_x - self._prev_reward_x
         if dx > 0:
-            r += float(np.clip(dx / 40.0, 0, 1.5))    # ~1.0 at full run speed
+            r += float(np.clip(dx / 60.0, 0, 1.0))
         elif dx < 0:
-            r += float(np.clip(dx / 40.0, -0.5, 0))   # mild backtrack penalty
+            r += float(np.clip(dx / 60.0, -0.5, 0))
 
         self._prev_reward_x = world_x
 
-        # Alive bonus (tiny, encourages staying alive over stagnating)
-        r += 0.002
+        # Frontier bonus: one-time reward for new per-episode maximum x.
+        # Resets each episode so it fires on every novel forward position.
+        if world_x > self._episode_max_x:
+            frontier_dx = world_x - self._episode_max_x
+            r += float(frontier_dx) / 20.0
+            self._episode_max_x = world_x
 
-        # Death penalty
+        # Death penalty (reduced from -10 to make exploration viable)
         if obs["game_flags"][0] > 0.5:
-            r -= 10.0
+            r -= 3.0
+
+        # Stagnation penalty: applied only on the truncation step.
+        # Eliminates the penalty-free oscillation exit that was the degenerate optimum.
+        if stagnating:
+            r -= 2.5
 
         # Level completion bonus + time bonus
         if obs["game_flags"][1] > 0.5:
             time_bonus = float(obs["level_context"][4]) * 5.0  # up to 5.0
             r += 10.0 + time_bonus
 
-        # Unnecessary jump penalty: jumping while on solid ground with no
-        # obstacle/gap ahead wastes time (small discouragement)
-        if action in (3, 4, 7, 8, 9):
-            on_ground      = obs["player_state"][5] > 0.5
-            gap_any        = float(obs["gap_ahead"].max())    > 0.1
-            obstacle_any   = float(obs["obstacle_ahead"].max()) > 0.1
-            if on_ground and not gap_any and not obstacle_any:
-                r -= 0.005
-
-        # --- Platform-aware shaping (disabled when platform_shaping=0.0) ---
-        if self._platform_shaping > 0.0 and self._cur_plat:
-            ps          = self._platform_shaping
-            over_void   = self._cur_plat.get("over_void", False)
-
-            # Penalty for stepping off solid ground into lethal void
-            # (support → void transition while grounded; not a jump).
-            in_air = obs["player_state"][5] < 0.5   # not on_ground flag
-            if over_void and not self._prev_over_void and not in_air:
-                r -= 0.4 * ps   # small runoff penalty
-
-            # Track whether we've been over void since last support
-            if over_void:
-                self._crossed_void = True
-
-            # Bonus for landing safely on a new platform after crossing void
-            if not over_void and self._prev_over_void and self._crossed_void:
-                r += 0.5 * ps   # landing bonus
-                self._crossed_void = False
-
-            self._prev_over_void = over_void
+        # Low-ceiling jump penalty (castle levels)
+        if action in (3, 4, 7, 8, 9) and self._cur_plat:
+            cc = float(self._cur_plat["platform_signals"][6])
+            if cc < 0.5:
+                r -= (0.5 - cc) * 0.8
 
         return float(np.clip(r, -15.0, 15.0))
 
@@ -917,3 +1344,14 @@ class SMBEnv(gym.Env):
             self._lib.write_ram(self._h, 0x075F, world_idx)
             self._lib.write_ram(self._h, 0x075C, level_idx)
             self._lib.step(self._h)
+
+        # Wait for the spawn animation to finish so the episode starts from actual
+        # gameplay, not mid-animation.  OperMode_Task ($0772) == 3 = active play;
+        # $00CE (Mario screen Y) > 0 means Mario has been placed on screen.
+        # Without this, the first ~32 env steps are during the spawn animation
+        # where all tile/platform features are garbage (sky tiles, void=1) and
+        # the policy locks into wrong action priors for that obs combination.
+        for _ in range(300):
+            self._lib.step(self._h)
+            if int(self._ram[0x0772]) >= 3 and int(self._ram[0x00CE]) > 0:
+                break
