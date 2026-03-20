@@ -8,17 +8,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write   # needed to push the gh-pages branch
 
-# Only one Pages deployment at a time; cancel in-progress if a new push lands.
+# Only one deployment at a time.
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +24,7 @@ jobs:
       - name: Install Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: 3.1.73   # latest stable at time of writing
+          version: 3.1.73
 
       - name: Configure (emcmake)
         run: emcmake cmake -S . -B build-web -DMICRONES_PLATFORM=web
@@ -34,18 +32,10 @@ jobs:
       - name: Build WASM
         run: cmake --build build-web -j$(nproc)
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      # Push build-web/ to the gh-pages branch.
+      # In repo Settings → Pages set source to: branch=gh-pages, folder=/ (root).
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: build-web/   # contains micrones.js, micrones.wasm, index.html
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: build-web
