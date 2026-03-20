@@ -43,8 +43,14 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
-from eval_callback import CurriculumStageCallback, EvalVideoCallback
+from eval_callback import (
+    CurriculumStageCallback,
+    DiagnosticsCallback,
+    EntropySchedulerCallback,
+    EvalVideoCallback,
+)
 from smb_env import SMBEnv
+from wrappers import DeathPenaltyWrapper, NewMaxXWrapper, SurvivalBonusWrapper
 
 
 class SpeedCallback(BaseCallback):
@@ -77,13 +83,17 @@ def make_env_fn(
 ):
     """Factory for SubprocVecEnv — runs headless, no rendering."""
     def _init():
-        return SMBEnv(
+        env = SMBEnv(
             rom_path=rom_path,
             lib_path=lib_path,
             render_mode=None,
             levels=levels,
             level_weights=level_weights,
         )
+        env = NewMaxXWrapper(env)
+        env = SurvivalBonusWrapper(env)
+        env = DeathPenaltyWrapper(env)
+        return env
     return _init
 
 
@@ -200,6 +210,10 @@ def main():
     print(f"Eval interval:  {args.eval_interval:,} steps")
     print(f"Checkpoints:    {args.checkpoint_dir}/")
     print(f"Eval videos:    {args.video_dir}/")
+    print(f"Wrapper stack:  SMBEnv → NewMaxXWrapper(scale=2.0, max_x_seen_init=400)"
+          f" → SurvivalBonusWrapper(bonus=0.02)"
+          f" → DeathPenaltyWrapper(penalty=4.0, additive)"
+          f" → SubprocVecEnv → VecMonitor")
 
     # Headless training envs (start with stage-1 curriculum).
     env_fns = [
@@ -209,17 +223,26 @@ def main():
     vec_env = SubprocVecEnv(env_fns)
     vec_env = VecMonitor(vec_env, filename=os.path.join(args.log_dir, "monitor"))
 
+    # Capture start observation for DiagnosticsCallback Group E (value_at_start_state).
+    # A temporary single-env instance is used so the live vec_env is NOT touched.
+    _tmp_env = make_env_fn(
+        args.rom, args.lib, levels=stage1_levels, level_weights=stage1_weights
+    )()
+    _start_obs, _ = _tmp_env.reset()
+    _tmp_env.close()
+    del _tmp_env
+
     ppo_kwargs = dict(
         policy          = "MultiInputPolicy",
         env             = vec_env,
-        n_steps         = 512,
+        n_steps         = 1024,
         batch_size      = 256,
         n_epochs        = 4,
         learning_rate   = 3e-4,
         gamma           = 0.99,
         gae_lambda      = 0.95,
         clip_range      = 0.2,
-        ent_coef        = 0.01,
+        ent_coef        = 0.02,
         vf_coef         = 0.5,
         max_grad_norm   = 0.5,
         tensorboard_log = args.log_dir,
@@ -238,6 +261,16 @@ def main():
     else:
         model = PPO(**ppo_kwargs)
 
+    print(
+        "Diagnostics metrics (TensorBoard 'diagnostics/' group):\n"
+        "  A — spatial:  max_x_episode, max_x_global\n"
+        "  B — death:    steps_before_death, death_penalty_applied, died_before_obstacle\n"
+        "  C — survival: survival_bonus_total, survival_fraction\n"
+        "  D — entropy:  ent_coef_current, policy_entropy  (every step)\n"
+        f"  E — value:    value_at_start_state  (every 10,000 steps, "
+        f"start_obs={'captured' if _start_obs else 'MISSING'})"
+    )
+
     callbacks = [
         EvalVideoCallback(
             rom_path       = args.rom,
@@ -249,6 +282,8 @@ def main():
             verbose        = 1,
         ),
         SpeedCallback(report_every=10_000),
+        EntropySchedulerCallback(),
+        DiagnosticsCallback(start_obs=_start_obs),
     ]
 
     if two_stage:
@@ -258,6 +293,32 @@ def main():
             stage2_weights = stage2_weights,
             verbose        = 1,
         ))
+
+    # ---- Startup health check (runs before model.learn()) ----
+    _cur_ent_coef = model.ent_coef
+    if callable(_cur_ent_coef):
+        _cur_ent_coef = _cur_ent_coef(1.0)
+    try:
+        _cur_max_x = vec_env.get_attr("max_x_seen")[0]
+    except Exception:
+        _cur_max_x = "unavailable"
+    _cb_names = [type(cb).__name__ for cb in callbacks]
+    print("=" * 56)
+    print("TRAINING HEALTH CHECK")
+    print(f"Wrapper stack:  SMBEnv → NewMaxXWrapper → SurvivalBonusWrapper"
+          f" → DeathPenaltyWrapper → SubprocVecEnv → VecMonitor")
+    print(f"ent_coef:       {float(_cur_ent_coef)}")
+    print(f"max_x_seen:     {_cur_max_x}  (env 0)")
+    print(f"Callbacks:      {_cb_names}")
+    _has_diag    = any(isinstance(cb, DiagnosticsCallback)    for cb in callbacks)
+    _has_entropy = any(isinstance(cb, EntropySchedulerCallback) for cb in callbacks)
+    print(f"DiagnosticsCallback present:      {_has_diag}")
+    print(f"EntropySchedulerCallback present: {_has_entropy}")
+    print("Episode end types: "
+          "death=obs[game_flags][0] (RAM 0x000E==0x0B) | "
+          "complete=info[level_complete] (RAM 0x001D==0x03) | "
+          "truncation=stagnation/timeout (no RAM flag)")
+    print("=" * 56)
 
     model.learn(
         total_timesteps     = args.timesteps,

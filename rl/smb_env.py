@@ -177,6 +177,14 @@ DOOM_PENALTY      = 0.3   # one-shot doomed-state entry penalty
 LANDING_BONUS     = 0.2   # bonus when landing on a viability-improving surface
 VIABILITY_IMPROVE = 0.10  # min V improvement on landing to grant landing bonus
 
+# ---------------------------------------------------------------------------
+# Exploration / breakthrough reward parameters
+# ---------------------------------------------------------------------------
+NEW_MAX_X_COEF    = 0.05  # bonus per pixel of new episode-max progress
+STAGNATION_WINDOW = 120   # steps without new max-x before penalty kicks in
+STAGNATION_PENALTY= 0.01  # reward penalty per step while stagnating
+STAGNATION_EARLY_STOP = 300  # truncate if stuck for this many steps
+
 
 def _nt_semantic(nametables, world_tx: int, world_ty: int) -> int:
     """Tile semantic at nametable position. Returns TILE_SOLID for out-of-bounds."""
@@ -197,7 +205,7 @@ class SMBEnv(gym.Env):
     Requires libmicrones_rl.{so,dylib} from the build-host target.
     """
 
-    metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 60}
 
     FRAME_SKIP = 3
     MAX_STEPS  = 20_000
@@ -258,6 +266,8 @@ class SMBEnv(gym.Env):
         self._time_since_dir_chg: int  = 30
         self._prev_facing:        int  = 1   # 1 = facing right
         self._prev_viability_score: float = 0.5   # neutral start
+        self._episode_max_x:   int = 0
+        self._last_progress_step: int = 0
 
         self.action_space = spaces.Discrete(N_ACTIONS)
         self.observation_space = self._build_obs_space()
@@ -297,6 +307,8 @@ class SMBEnv(gym.Env):
         self._time_since_dir_chg = 30
         self._prev_facing        = 1
         self._prev_viability_score = 0.5
+        self._episode_max_x    = self._prev_world_x
+        self._last_progress_step = 0
 
         obs = self._get_obs()
         return obs, {}
@@ -334,7 +346,12 @@ class SMBEnv(gym.Env):
             len(self._world_x_history) >= self.STAGNATION_WINDOW
             and (max(self._world_x_history) - min(self._world_x_history)) < self.STAGNATION_PIXELS
         )
-        truncated = (self._step_count >= self.MAX_STEPS) or stagnating
+        steps_since_progress = self._step_count - self._last_progress_step
+        truncated = (
+            (self._step_count >= self.MAX_STEPS)
+            or stagnating
+            or (steps_since_progress >= STAGNATION_EARLY_STOP)
+        )
 
         info: dict[str, Any] = {
             "world_x":    world_x,
@@ -1235,6 +1252,17 @@ class SMBEnv(gym.Env):
         # --- Doomed-state entry penalty: sharp viability drop into doomed zone ---
         if viability_now < DOOM_THRESHOLD and delta_V < -DOOM_DROP_MIN:
             r -= DOOM_PENALTY
+
+        # --- New-episode-max-x bonus ---
+        new_max_delta = world_x - self._episode_max_x
+        if new_max_delta > 0:
+            r += NEW_MAX_X_COEF * new_max_delta
+            self._episode_max_x    = world_x
+            self._last_progress_step = self._step_count
+
+        # --- Stagnation penalty ---
+        if (self._step_count - self._last_progress_step) > STAGNATION_WINDOW:
+            r -= STAGNATION_PENALTY
 
         return float(np.clip(r, -15.0, 15.0))
 

@@ -14,7 +14,7 @@ Options:
     --n-episodes N      Number of episodes to record; best run saved to video (default: 1)
     --out PATH          Output MP4 path (default: <level>_<model_stem>.mp4)
     --max-steps N       Max env steps per episode (default: 5000)
-    --fps N             Output video FPS (default: 20)
+    --fps N             Output video FPS (default: 60)
     --lib PATH          Path to libmicrones_rl_render (auto-detected if omitted)
 """
 
@@ -87,7 +87,7 @@ def main():
                         help="Episodes to run; best by max_x saved to video (default: 1)")
     parser.add_argument("--out",        default=None,  help="Output MP4 path")
     parser.add_argument("--max-steps",  type=int, default=5000)
-    parser.add_argument("--fps",        type=int, default=20)
+    parser.add_argument("--fps",        type=int, default=60)
     parser.add_argument("--lib",        default=None,  help="Path to libmicrones_rl_render")
     args = parser.parse_args()
 
