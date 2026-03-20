@@ -4,6 +4,12 @@ Train a PPO agent on SMBEnv using Stable-Baselines3.
 Usage:
     python rl/train_smb_rl.py --rom roms/smb1.nes
 
+    # With RND intrinsic motivation (default: enabled):
+    python rl/train_smb_rl.py --rom roms/smb1.nes --rnd-scale 1.0
+
+    # Disable RND:
+    python rl/train_smb_rl.py --rom roms/smb1.nes --no-rnd
+
     # Two-stage curriculum: 1-1/1-2 for 2M steps, then add 1-3/1-4 forever
     python rl/train_smb_rl.py --rom roms/smb1.nes \\
         --levels 1-1 1-2 --level-weights 2 1 \\
@@ -27,6 +33,9 @@ Options:
     --stage2-levels LEVEL . Stage-2 level list (required if --stage1-steps set)
     --stage2-weights W ...  Sampling weights for --stage2-levels (default: uniform)
     --eval-levels LEVEL ... Levels to record eval videos for (default: all stage levels)
+    --no-rnd                Disable RND intrinsic motivation (default: RND enabled)
+    --rnd-scale FLOAT       Intrinsic reward multiplier (default: 1.0)
+    --rnd-warmup-steps N    Random steps to prime obs_rms before training (default: 1000)
 """
 
 import argparse
@@ -39,6 +48,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 import numpy as np
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
@@ -48,9 +58,11 @@ from eval_callback import (
     DiagnosticsCallback,
     EntropySchedulerCallback,
     EvalVideoCallback,
+    RNDTrainerCallback,
 )
+from rnd import flat_obs_dim_from_space, make_rnd_networks
 from smb_env import SMBEnv
-from wrappers import DeathPenaltyWrapper, NewMaxXWrapper, SurvivalBonusWrapper
+from wrappers import DeathPenaltyWrapper, NewMaxXWrapper, RNDWrapper, SurvivalBonusWrapper
 
 
 class SpeedCallback(BaseCallback):
@@ -80,8 +92,36 @@ def make_env_fn(
     lib_path: str | None,
     levels: list[str] | None = None,
     level_weights: list[float] | None = None,
+    rnd_obs_shape: tuple | None = None,
+    rnd_embedding_dim: int = 512,
+    rnd_scale: float = 1.0,
 ):
-    """Factory for SubprocVecEnv — runs headless, no rendering."""
+    """
+    Factory for SubprocVecEnv — runs headless, no rendering.
+
+    Wrapper stack (innermost → outermost):
+      SMBEnv
+        → NewMaxXWrapper(scale=2.0)        lifetime frontier bonus
+        → SurvivalBonusWrapper(bonus=0.02) per-step alive bonus
+        → DeathPenaltyWrapper(penalty=4.0) additive death penalty
+        → RNDWrapper(scale=rnd_scale)      intrinsic curiosity (when enabled)
+
+    RNDWrapper is the outermost single-env wrapper.  RND networks are created
+    INSIDE each subprocess worker (always on CPU) to avoid MPS + forkserver
+    incompatibility.  On macOS, SB3's SubprocVecEnv uses forkserver, which
+    forks workers from a clean server process where MPS is never initialized;
+    passing MPS tensors through the closure causes silent worker crashes.
+
+    After SubprocVecEnv is constructed, train_smb_rl.py syncs the main-process
+    target and predictor weights to all workers via env_method so that all
+    workers start from the same network state as the main process.
+
+    The main-process networks (on MPS/CUDA/CPU) are trained by
+    RNDTrainerCallback, which then syncs predictor weights to subprocesses
+    via env_method("sync_rnd_predictor") after each rollout.
+    """
+    use_rnd = rnd_obs_shape is not None
+
     def _init():
         env = SMBEnv(
             rom_path=rom_path,
@@ -93,6 +133,21 @@ def make_env_fn(
         env = NewMaxXWrapper(env)
         env = SurvivalBonusWrapper(env)
         env = DeathPenaltyWrapper(env)
+        if use_rnd:
+            # Create networks fresh inside the worker, always on CPU.
+            # Weights are overwritten immediately by the initial sync in main().
+            _target, _predictor = make_rnd_networks(
+                obs_shape     = rnd_obs_shape,
+                embedding_dim = rnd_embedding_dim,
+                device        = "cpu",
+            )
+            env = RNDWrapper(
+                env,
+                rnd_target      = _target,
+                rnd_predictor   = _predictor,
+                intrinsic_scale = rnd_scale,
+                device          = "cpu",
+            )
         return env
     return _init
 
@@ -155,7 +210,45 @@ def main():
         metavar="W",
         help="Sampling weights for --stage2-levels (default: uniform).",
     )
+    # ---- RND arguments ----
+    parser.add_argument(
+        "--no-rnd",
+        action="store_true",
+        default=False,
+        help="Disable RND intrinsic motivation. Default: RND enabled.",
+    )
+    parser.add_argument(
+        "--rnd-scale",
+        type=float,
+        default=1.0,
+        metavar="FLOAT",
+        help=(
+            "RND intrinsic reward multiplier (default: 1.0). "
+            "Monitor diagnostics/intrinsic_extrinsic_ratio in TensorBoard:\n"
+            "  > 2.0  → reduce --rnd-scale\n"
+            "  < 0.1  → increase --rnd-scale\n"
+            "  0.3-1.0 → healthy balance"
+        ),
+    )
+    parser.add_argument(
+        "--rnd-warmup-steps",
+        type=int,
+        default=1000,
+        metavar="N",
+        help="Random VecEnv steps to prime RND obs_rms before training (default: 1000).",
+    )
     args = parser.parse_args()
+
+    # ---- Device detection ----
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+    print(f"[train] using device: {device}")
+
+    use_rnd = not args.no_rnd
 
     # ---- Validate and resolve curriculum settings ----
     stage1_levels  = args.levels or ["1-1"]
@@ -191,6 +284,8 @@ def main():
         "stage1_levels":  stage1_levels,
         "stage1_weights": stage1_weights,
         "eval_levels":    eval_levels,
+        "use_rnd":        use_rnd,
+        "rnd_scale":      args.rnd_scale,
     }
     if two_stage:
         curriculum_meta["stage1_steps"]  = args.stage1_steps
@@ -198,6 +293,29 @@ def main():
         curriculum_meta["stage2_weights"]= stage2_weights
     with open(os.path.join(args.checkpoint_dir, "curriculum.json"), "w") as f:
         json.dump(curriculum_meta, f, indent=2)
+
+    # ---- Create RND networks (before make_env_fn so they can be closed over) ----
+    # Observation shape is obtained from a temporary env WITHOUT RNDWrapper,
+    # because RNDWrapper does not change the observation space.
+    rnd_target    = None
+    rnd_predictor = None
+    _obs_shape    = None
+
+    if use_rnd:
+        _shape_env = SMBEnv(rom_path=args.rom, lib_path=args.lib)
+        _obs_shape = (_flat_dim := flat_obs_dim_from_space(_shape_env.observation_space),)
+        _shape_env.close()
+        del _shape_env
+
+        rnd_target, rnd_predictor = make_rnd_networks(
+            obs_shape     = _obs_shape,
+            embedding_dim = 512,
+            device        = device,
+        )
+        print(f"[RND] networks created. obs_shape={_obs_shape}, device={device}")
+        print(f"[RND] target params:    {sum(p.numel() for p in rnd_target.parameters()):,}")
+        print(f"[RND] predictor params: {sum(p.numel() for p in rnd_predictor.parameters()):,}")
+        print(f"[RND] intrinsic_scale:  {args.rnd_scale}")
 
     print(f"ROM:            {args.rom}")
     print(f"Envs:           {args.n_envs}")
@@ -210,23 +328,68 @@ def main():
     print(f"Eval interval:  {args.eval_interval:,} steps")
     print(f"Checkpoints:    {args.checkpoint_dir}/")
     print(f"Eval videos:    {args.video_dir}/")
-    print(f"Wrapper stack:  SMBEnv → NewMaxXWrapper(scale=2.0, max_x_seen_init=400)"
-          f" → SurvivalBonusWrapper(bonus=0.02)"
-          f" → DeathPenaltyWrapper(penalty=4.0, additive)"
-          f" → SubprocVecEnv → VecMonitor")
+    _rnd_label = (
+        f"→ RNDWrapper(scale={args.rnd_scale}, device={device})"
+        if use_rnd else "(RND disabled)"
+    )
+    print(
+        f"Wrapper stack:  SMBEnv → NewMaxXWrapper(scale=2.0, max_x_seen_init=0.0)"
+        f" → SurvivalBonusWrapper(bonus=0.02)"
+        f" → DeathPenaltyWrapper(penalty=4.0, additive)"
+        f" {_rnd_label}"
+        f" → SubprocVecEnv → VecMonitor"
+    )
 
-    # Headless training envs (start with stage-1 curriculum).
+    # ---- Headless training envs (start with stage-1 curriculum) ----
     env_fns = [
-        make_env_fn(args.rom, args.lib, levels=stage1_levels, level_weights=stage1_weights)
+        make_env_fn(
+            args.rom, args.lib,
+            levels=stage1_levels, level_weights=stage1_weights,
+            rnd_obs_shape=_obs_shape if use_rnd else None,
+            rnd_embedding_dim=512,
+            rnd_scale=args.rnd_scale,
+        )
         for _ in range(args.n_envs)
     ]
     vec_env = SubprocVecEnv(env_fns)
+
+    # ---- Initial RND weight sync ----
+    # Workers create fresh random CPU networks in _init().  Sync both target
+    # and predictor from the main process so all workers start from the same
+    # network state.  This is a one-time operation; subsequent predictor syncs
+    # are handled by RNDTrainerCallback after each rollout.
+    if use_rnd:
+        target_sd_np = {k: v.cpu().numpy() for k, v in rnd_target.state_dict().items()}
+        pred_sd_np   = {k: v.cpu().numpy() for k, v in rnd_predictor.state_dict().items()}
+        vec_env.env_method("sync_rnd_target",    target_sd_np)
+        vec_env.env_method("sync_rnd_predictor", pred_sd_np)
+        print("[RND] initial target + predictor weights synced to all workers.")
+
+    vec_env.env_method("__setattr__", "max_x_seen", 905)
     vec_env = VecMonitor(vec_env, filename=os.path.join(args.log_dir, "monitor"))
 
-    # Capture start observation for DiagnosticsCallback Group E (value_at_start_state).
+    # ---- RND obs_rms warm-up ----
+    # Each RNDWrapper instance (in each subprocess) maintains its own obs_rms.
+    # Without warm-up, the first rollout uses obs_rms = (mean=0, var=1), which
+    # means the normalised observations may be far from the true distribution.
+    # Running random actions primes obs_rms so the first intrinsic rewards are
+    # calibrated.  This does NOT affect the start observation for DiagnosticsCallback
+    # because that is captured from a separate temporary env below.
+    if use_rnd and args.rnd_warmup_steps > 0:
+        print(f"[RND] warming up obs_rms via VecEnv ({args.rnd_warmup_steps} random steps) ...")
+        _wu_obs = vec_env.reset()
+        for _ in range(args.rnd_warmup_steps):
+            _wu_actions = np.array([vec_env.action_space.sample()
+                                    for _ in range(args.n_envs)])
+            _wu_obs, _, _, _ = vec_env.step(_wu_actions)
+        print("[RND] obs_rms warm-up complete.")
+
+    # ---- Capture start observation for DiagnosticsCallback Group E ----
     # A temporary single-env instance is used so the live vec_env is NOT touched.
     _tmp_env = make_env_fn(
-        args.rom, args.lib, levels=stage1_levels, level_weights=stage1_weights
+        args.rom, args.lib,
+        levels=stage1_levels, level_weights=stage1_weights,
+        # No RND for start_obs capture — not needed and avoids side-effects.
     )()
     _start_obs, _ = _tmp_env.reset()
     _tmp_env.close()
@@ -268,10 +431,35 @@ def main():
         "  C — survival: survival_bonus_total, survival_fraction\n"
         "  D — entropy:  ent_coef_current, policy_entropy  (every step)\n"
         f"  E — value:    value_at_start_state  (every 10,000 steps, "
-        f"start_obs={'captured' if _start_obs else 'MISSING'})"
+        f"start_obs={'captured' if _start_obs else 'MISSING'})\n"
+        "  F — RND:      intrinsic_reward_episode_mean, intrinsic_extrinsic_ratio"
+        f"  (active: {use_rnd})"
     )
+    if use_rnd:
+        print(
+            "RND TensorBoard metrics (prefix 'rnd/'):\n"
+            "  rnd/predictor_loss         — rolling mean of predictor MSE\n"
+            "  rnd/intrinsic_reward_mean  — mean intrinsic across envs per step\n"
+            "  rnd/intrinsic_reward_max   — max intrinsic per step (spikes = novel state)"
+        )
 
-    callbacks = [
+    # ---- Callbacks ----
+    # RNDTrainerCallback MUST be first so it trains the predictor and syncs weights
+    # to workers BEFORE any other callback reads or logs intrinsic reward stats.
+    callbacks = []
+    if use_rnd:
+        callbacks.append(RNDTrainerCallback(
+            rnd_target    = rnd_target,
+            rnd_predictor = rnd_predictor,
+            lr            = 1e-4,
+            batch_size    = 256,
+            n_epochs      = 4,
+            device        = device,
+            max_grad_norm = 0.5,
+            verbose       = 1,
+        ))
+
+    callbacks += [
         EvalVideoCallback(
             rom_path       = args.rom,
             checkpoint_dir = args.checkpoint_dir,
@@ -303,22 +491,36 @@ def main():
     except Exception:
         _cur_max_x = "unavailable"
     _cb_names = [type(cb).__name__ for cb in callbacks]
-    print("=" * 56)
+    print("=" * 60)
     print("TRAINING HEALTH CHECK")
-    print(f"Wrapper stack:  SMBEnv → NewMaxXWrapper → SurvivalBonusWrapper"
-          f" → DeathPenaltyWrapper → SubprocVecEnv → VecMonitor")
+    _stack = (
+        "SMBEnv → NewMaxXWrapper → SurvivalBonusWrapper"
+        " → DeathPenaltyWrapper"
+        + (" → RNDWrapper" if use_rnd else " (no RNDWrapper)")
+        + " → SubprocVecEnv → VecMonitor"
+    )
+    print(f"Wrapper stack:  {_stack}")
+    print(f"Device:         {device}")
     print(f"ent_coef:       {float(_cur_ent_coef)}")
     print(f"max_x_seen:     {_cur_max_x}  (env 0)")
     print(f"Callbacks:      {_cb_names}")
+    if use_rnd:
+        print(f"RND obs_shape:      {_obs_shape}")
+        print(f"RND target params:  {sum(p.numel() for p in rnd_target.parameters()):,}")
+        print(f"RND pred params:    {sum(p.numel() for p in rnd_predictor.parameters()):,}")
+        print(f"RND intrinsic_scale:{args.rnd_scale}")
+        print(f"RND device:         {device}")
     _has_diag    = any(isinstance(cb, DiagnosticsCallback)    for cb in callbacks)
     _has_entropy = any(isinstance(cb, EntropySchedulerCallback) for cb in callbacks)
+    _has_rnd     = any(isinstance(cb, RNDTrainerCallback)      for cb in callbacks)
     print(f"DiagnosticsCallback present:      {_has_diag}")
     print(f"EntropySchedulerCallback present: {_has_entropy}")
+    print(f"RNDTrainerCallback present:       {_has_rnd}")
     print("Episode end types: "
           "death=obs[game_flags][0] (RAM 0x000E==0x0B) | "
           "complete=info[level_complete] (RAM 0x001D==0x03) | "
           "truncation=stagnation/timeout (no RAM flag)")
-    print("=" * 56)
+    print("=" * 60)
 
     model.learn(
         total_timesteps     = args.timesteps,

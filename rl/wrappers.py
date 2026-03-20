@@ -53,7 +53,13 @@ Gym wrappers for SMBEnv training.
 # ============================================================
 """
 
+import numpy as np
+import torch
+import torch.nn.functional as F
 import gymnasium as gym
+
+from running_mean_std import RunningMeanStd
+from rnd import flatten_obs_single, flat_obs_dim_from_space
 
 
 class NewMaxXWrapper(gym.Wrapper):
@@ -190,3 +196,185 @@ class DeathPenaltyWrapper(gym.Wrapper):
         info["level_complete"] = complete
 
         return obs, reward, terminated, truncated, info
+
+
+class RNDWrapper(gym.Wrapper):
+    """
+    Adds Random Network Distillation (RND) intrinsic rewards on top of
+    extrinsic rewards from the underlying environment.
+
+    RND works by training a small *predictor* MLP to match the outputs of
+    a frozen *target* MLP on visited observations.  For novel states the
+    predictor has high error (high intrinsic reward); for familiar states
+    the predictor matches the target well (low intrinsic reward).  This
+    pulls the agent toward unexplored territory even when extrinsic reward
+    gradients have vanished.
+
+    Non-episodic intrinsic reward (correct RND behaviour):
+        The discounted intrinsic return self._ret is NOT reset on episode
+        end by default.  This is intentional: curiosity should persist
+        across episode boundaries.  Mario dying should not erase the
+        novelty signal — the agent still needs to get past that point.
+        Set episodic_intrinsic=True only for debugging.
+
+    Observation normalisation:
+        A per-instance RunningMeanStd tracks the observation statistics.
+        Observations are centred and scaled before being passed to the
+        RND networks.  This prevents any single high-magnitude feature
+        from dominating the RND signal.
+
+    Subprocess weight synchronisation:
+        When used inside SubprocVecEnv, each worker has its own copy of
+        the RND networks.  The predictor in each worker starts as a copy
+        of the main-process predictor at env-creation time and diverges
+        as the main process trains its own predictor.  Call
+        sync_rnd_predictor() via env_method() after each predictor
+        training round to push updated weights into the workers.
+
+    Info keys added:
+        intrinsic_reward  (float) — normalised intrinsic reward this step
+        extrinsic_reward  (float) — raw extrinsic reward from inner env
+        raw_intrinsic     (float) — unnormalised MSE before scaling
+
+    Args:
+        env:               Wrapped Gymnasium environment.
+        rnd_target:        Frozen RNDNetwork (requires_grad=False everywhere).
+        rnd_predictor:     Trainable RNDNetwork (trained by RNDTrainerCallback).
+        intrinsic_scale:   Weight on the normalised intrinsic reward (default 1.0).
+        obs_norm_clip:     Clip range for normalised obs (default 5.0).
+        reward_norm_gamma: Discount for intrinsic return normaliser (default 0.99).
+        episodic_intrinsic: If True, reset the intrinsic return accumulator on
+                            episode end (default False = non-episodic).
+        device:            torch device string matching the RND networks.
+    """
+
+    def __init__(
+        self,
+        env: gym.Env,
+        rnd_target,
+        rnd_predictor,
+        intrinsic_scale:    float = 1.0,
+        obs_norm_clip:      float = 5.0,
+        reward_norm_gamma:  float = 0.99,
+        episodic_intrinsic: bool  = False,
+        device:             str   = "cpu",
+    ):
+        super().__init__(env)
+        self.rnd_target        = rnd_target
+        self.rnd_predictor     = rnd_predictor
+        self.intrinsic_scale   = intrinsic_scale
+        self._obs_norm_clip    = obs_norm_clip
+        self._gamma            = reward_norm_gamma
+        self._episodic         = episodic_intrinsic
+        self._device           = device
+
+        flat_dim = flat_obs_dim_from_space(env.observation_space)
+        self.obs_rms    = RunningMeanStd(shape=(flat_dim,))
+        self.reward_rms = RunningMeanStd(shape=())
+        self._ret: float = 0.0
+
+    # ------------------------------------------------------------------
+    def reset(self, *, seed=None, options=None):
+        obs, info = self.env.reset(seed=seed, options=options)
+        # obs_rms and reward_rms are lifetime statistics — never reset.
+        # _ret: non-episodic by default; only reset if explicitly requested.
+        if self._episodic:
+            self._ret = 0.0
+        return obs, info
+
+    def step(self, action):
+        obs, extrinsic_reward, terminated, truncated, info = self.env.step(action)
+
+        # Compute intrinsic reward from RND networks.
+        raw_intrinsic = self._compute_intrinsic(obs)
+
+        # Normalise intrinsic reward via discounted intrinsic return.
+        self._ret = self._ret * self._gamma + raw_intrinsic
+        self.reward_rms.update(np.array([self._ret]))
+        intrinsic_norm = raw_intrinsic / (np.sqrt(self.reward_rms.var[()]) + 1e-8)
+
+        # Non-episodic: only reset on done if episodic mode is explicitly on.
+        if self._episodic and (terminated or truncated):
+            self._ret = 0.0
+
+        total_reward = float(extrinsic_reward) + self.intrinsic_scale * float(intrinsic_norm)
+
+        info["intrinsic_reward"] = float(intrinsic_norm)
+        info["extrinsic_reward"] = float(extrinsic_reward)
+        info["raw_intrinsic"]    = float(raw_intrinsic)
+
+        return obs, total_reward, terminated, truncated, info
+
+    # ------------------------------------------------------------------
+    def _compute_intrinsic(self, obs: dict) -> float:
+        """
+        Compute raw intrinsic reward for one observation.
+
+        The obs dict is flattened to a 1-D vector, normalised via obs_rms,
+        and passed through the frozen target and trainable predictor
+        networks.  The MSE between their outputs is the intrinsic reward.
+
+        No gradients are computed here — the predictor is trained
+        separately in RNDTrainerCallback._on_rollout_end.
+        """
+        flat = flatten_obs_single(obs).astype(np.float32)
+
+        # Update running observation statistics.
+        self.obs_rms.update(flat[np.newaxis])   # shape (1, flat_dim)
+
+        # Normalise and clip.
+        obs_norm = np.clip(
+            (flat - self.obs_rms.mean.astype(np.float32)) / self.obs_rms.std.astype(np.float32),
+            -self._obs_norm_clip,
+            self._obs_norm_clip,
+        ).astype(np.float32)
+
+        obs_t = torch.from_numpy(obs_norm).unsqueeze(0).to(self._device)   # (1, flat_dim)
+
+        with torch.no_grad():
+            feat_target = self.rnd_target(obs_t)
+            feat_pred   = self.rnd_predictor(obs_t)
+
+        return float(F.mse_loss(feat_pred, feat_target).item())
+
+    # ------------------------------------------------------------------
+    def sync_rnd_predictor(self, state_dict_numpy: dict) -> None:
+        """
+        Load predictor weights pushed from the main process.
+
+        Called via SubprocVecEnv.env_method("sync_rnd_predictor", weights)
+        after RNDTrainerCallback trains the main-process predictor.
+        This keeps the subprocess predictors current so intrinsic rewards
+        reflect genuine novelty rather than the initial random state.
+
+        Args:
+            state_dict_numpy: Dict mapping parameter name → numpy array
+                              (serialised from the main-process predictor's
+                              state_dict via .cpu().numpy()).
+        """
+        state_dict = {
+            k: torch.from_numpy(v).to(self._device)
+            for k, v in state_dict_numpy.items()
+        }
+        self.rnd_predictor.load_state_dict(state_dict)
+
+    def sync_rnd_target(self, state_dict_numpy: dict) -> None:
+        """
+        Load target weights pushed from the main process (called once at startup).
+
+        Workers create their own randomly-initialized target; this sync ensures
+        all workers use the same frozen target as the main process. Without it,
+        the main-process predictor (trained against the main target) would produce
+        wrong intrinsic rewards when synced to workers with different targets.
+
+        Args:
+            state_dict_numpy: Dict mapping parameter name → numpy array
+                              (serialised from the main-process target's
+                              state_dict via .cpu().numpy()).
+        """
+        state_dict = {
+            k: torch.from_numpy(v).to(self._device)
+            for k, v in state_dict_numpy.items()
+        }
+        self.rnd_target.load_state_dict(state_dict)
+        self.rnd_target.eval()  # target must stay in eval mode

@@ -21,8 +21,10 @@ from typing import Any
 import imageio
 import numpy as np
 import torch as th
+import torch.nn.functional as F
 from stable_baselines3.common.callbacks import BaseCallback
 
+from rnd import flatten_obs_batch
 from smb_env import SMBEnv
 
 
@@ -105,6 +107,8 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_steps:             list[int]   = []
         self._ep_death_flag:        list[bool]  = []
         self._ep_level_complete_flag: list[bool]  = []
+        self._ep_intrinsic_sum:     list[float] = []   # cumulative intrinsic per episode
+        self._ep_extrinsic_sum:     list[float] = []   # cumulative extrinsic per episode
         self._max_episode_steps: float = 600.0   # overwritten in _on_training_start
 
     # ------------------------------------------------------------------
@@ -114,6 +118,8 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_steps               = [0]     * n
         self._ep_death_flag          = [False] * n
         self._ep_level_complete_flag = [False] * n
+        self._ep_intrinsic_sum       = [0.0]   * n
+        self._ep_extrinsic_sum       = [0.0]   * n
 
         # Try to read MAX_STEPS from the env; fall back to 600.
         # Assumption: if get_attr fails, 600 steps/episode is a reasonable upper bound
@@ -147,6 +153,10 @@ class DiagnosticsCallback(BaseCallback):
                 self._ep_death_flag[i] = True
             if info.get("level_complete", False):
                 self._ep_level_complete_flag[i] = True
+
+            # RND intrinsic / extrinsic accumulators (zero if RND not enabled).
+            self._ep_intrinsic_sum[i] += float(info.get("intrinsic_reward", 0.0))
+            self._ep_extrinsic_sum[i] += float(info.get("extrinsic_reward", 0.0))
 
             if "episode" not in info:
                 continue
@@ -209,11 +219,32 @@ class DiagnosticsCallback(BaseCallback):
             self.logger.record_mean("diagnostics/truncation_rate",       float(truncated_ep))
             self.logger.record_mean("diagnostics/level_complete_rate",   float(complete_ep))
 
+            # Group F — RND intrinsic reward health (only logged when RND active).
+            ep_intrinsic = self._ep_intrinsic_sum[i]
+            ep_extrinsic = self._ep_extrinsic_sum[i]
+            if ep_intrinsic != 0.0:
+                self.logger.record_mean(
+                    "diagnostics/intrinsic_reward_episode_mean",
+                    ep_intrinsic / max(ep_len, 1.0),
+                )
+                # intrinsic_extrinsic_ratio: how large is intrinsic relative to
+                # extrinsic for this episode?
+                #   > 2.0  → reduce intrinsic_scale
+                #   < 0.1  → increase intrinsic_scale
+                #   0.3-1.0 → healthy balance
+                if abs(ep_extrinsic) > 1e-6:
+                    self.logger.record_mean(
+                        "diagnostics/intrinsic_extrinsic_ratio",
+                        abs(ep_intrinsic / ep_extrinsic),
+                    )
+
             # Reset accumulators for this env slot.
             self._ep_max_x[i]               = 0.0
             self._ep_steps[i]               = 0
             self._ep_death_flag[i]          = False
             self._ep_level_complete_flag[i] = False
+            self._ep_intrinsic_sum[i]       = 0.0
+            self._ep_extrinsic_sum[i]       = 0.0
 
         # ---- Group D — Entropy & Policy Health (every step) ----
         coef = self.model.ent_coef
@@ -546,3 +577,143 @@ class EvalVideoCallback(BaseCallback):
         else:
             if self.verbose:
                 print(f"[eval] {level}  no frames captured (framebuffer disabled?)")
+
+
+class RNDTrainerCallback(BaseCallback):
+    """
+    Trains the RND predictor network after each PPO rollout.
+
+    Fires in _on_rollout_end (after rollout collection and GAE computation,
+    before PPO's policy gradient update).  This ordering ensures:
+      1. The predictor is trained on the observations just collected.
+      2. Intrinsic rewards for the NEXT rollout reflect the current predictor.
+      3. The PPO gradient update uses the advantages computed during rollout
+         (which include the intrinsic rewards baked in by RNDWrapper).
+
+    After training, the updated predictor weights are synced to all
+    SubprocVecEnv worker processes via env_method("sync_rnd_predictor").
+    This keeps the per-worker predictors current so intrinsic rewards
+    reflect genuine novelty rather than the frozen initial state.
+
+    TensorBoard metrics logged:
+      rnd/predictor_loss          — rolling mean over recent minibatches
+      rnd/intrinsic_reward_mean   — mean intrinsic across envs this step
+      rnd/intrinsic_reward_max    — max intrinsic this step (spikes = novel state)
+
+    Args:
+        rnd_target:     Frozen RNDNetwork (never trained here).
+        rnd_predictor:  Trainable RNDNetwork (trained here each rollout).
+        lr:             Adam learning rate for the predictor (default 1e-4).
+        batch_size:     Minibatch size for predictor updates (default 256).
+        n_epochs:       Passes over the rollout buffer per rollout (default 4).
+        device:         torch device string.
+        max_grad_norm:  Gradient clipping norm (default 0.5).
+    """
+
+    def __init__(
+        self,
+        rnd_target,
+        rnd_predictor,
+        lr:            float = 1e-4,
+        batch_size:    int   = 256,
+        n_epochs:      int   = 4,
+        device:        str   = "cpu",
+        max_grad_norm: float = 0.5,
+        verbose:       int   = 0,
+    ):
+        super().__init__(verbose)
+        self.rnd_target     = rnd_target
+        self.rnd_predictor  = rnd_predictor
+        self.batch_size     = batch_size
+        self.n_epochs       = n_epochs
+        self._device        = device
+        self.max_grad_norm  = max_grad_norm
+
+        import torch.optim as optim
+        self.optimizer = optim.Adam(rnd_predictor.parameters(), lr=lr)
+        self._predictor_losses: list[float] = []
+
+    # ------------------------------------------------------------------
+    def _on_rollout_end(self) -> bool:
+        """
+        Train the predictor on the most recently collected rollout.
+
+        The rollout buffer stores a Dict of obs arrays keyed by observation
+        space key.  We flatten all keys (sorted for determinism) into a
+        single (N, flat_dim) float32 matrix, then do n_epochs minibatch
+        SGD updates of the predictor to minimise MSE with the frozen target.
+        """
+        raw_buf = self.model.rollout_buffer.observations
+
+        # Flatten Dict obs buffer → (n_steps * n_envs, flat_dim).
+        if isinstance(raw_buf, dict):
+            obs_array = flatten_obs_batch(raw_buf)          # (N, flat_dim)
+        else:
+            # Fallback for non-Dict obs (shouldn't happen with this env).
+            obs_array = raw_buf.reshape(raw_buf.shape[0] * raw_buf.shape[1], -1).astype(np.float32)
+
+        n_samples = obs_array.shape[0]
+
+        for _ in range(self.n_epochs):
+            perm = th.randperm(n_samples)
+            for start in range(0, n_samples, self.batch_size):
+                idx   = perm[start : start + self.batch_size]
+                batch = th.from_numpy(obs_array[idx]).to(self._device)   # (B, flat_dim)
+
+                with th.no_grad():
+                    feat_target = self.rnd_target(batch)
+
+                feat_pred = self.rnd_predictor(batch)
+                loss = F.mse_loss(feat_pred, feat_target)
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                th.nn.utils.clip_grad_norm_(
+                    self.rnd_predictor.parameters(), self.max_grad_norm
+                )
+                self.optimizer.step()
+
+                self._predictor_losses.append(float(loss.item()))
+
+        # Log rolling mean of recent losses.
+        if self._predictor_losses:
+            self.logger.record(
+                "rnd/predictor_loss",
+                float(np.mean(self._predictor_losses[-100:])),
+            )
+
+        # Memory management: keep only recent history.
+        if len(self._predictor_losses) > 1000:
+            self._predictor_losses = self._predictor_losses[-500:]
+
+        # Sync updated predictor weights to all SubprocVecEnv workers.
+        # Convert to numpy for cloudpickle-safe IPC.
+        try:
+            state_dict_numpy = {
+                k: v.detach().cpu().numpy()
+                for k, v in self.rnd_predictor.state_dict().items()
+            }
+            self.training_env.env_method("sync_rnd_predictor", state_dict_numpy)
+        except Exception as exc:
+            # env_method may fail if the env stack doesn't have sync_rnd_predictor
+            # (e.g. during unit tests or when RND is disabled).  Non-fatal.
+            if self.verbose:
+                print(f"[RNDTrainerCallback] weight sync skipped: {exc}")
+
+        return True
+
+    # ------------------------------------------------------------------
+    def _on_step(self) -> bool:
+        """Log per-step intrinsic reward statistics."""
+        infos = self.locals.get("infos", [])
+        intrinsic_vals = [
+            float(info.get("intrinsic_reward", 0.0))
+            for info in infos
+            if "intrinsic_reward" in info
+        ]
+
+        if intrinsic_vals:
+            self.logger.record("rnd/intrinsic_reward_mean", float(np.mean(intrinsic_vals)))
+            self.logger.record("rnd/intrinsic_reward_max",  float(np.max(intrinsic_vals)))
+
+        return True
