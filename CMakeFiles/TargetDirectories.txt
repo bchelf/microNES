@@ -1,0 +1,4 @@
+/home/runner/work/microNES/microNES/build-web/CMakeFiles/micrones_core.dir
+/home/runner/work/microNES/microNES/build-web/CMakeFiles/micrones_wasm.dir
+/home/runner/work/microNES/microNES/build-web/CMakeFiles/edit_cache.dir
+/home/runner/work/microNES/microNES/build-web/CMakeFiles/rebuild_cache.dir
