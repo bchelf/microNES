@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>microNES</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    background: #111;
+    color: #ddd;
+    font-family: monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 24px 16px;
+    gap: 14px;
+}
+
+h1 {
+    font-size: 1.5em;
+    color: #fff;
+    letter-spacing: 3px;
+}
+
+#drop-zone {
+    border: 2px dashed #555;
+    border-radius: 8px;
+    padding: 28px 56px;
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 0.15s, background 0.15s;
+    user-select: none;
+    font-size: 0.95em;
+}
+
+#drop-zone:hover, #drop-zone.dragover {
+    border-color: #59f;
+    background: #1a2030;
+}
+
+#drop-zone .hint {
+    margin-top: 6px;
+    font-size: 0.8em;
+    color: #666;
+}
+
+#canvas-wrapper {
+    display: none;
+}
+
+canvas {
+    display: block;
+    width: 768px;
+    height: 720px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 2px solid #2a2a2a;
+}
+
+@media (max-width: 820px) {
+    canvas { width: 512px; height: 480px; }
+}
+@media (max-width: 560px) {
+    canvas { width: 256px; height: 240px; }
+    #drop-zone { padding: 20px 24px; }
+}
+
+#status {
+    font-size: 0.82em;
+    color: #777;
+    min-height: 1.2em;
+}
+
+#controls {
+    font-size: 0.75em;
+    color: #555;
+    text-align: center;
+    line-height: 2;
+}
+
+#controls b { color: #888; }
+</style>
+</head>
+<body>
+
+<h1>microNES</h1>
+
+<div id="drop-zone">
+    <div>Drop a <b>.nes</b> ROM file here</div>
+    <div class="hint">or click to choose a file</div>
+</div>
+<input type="file" id="file-input" accept=".nes" style="display:none">
+
+<div id="canvas-wrapper">
+    <canvas id="canvas" width="256" height="240"></canvas>
+</div>
+
+<div id="status">Initializing…</div>
+
+<div id="controls">
+    <b>D-Pad:</b> Arrow keys / WASD &nbsp;·&nbsp;
+    <b>A:</b> Z or L &nbsp;·&nbsp;
+    <b>B:</b> X or K<br>
+    <b>Start:</b> Enter &nbsp;·&nbsp;
+    <b>Select:</b> Tab or Shift &nbsp;·&nbsp;
+    <b>Reset:</b> R
+</div>
+
+<script>
+// ── NES palette ──────────────────────────────────────────────────────────────
+// Source: k_host_nes_palette from src/host/window_sdl.c
+const NES_PALETTE = new Uint8Array([
+    0x7c,0x7c,0x7c, 0x00,0x00,0xfc, 0x00,0x00,0xbc, 0x44,0x28,0xbc,
+    0x94,0x00,0x84, 0xa8,0x00,0x20, 0xa8,0x10,0x00, 0x88,0x14,0x00,
+    0x50,0x30,0x00, 0x00,0x78,0x00, 0x00,0x68,0x00, 0x00,0x58,0x00,
+    0x00,0x40,0x58, 0x00,0x00,0x00, 0x00,0x00,0x00, 0x00,0x00,0x00,
+
+    0xbc,0xbc,0xbc, 0x00,0x78,0xf8, 0x00,0x58,0xf8, 0x68,0x44,0xfc,
+    0xd8,0x00,0xcc, 0xe4,0x00,0x58, 0xf8,0x38,0x00, 0xe4,0x5c,0x10,
+    0xac,0x7c,0x00, 0x00,0xb8,0x00, 0x00,0xa8,0x00, 0x00,0xa8,0x44,
+    0x00,0x88,0x88, 0x00,0x00,0x00, 0x00,0x00,0x00, 0x00,0x00,0x00,
+
+    0xf8,0xf8,0xf8, 0x3c,0xbc,0xfc, 0x68,0x88,0xfc, 0x98,0x78,0xf8,
+    0xf8,0x78,0xf8, 0xf8,0x58,0x98, 0xf8,0x78,0x58, 0xfc,0xa0,0x44,
+    0xf8,0xb8,0x00, 0xb8,0xf8,0x18, 0x58,0xd8,0x54, 0x58,0xf8,0x98,
+    0x00,0xe8,0xd8, 0x78,0x78,0x78, 0x00,0x00,0x00, 0x00,0x00,0x00,
+
+    0xfc,0xfc,0xfc, 0xa4,0xe4,0xfc, 0xb8,0xb8,0xf8, 0xd8,0xb8,0xf8,
+    0xf8,0xb8,0xf8, 0xf8,0xa4,0xc0, 0xf0,0xd0,0xb0, 0xfc,0xe0,0xa8,
+    0xf8,0xd8,0x78, 0xd8,0xf8,0x78, 0xb8,0xf8,0xb8, 0xb8,0xf8,0xd8,
+    0x00,0xfc,0xfc, 0xf8,0xd8,0xf8, 0x00,0x00,0x00, 0x00,0x00,0x00,
+]);
+
+// ── Button masks (NES controller bit layout) ─────────────────────────────────
+const BTN_A      = 1 << 0;
+const BTN_B      = 1 << 1;
+const BTN_SELECT = 1 << 2;
+const BTN_START  = 1 << 3;
+const BTN_UP     = 1 << 4;
+const BTN_DOWN   = 1 << 5;
+const BTN_LEFT   = 1 << 6;
+const BTN_RIGHT  = 1 << 7;
+
+const KEY_MAP = {
+    'ArrowUp':    BTN_UP,
+    'ArrowDown':  BTN_DOWN,
+    'ArrowLeft':  BTN_LEFT,
+    'ArrowRight': BTN_RIGHT,
+    'KeyW':       BTN_UP,
+    'KeyS':       BTN_DOWN,
+    'KeyA':       BTN_LEFT,
+    'KeyD':       BTN_RIGHT,
+    'KeyZ':       BTN_A,
+    'KeyL':       BTN_A,
+    'KeyX':       BTN_B,
+    'KeyK':       BTN_B,
+    'Enter':      BTN_START,
+    'Tab':        BTN_SELECT,
+    'ShiftLeft':  BTN_SELECT,
+    'ShiftRight': BTN_SELECT,
+};
+
+// ── Audio ring buffer ─────────────────────────────────────────────────────────
+const RING_SIZE = 16384; // power of 2
+const RING_MASK = RING_SIZE - 1;
+const audioRing = new Float32Array(RING_SIZE);
+let ringWrite = 0;
+let ringRead  = 0;
+
+function ringPush(s) {
+    if ((ringWrite - ringRead) < RING_SIZE) {
+        audioRing[ringWrite++ & RING_MASK] = s;
+    }
+}
+
+function ringPop() {
+    if (ringRead >= ringWrite) return 0.0;
+    return audioRing[ringRead++ & RING_MASK];
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const AUDIO_TMP_SAMPLES = 4096;
+
+let romLoaded        = false;
+let running          = false;
+let animFrameId      = null;
+let controllerBtns   = 0;
+let audioCtx         = null;
+let audioProcessor   = null;
+let audioTmpPtr      = null;
+let nesAudioRate     = 44100;
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const canvas      = document.getElementById('canvas');
+const ctx2d       = canvas.getContext('2d');
+const imageData   = ctx2d.createImageData(256, 240);
+const dropZone    = document.getElementById('drop-zone');
+const fileInput   = document.getElementById('file-input');
+const canvasWrap  = document.getElementById('canvas-wrapper');
+const statusEl    = document.getElementById('status');
+
+function setStatus(msg) { statusEl.textContent = msg; }
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function renderFrame() {
+    const fbPtr  = Module._nes_web_framebuffer_ptr();
+    const pixels = Module.HEAPU8;
+    const data   = imageData.data;
+    let di = 0;
+    for (let i = 0; i < 256 * 240; i++) {
+        const pi = (pixels[fbPtr + i] & 0x3f) * 3;
+        data[di++] = NES_PALETTE[pi];
+        data[di++] = NES_PALETTE[pi + 1];
+        data[di++] = NES_PALETTE[pi + 2];
+        data[di++] = 255;
+    }
+    ctx2d.putImageData(imageData, 0, 0);
+}
+
+// ── Audio ─────────────────────────────────────────────────────────────────────
+function drainAudio() {
+    if (!audioCtx || !audioTmpPtr) return;
+    let n;
+    do {
+        n = Module._nes_web_audio_read_samples(audioTmpPtr, AUDIO_TMP_SAMPLES);
+        if (n > 0) {
+            const samples = new Int16Array(Module.HEAP8.buffer, audioTmpPtr, n);
+            for (let i = 0; i < n; i++) {
+                ringPush(samples[i] / 32768.0);
+            }
+        }
+    } while (n === AUDIO_TMP_SAMPLES);
+}
+
+function setupAudio() {
+    if (audioCtx) {
+        audioCtx.resume();
+        return;
+    }
+    try {
+        audioCtx = new AudioContext({ sampleRate: nesAudioRate });
+    } catch (_) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    // ScriptProcessorNode: deprecated but widely supported and requires no
+    // separate AudioWorklet file, keeping this page self-contained.
+    audioProcessor = audioCtx.createScriptProcessor(2048, 0, 1);
+    audioProcessor.onaudioprocess = (e) => {
+        const out = e.outputBuffer.getChannelData(0);
+        for (let i = 0; i < out.length; i++) {
+            out[i] = ringPop();
+        }
+    };
+    audioProcessor.connect(audioCtx.destination);
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+function gameLoop() {
+    if (!running) return;
+    Module._nes_web_set_controller(controllerBtns);
+    if (!Module._nes_web_step_frame()) {
+        setStatus('Emulation stopped.');
+        running = false;
+        return;
+    }
+    renderFrame();
+    drainAudio();
+    animFrameId = requestAnimationFrame(gameLoop);
+}
+
+function startGame() {
+    if (animFrameId !== null) cancelAnimationFrame(animFrameId);
+    running = true;
+    animFrameId = requestAnimationFrame(gameLoop);
+}
+
+// ── ROM loading ───────────────────────────────────────────────────────────────
+async function loadRomFile(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.nes')) {
+        setStatus('Please select a .nes file.');
+        return;
+    }
+
+    setStatus('Loading ' + file.name + '…');
+
+    const buf     = await file.arrayBuffer();
+    const romData = new Uint8Array(buf);
+    const romPtr  = Module._malloc(romData.length);
+    if (!romPtr) {
+        setStatus('WASM memory allocation failed.');
+        return;
+    }
+    Module.HEAPU8.set(romData, romPtr);
+    const ok = Module._nes_web_load_rom(romPtr, romData.length);
+    Module._free(romPtr);
+
+    if (!ok) {
+        const errPtr = Module._nes_web_last_error();
+        setStatus('ROM error: ' + Module.UTF8ToString(errPtr));
+        return;
+    }
+
+    romLoaded = true;
+    canvasWrap.style.display = 'block';
+    dropZone.style.display   = 'none';
+
+    setupAudio();   // requires user gesture – file pick/drop qualifies
+    startGame();
+    setStatus('Playing: ' + file.name);
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyR' && romLoaded) {
+        Module._nes_web_reset();
+        return;
+    }
+    const btn = KEY_MAP[e.code];
+    if (btn !== undefined) {
+        e.preventDefault();
+        controllerBtns |= btn;
+    }
+});
+
+document.addEventListener('keyup', (e) => {
+    const btn = KEY_MAP[e.code];
+    if (btn !== undefined) controllerBtns &= ~btn;
+});
+
+// ── File UI ───────────────────────────────────────────────────────────────────
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => loadRomFile(e.target.files[0]));
+
+dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    loadRomFile(e.dataTransfer.files[0]);
+});
+
+// ── Emscripten Module bootstrap ───────────────────────────────────────────────
+// Must be defined before micrones.js is loaded so Emscripten merges with it.
+var Module = {
+    onRuntimeInitialized: function () {
+        Module._nes_web_init();
+        nesAudioRate = Module._nes_web_audio_sample_rate();
+        audioTmpPtr  = Module._malloc(AUDIO_TMP_SAMPLES * 2); // int16_t
+        setStatus('Ready — drop a .nes ROM to play.');
+    },
+};
+</script>
+
+<!-- Emscripten-generated glue (produced by the web build) -->
+<script src="micrones.js"></script>
+
+</body>
+</html>
