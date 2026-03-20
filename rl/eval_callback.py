@@ -179,9 +179,7 @@ class EvalVideoCallback(BaseCallback):
                 obs, reward, terminated, truncated, _ = env.step(int(action))
                 total_reward += float(reward)
 
-                frame = env.render()
-                if frame is not None:
-                    frames.append(frame)
+                frames.extend(env.pop_step_frames())
 
                 if terminated or truncated:
                     break
