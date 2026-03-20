@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(MICRONES_PLATFORM "pico" CACHE STRING "Build platform: host or pico")
-set_property(CACHE MICRONES_PLATFORM PROPERTY STRINGS host pico)
+set(MICRONES_PLATFORM "pico" CACHE STRING "Build platform: host, pico, or web")
+set_property(CACHE MICRONES_PLATFORM PROPERTY STRINGS host pico web)
 set(MICRONES_PICO_VIDEO_MODE "test_pattern" CACHE STRING "Pico video mode: test_pattern or emulator")
 set_property(CACHE MICRONES_PICO_VIDEO_MODE PROPERTY STRINGS test_pattern emulator)
 set(MICRONES_PICO_ROM_PATH "" CACHE FILEPATH "Path to an iNES ROM image to embed for Pico emulator video mode")
@@ -198,6 +198,35 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
     pico_enable_stdio_usb(micrones 1)
     pico_enable_stdio_uart(micrones 0)
     pico_add_extra_outputs(micrones)
+elseif (MICRONES_PLATFORM STREQUAL "web")
+    add_executable(micrones_wasm
+        src/web/web_main.c
+    )
+
+    target_link_libraries(micrones_wasm PRIVATE
+        micrones_core
+    )
+
+    set_target_properties(micrones_wasm PROPERTIES
+        OUTPUT_NAME "micrones"
+        SUFFIX ".js"
+    )
+
+    target_link_options(micrones_wasm PRIVATE
+        "SHELL:-sWASM=1"
+        "SHELL:-sNO_EXIT_RUNTIME=1"
+        "SHELL:-sALLOW_MEMORY_GROWTH=1"
+        "SHELL:-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','HEAPU8','HEAP8']"
+        "SHELL:-sEXPORTED_FUNCTIONS=['_nes_web_init','_nes_web_load_rom','_nes_web_step_frame','_nes_web_framebuffer_ptr','_nes_web_audio_sample_rate','_nes_web_audio_read_samples','_nes_web_set_controller','_nes_web_last_error','_nes_web_reset','_malloc','_free']"
+    )
+
+    # Copy the HTML frontend into the build directory alongside the JS/WASM output.
+    add_custom_command(TARGET micrones_wasm POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_LIST_DIR}/src/web/index.html
+            ${CMAKE_CURRENT_BINARY_DIR}/index.html
+        COMMENT "Copying web frontend to build directory"
+    )
 else ()
-    message(FATAL_ERROR "Unsupported MICRONES_PLATFORM='${MICRONES_PLATFORM}'. Use 'host' or 'pico'.")
+    message(FATAL_ERROR "Unsupported MICRONES_PLATFORM='${MICRONES_PLATFORM}'. Use 'host', 'pico', or 'web'.")
 endif ()
