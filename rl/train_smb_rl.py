@@ -365,7 +365,6 @@ def main():
         vec_env.env_method("sync_rnd_predictor", pred_sd_np)
         print("[RND] initial target + predictor weights synced to all workers.")
 
-    vec_env.env_method("__setattr__", "max_x_seen", 800)
     vec_env = VecMonitor(vec_env, filename=os.path.join(args.log_dir, "monitor"))
 
     # ---- RND obs_rms warm-up ----

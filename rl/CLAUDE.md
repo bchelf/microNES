@@ -1,5 +1,6 @@
-<!-- Last audited: 2026-03-19 -->
+<!-- Last audited: 2026-03-20 -->
 <!-- RND added: 2026-03-19 -->
+<!-- on_ground fix: 2026-03-20 (RAM[0x001D]==0x00 confirmed via frame-level diff) -->
 <!-- Audit confidence: INFO KEYS=HIGH | WRAPPER STACK=HIGH | REWARD=HIGH | CALLBACKS=HIGH | BUGS=HIGH | METRICS=HIGH | RND=HIGH -->
 
 # CLAUDE.md — SMB RL Training Project
@@ -28,7 +29,8 @@ These are the **only** keys present in `info` after a `step()` call. Any other k
 | `intrinsic_reward` | `float` | `RNDWrapper.step()` | Normalised intrinsic reward this step | Only present when RND enabled. Used by DiagnosticsCallback Group F. |
 | `extrinsic_reward` | `float` | `RNDWrapper.step()` | Raw extrinsic reward from inner env (before intrinsic addition) | Only present when RND enabled. |
 | `raw_intrinsic` | `float` | `RNDWrapper.step()` | Un-normalised MSE between predictor and target | Only present when RND enabled. For debugging scale. |
-| `mario_on_ground` | `bool` | `NewMaxXWrapper.step()` | True when Mario is on the ground (obs["player_state"][5] > 0.5, RAM 0x001C). | Used by DiagnosticsCallback for Group G metrics. |
+| `on_ground` | `bool` | `SMBEnv.step()` | True when Mario is on the ground. Source: `RAM[0x001D] == 0x00`. 0x01 = airborne (jump or pit fall), 0x03 = level complete. Clears immediately on landing. | Foundation for NewMaxXWrapper on-ground gate. |
+| `mario_on_ground` | `bool` | `NewMaxXWrapper.step()` | True when Mario is on the ground. Reads `info["on_ground"]` from SMBEnv. | Used by DiagnosticsCallback for Group G metrics. |
 | `frontier_bonus_blocked` | `bool` | `NewMaxXWrapper.step()` | True when Mario was airborne and would have set a new max_x but the frontier bonus was gated. | Key verification metric for the on-ground bug fix (2026-03-20). |
 | `episode` | `dict` | `VecMonitor` | Contains `r`, `l`, `t` at episode end only | Only present in the final step info of an episode. Note: `r` includes intrinsic reward (it is part of the total env reward). |
 
@@ -242,7 +244,7 @@ Action space: `Discrete(14)` — 14 motor primitives (WAIT, STEP_RIGHT, RUN_RIGH
 
 **What was wrong:** `NewMaxXWrapper.step()` updated `max_x_seen` and awarded the frontier bonus whenever `world_x > max_x_seen`, regardless of Mario's airborne/grounded state. When Mario jumped rightward into a pit, `world_x` at the airborne peak (or during the fall) could exceed the previous `max_x_seen`, triggering the frontier bonus for an x position that was physically unreachable at ground level. This directly incentivized void jumps — the agent learned that jumping into pits produced frontier reward, rather than learning to navigate the ground-level path.
 
-**Fix:** `NewMaxXWrapper.step()` now gates both the bonus and the `max_x_seen` update on `obs["player_state"][5] > 0.5` (Mario on ground). Ground state source: `smb_env.py` reads `ram[0x001C] != 0` and places the result at `player_state[5]` in the observation. Only ground-level x positions count toward the lifetime frontier.
+**Fix:** `NewMaxXWrapper.step()` now gates both the bonus and the `max_x_seen` update on `info["on_ground"]` (True = Mario on ground). Ground state source: `smb_env.py` reads `RAM[0x001D] == 0x00` and adds `info["on_ground"]` to the step info dict. `RAM[0x001D]`: 0x00 = on ground, 0x01 = airborne (covers both deliberate jumps AND pit falls), 0x03 = level complete. Confirmed via single-frame RAM diff on 2026-03-20. `RAM[0x001C]` (the previously documented address) is always 0 in this emulator — do not use it. Only ground-level x positions count toward the lifetime frontier.
 
 **New info keys added by the fix:**
 - `info["mario_on_ground"]` (bool) — True when Mario is on the ground this step

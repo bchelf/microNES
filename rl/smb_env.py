@@ -357,6 +357,7 @@ class SMBEnv(gym.Env):
             "world_x":    world_x,
             "frame":      self._lib.frame_count(self._h),
             "stagnating": stagnating,
+            "on_ground":  bool(int(self._ram[0x001D]) == 0x00),
         }
         return obs, float(reward), terminated, truncated, info
 
@@ -455,7 +456,10 @@ class SMBEnv(gym.Env):
         speed       = abs(float(vx_raw)) / 40.0
 
         # Jump phase: 0=grounded, 1=rising, 2=apex, 3=falling
-        on_ground = int(ram[0x001C] != 0)
+        # RAM[0x001D]: 0x00 = on ground, 0x01 = airborne (jump or pit fall),
+        # 0x03 = level complete.  RAM[0x001C] was listed in older docs but is
+        # always 0 in this emulator — do not use it.
+        on_ground = int(int(ram[0x001D]) == 0x00)
         if on_ground:
             jump_phase = 0
         elif vy_raw < -2:

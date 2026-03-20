@@ -75,14 +75,16 @@ class NewMaxXWrapper(gym.Wrapper):
 
     ON-GROUND GATE (BUGFIX 2026-03-20):
     The frontier bonus and max_x_seen update are gated on Mario being on the ground
-    (obs["player_state"][5] == 1.0, sourced from RAM 0x001C).  Without this gate,
+    (info["on_ground"], sourced from RAM[0x001D] == 0x00).  Without this gate,
     the bonus fired during void jumps where Mario falls rightward into a pit — the
     agent accumulated frontier reward for airborne x positions that were physically
     unreachable at ground level, incentivizing pit jumps rather than navigable
     progress.  With the gate, only ground-level x progress counts toward the frontier.
 
-    Ground state source: obs["player_state"][5] (float 1.0 = on ground, 0.0 = airborne).
-    This is always present in SMBEnv observations — no safe-default fallback needed.
+    Ground state source: info["on_ground"] (bool, True = on ground, False = airborne).
+    RAM[0x001D]: 0x00 = on ground, 0x01 = airborne (jump OR pit fall), 0x03 = level
+    complete.  Clears immediately on landing — no multi-frame delay.  Defaults to
+    True if the key is absent (safe degradation: treats unknown state as grounded).
 
     Args:
         env:   The wrapped Gymnasium environment.
@@ -105,9 +107,9 @@ class NewMaxXWrapper(gym.Wrapper):
         # BUGFIX (original): env emits info["world_x"], not info["x_pos"].
         current_x = float(info.get("world_x", 0.0))
         # BUGFIX (2026-03-20): gate frontier bonus on Mario being on the ground.
-        # obs["player_state"][5] = float(ram[0x001C] != 0): 1.0 on ground, 0.0 airborne.
+        # info["on_ground"] is set by SMBEnv.step() from RAM[0x001D] == 0x00.
         # Default True so the wrapper degrades gracefully if the key is ever absent.
-        on_ground = bool(obs.get("player_state", np.ones(12, dtype=np.float32))[5] > 0.5)
+        on_ground = bool(info.get("on_ground", True))
 
         bonus = 0.0
         if on_ground and current_x > self.max_x_seen:
