@@ -64,13 +64,25 @@ from rnd import flatten_obs_single, flat_obs_dim_from_space
 
 class NewMaxXWrapper(gym.Wrapper):
     """
-    Adds a bonus reward whenever the agent surpasses its lifetime-maximum x position.
+    Adds a bonus reward whenever the agent surpasses its lifetime-maximum x position
+    while Mario is on the ground.
 
     This creates a frontier signal: the agent is rewarded for reaching any x it has
     never visited before across all episodes. Because max_x_seen is never reset, the
     bonus is zero once the agent revisits old ground — it only fires at the frontier.
     This breaks the deterministic local optimum where reward gradient vanishes at the
     furthest point reached.
+
+    ON-GROUND GATE (BUGFIX 2026-03-20):
+    The frontier bonus and max_x_seen update are gated on Mario being on the ground
+    (obs["player_state"][5] == 1.0, sourced from RAM 0x001C).  Without this gate,
+    the bonus fired during void jumps where Mario falls rightward into a pit — the
+    agent accumulated frontier reward for airborne x positions that were physically
+    unreachable at ground level, incentivizing pit jumps rather than navigable
+    progress.  With the gate, only ground-level x progress counts toward the frontier.
+
+    Ground state source: obs["player_state"][5] (float 1.0 = on ground, 0.0 = airborne).
+    This is always present in SMBEnv observations — no safe-default fallback needed.
 
     Args:
         env:   The wrapped Gymnasium environment.
@@ -90,14 +102,23 @@ class NewMaxXWrapper(gym.Wrapper):
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
-        # BUGFIX: env emits info["world_x"], not info["x_pos"].
-        # Previous version read info.get("x_pos", 0.0) and always got 0.0.
+        # BUGFIX (original): env emits info["world_x"], not info["x_pos"].
         current_x = float(info.get("world_x", 0.0))
+        # BUGFIX (2026-03-20): gate frontier bonus on Mario being on the ground.
+        # obs["player_state"][5] = float(ram[0x001C] != 0): 1.0 on ground, 0.0 airborne.
+        # Default True so the wrapper degrades gracefully if the key is ever absent.
+        on_ground = bool(obs.get("player_state", np.ones(12, dtype=np.float32))[5] > 0.5)
+
         bonus = 0.0
-        if current_x > self.max_x_seen:
+        if on_ground and current_x > self.max_x_seen:
             bonus = (current_x - self.max_x_seen) * self.scale
             self.max_x_seen = current_x
-        info["max_x_seen"] = self.max_x_seen
+
+        # Always update info["max_x_seen"] so diagnostics remain accurate regardless
+        # of the on_ground gate.
+        info["max_x_seen"]            = self.max_x_seen
+        info["mario_on_ground"]       = on_ground
+        info["frontier_bonus_blocked"] = (not on_ground) and (current_x > self.max_x_seen)
         return obs, reward + bonus, terminated, truncated, info
 
 

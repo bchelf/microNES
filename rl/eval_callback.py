@@ -109,6 +109,8 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_level_complete_flag: list[bool]  = []
         self._ep_intrinsic_sum:     list[float] = []   # cumulative intrinsic per episode
         self._ep_extrinsic_sum:     list[float] = []   # cumulative extrinsic per episode
+        self._ep_blocked_steps:     list[int]   = []   # steps where frontier bonus was blocked
+        self._ep_max_x_on_ground:   list[float] = []   # highest world_x while on ground
         self._max_episode_steps: float = 600.0   # overwritten in _on_training_start
 
     # ------------------------------------------------------------------
@@ -120,6 +122,8 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_level_complete_flag = [False] * n
         self._ep_intrinsic_sum       = [0.0]   * n
         self._ep_extrinsic_sum       = [0.0]   * n
+        self._ep_blocked_steps       = [0]     * n
+        self._ep_max_x_on_ground     = [0.0]   * n
 
         # Try to read MAX_STEPS from the env; fall back to 600.
         # Assumption: if get_attr fails, 600 steps/episode is a reasonable upper bound
@@ -157,6 +161,14 @@ class DiagnosticsCallback(BaseCallback):
             # RND intrinsic / extrinsic accumulators (zero if RND not enabled).
             self._ep_intrinsic_sum[i] += float(info.get("intrinsic_reward", 0.0))
             self._ep_extrinsic_sum[i] += float(info.get("extrinsic_reward", 0.0))
+
+            # Ground-gated frontier metrics (from NewMaxXWrapper on-ground fix).
+            if info.get("frontier_bonus_blocked", False):
+                self._ep_blocked_steps[i] += 1
+            if info.get("mario_on_ground", True):
+                self._ep_max_x_on_ground[i] = max(
+                    self._ep_max_x_on_ground[i], world_x
+                )
 
             if "episode" not in info:
                 continue
@@ -238,6 +250,18 @@ class DiagnosticsCallback(BaseCallback):
                         abs(ep_intrinsic / ep_extrinsic),
                     )
 
+            # Group G — Ground-gated frontier health (from NewMaxXWrapper on-ground fix).
+            blocked_steps = self._ep_blocked_steps[i]
+            ep_steps_nonzero = max(self._ep_steps[i], 1)
+            self.logger.record_mean(
+                "diagnostics/frontier_bonus_blocked_rate",
+                float(blocked_steps) / ep_steps_nonzero,
+            )
+            self.logger.record_mean(
+                "diagnostics/max_x_on_ground",
+                self._ep_max_x_on_ground[i],
+            )
+
             # Reset accumulators for this env slot.
             self._ep_max_x[i]               = 0.0
             self._ep_steps[i]               = 0
@@ -245,6 +269,8 @@ class DiagnosticsCallback(BaseCallback):
             self._ep_level_complete_flag[i] = False
             self._ep_intrinsic_sum[i]       = 0.0
             self._ep_extrinsic_sum[i]       = 0.0
+            self._ep_blocked_steps[i]       = 0
+            self._ep_max_x_on_ground[i]     = 0.0
 
         # ---- Group D — Entropy & Policy Health (every step) ----
         coef = self.model.ent_coef

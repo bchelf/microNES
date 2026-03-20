@@ -28,6 +28,8 @@ These are the **only** keys present in `info` after a `step()` call. Any other k
 | `intrinsic_reward` | `float` | `RNDWrapper.step()` | Normalised intrinsic reward this step | Only present when RND enabled. Used by DiagnosticsCallback Group F. |
 | `extrinsic_reward` | `float` | `RNDWrapper.step()` | Raw extrinsic reward from inner env (before intrinsic addition) | Only present when RND enabled. |
 | `raw_intrinsic` | `float` | `RNDWrapper.step()` | Un-normalised MSE between predictor and target | Only present when RND enabled. For debugging scale. |
+| `mario_on_ground` | `bool` | `NewMaxXWrapper.step()` | True when Mario is on the ground (obs["player_state"][5] > 0.5, RAM 0x001C). | Used by DiagnosticsCallback for Group G metrics. |
+| `frontier_bonus_blocked` | `bool` | `NewMaxXWrapper.step()` | True when Mario was airborne and would have set a new max_x but the frontier bonus was gated. | Key verification metric for the on-ground bug fix (2026-03-20). |
 | `episode` | `dict` | `VecMonitor` | Contains `r`, `l`, `t` at episode end only | Only present in the final step info of an episode. Note: `r` includes intrinsic reward (it is part of the total env reward). |
 
 **CRITICAL: There is no `info["death"]` key and no `info["x_pos"]` key.** Death is read from `obs["game_flags"][0]`. Level complete is read from `obs["game_flags"][1]` or `info["level_complete"]`.
@@ -199,6 +201,8 @@ Action space: `Discrete(14)` — 14 motor primitives (WAIT, STEP_RIGHT, RUN_RIGH
 | `diagnostics/value_at_start_state` | E | V(s_0) evaluated every 10,000 steps | Reliable if `start_obs` was captured. Shows learning progress clearly. |
 | `diagnostics/intrinsic_reward_episode_mean` | F | Mean per-step intrinsic reward for the episode (only logged when RND active) | Reliable. Key RND health signal. |
 | `diagnostics/intrinsic_extrinsic_ratio` | F | `total_intrinsic / total_extrinsic` for the episode. Target: 0.3–1.0. See tuning guide below. | Reliable. Primary RND tuning signal. |
+| `diagnostics/frontier_bonus_blocked_rate` | G | Fraction of steps per episode where Mario was airborne and would have set a new max_x but the bonus was gated. Healthy: 10–30%. | Reliable. Primary verification that the on-ground fix (Bug 4, 2026-03-20) is working. |
+| `diagnostics/max_x_on_ground` | G | Highest world_x achieved while Mario was on the ground this episode. Excludes airborne positions. | Reliable. True navigable progress metric, complementary to max_x_episode. |
 
 ---
 
@@ -230,6 +234,25 @@ Action space: `Discrete(14)` — 14 motor primitives (WAIT, STEP_RIGHT, RUN_RIGH
 **What is wrong:** The startup print at line 213 says `NewMaxXWrapper(scale=2.0, max_x_seen_init=400)`. The actual initial value in `NewMaxXWrapper.__init__` is `self.max_x_seen: float = 0.0`. The print is wrong. `max_x_seen` starts at `0.0`, not `400`.
 
 **Impact:** The health-check print at training start (`max_x_seen: {_cur_max_x}  (env 0)`) will show the correct value `0.0`, which contradicts the wrapper stack description line. Trust the health check, not the description line.
+
+---
+
+### Bug 4: `NewMaxXWrapper` fired frontier bonus during void jumps — airborne x not gated
+**Status: FIXED 2026-03-20**
+
+**What was wrong:** `NewMaxXWrapper.step()` updated `max_x_seen` and awarded the frontier bonus whenever `world_x > max_x_seen`, regardless of Mario's airborne/grounded state. When Mario jumped rightward into a pit, `world_x` at the airborne peak (or during the fall) could exceed the previous `max_x_seen`, triggering the frontier bonus for an x position that was physically unreachable at ground level. This directly incentivized void jumps — the agent learned that jumping into pits produced frontier reward, rather than learning to navigate the ground-level path.
+
+**Fix:** `NewMaxXWrapper.step()` now gates both the bonus and the `max_x_seen` update on `obs["player_state"][5] > 0.5` (Mario on ground). Ground state source: `smb_env.py` reads `ram[0x001C] != 0` and places the result at `player_state[5]` in the observation. Only ground-level x positions count toward the lifetime frontier.
+
+**New info keys added by the fix:**
+- `info["mario_on_ground"]` (bool) — True when Mario is on the ground this step
+- `info["frontier_bonus_blocked"]` (bool) — True when airborne prevented what would have been a new-max-x bonus
+
+**New TensorBoard metrics added:**
+- `diagnostics/frontier_bonus_blocked_rate` — fraction of steps in episode where bonus was gated by airborne state. Healthy range: 10–30%. Near 0% means Mario rarely reaches new ground while airborne (or fix not working). >50% means ground detection may be broken.
+- `diagnostics/max_x_on_ground` — highest world_x achieved while Mario was on the ground this episode. This is the real navigable progress, distinct from `max_x_episode` which can include airborne positions.
+
+**Impact of the bug:** All training runs before 2026-03-20 that used `NewMaxXWrapper` with `max_x_seen` initialized to 905 were optimizing the wrong objective near the World 1-3 goomba platform. The frontier reward was partially incentivizing running off cliffs and platform edges, not navigating the ground path. The first training run after this fix should show a change in the agent's risk profile near frontier obstacles.
 
 ---
 
