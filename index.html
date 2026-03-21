@@ -82,6 +82,213 @@ canvas {
 }
 
 #controls b { color: #888; }
+
+@media (pointer: coarse) {
+    #controls { display: none; }
+}
+
+/* ── Mobile touch controller ─────────────────────────────────────────────── */
+#touch-controller {
+    display: none;
+    width: 100%;
+    max-width: 560px;
+    background: #1c1c1c;
+    border-radius: 14px;
+    padding: 14px 16px 16px;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Two horizontal ridge stripes across the middle */
+#touch-controller::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    top: 0; bottom: 0;
+    background:
+        linear-gradient(to bottom,
+            transparent 30%,
+            #272727 30%, #272727 42%,
+            #1c1c1c 42%, #1c1c1c 58%,
+            #272727 58%, #272727 70%,
+            transparent 70%
+        );
+    pointer-events: none;
+}
+
+.ctrl-face {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+/* ── D-pad ───────────────────────────────────────────────────────────────── */
+.dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 46px);
+    grid-template-rows: repeat(3, 46px);
+    gap: 2px;
+}
+
+.dpad-btn {
+    background: #111;
+    border: none;
+    color: #444;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    outline: none;
+    touch-action: none;
+}
+
+.dpad-btn.pressed { background: #1f1f1f; color: #666; }
+
+#dpad-up    { border-radius: 6px 6px 0 0; }
+#dpad-left  { border-radius: 6px 0 0 6px; }
+#dpad-right { border-radius: 0 6px 6px 0; }
+#dpad-down  { border-radius: 0 0 6px 6px; }
+
+.dpad-center-dot {
+    background: #111;
+}
+
+.dpad-corner { background: transparent; }
+
+/* ── Center select/start ─────────────────────────────────────────────────── */
+.ctrl-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.sys-btns-row {
+    background: #f0f0f0;
+    border-radius: 10px;
+    padding: 8px 12px;
+    display: flex;
+    gap: 12px;
+}
+
+.sys-btn {
+    width: 40px;
+    height: 14px;
+    background: #222;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    outline: none;
+    touch-action: none;
+    box-shadow: inset 0 2px 5px rgba(0,0,0,0.9);
+}
+
+.sys-btn.pressed { background: #2e2e2e; }
+
+.sys-labels {
+    display: flex;
+    gap: 16px;
+}
+
+.sys-labels span {
+    font-size: 0.55em;
+    color: #c00;
+    font-weight: bold;
+    letter-spacing: 1px;
+    width: 40px;
+    text-align: center;
+}
+
+/* ── A / B buttons ───────────────────────────────────────────────────────── */
+.ctrl-right {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    padding-top: 10px;
+}
+
+.menu-btn {
+    position: absolute;
+    top: -4px;
+    right: -8px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #e8e8e8;
+    border: none;
+    font-size: 0.42em;
+    color: #555;
+    font-family: monospace;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    outline: none;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+
+.menu-btn:active { background: #ccc; }
+
+.ab-group {
+    display: flex;
+    gap: 12px;
+}
+
+.ab-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+}
+
+.ab-wrap {
+    width: 62px;
+    height: 62px;
+    background: #d8d8d8;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.ab-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%, #ff6060, #bb0000);
+    border: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    outline: none;
+    touch-action: none;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.7), inset 0 1px 3px rgba(255,180,180,0.35);
+    transition: transform 0.05s, box-shadow 0.05s;
+}
+
+.ab-btn.pressed {
+    transform: scale(0.91);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.7);
+}
+
+.ab-label {
+    font-size: 0.72em;
+    color: #bb0000;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
 </style>
 </head>
 <body>
@@ -96,6 +303,54 @@ canvas {
 
 <div id="canvas-wrapper">
     <canvas id="canvas" width="256" height="240"></canvas>
+</div>
+
+<div id="touch-controller">
+    <div class="ctrl-face">
+        <!-- D-pad -->
+        <div class="dpad">
+            <div class="dpad-corner"></div>
+            <button class="dpad-btn" id="dpad-up">▲</button>
+            <div class="dpad-corner"></div>
+            <button class="dpad-btn" id="dpad-left">◀</button>
+            <div class="dpad-center-dot"></div>
+            <button class="dpad-btn" id="dpad-right">▶</button>
+            <div class="dpad-corner"></div>
+            <button class="dpad-btn" id="dpad-down">▼</button>
+            <div class="dpad-corner"></div>
+        </div>
+
+        <!-- Center: Select / Start -->
+        <div class="ctrl-center">
+            <div class="sys-btns-row">
+                <button class="sys-btn" id="btn-select"></button>
+                <button class="sys-btn" id="btn-start"></button>
+            </div>
+            <div class="sys-labels">
+                <span>SELECT</span>
+                <span>START</span>
+            </div>
+        </div>
+
+        <!-- A / B buttons + menu -->
+        <div class="ctrl-right">
+            <button class="menu-btn" id="btn-menu">menu</button>
+            <div class="ab-group">
+                <div class="ab-col">
+                    <div class="ab-wrap">
+                        <button class="ab-btn" id="btn-b"></button>
+                    </div>
+                    <span class="ab-label">B</span>
+                </div>
+                <div class="ab-col">
+                    <div class="ab-wrap">
+                        <button class="ab-btn" id="btn-a"></button>
+                    </div>
+                    <span class="ab-label">A</span>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <div id="status">Initializing…</div>
@@ -201,6 +456,7 @@ const dropZone    = document.getElementById('drop-zone');
 const fileInput   = document.getElementById('file-input');
 const canvasWrap  = document.getElementById('canvas-wrapper');
 const statusEl    = document.getElementById('status');
+const touchCtrl   = document.getElementById('touch-controller');
 
 function setStatus(msg) { statusEl.textContent = msg; }
 
@@ -307,6 +563,7 @@ async function loadRomFile(file) {
     romLoaded = true;
     canvasWrap.style.display = 'block';
     dropZone.style.display   = 'none';
+    if (isTouchDevice()) touchCtrl.style.display = 'block';
 
     setupAudio();   // requires user gesture – file pick/drop qualifies
     startGame();
@@ -330,6 +587,45 @@ document.addEventListener('keyup', (e) => {
     const btn = KEY_MAP[e.code];
     if (btn !== undefined) controllerBtns &= ~btn;
 });
+
+// ── Touch controller ──────────────────────────────────────────────────────────
+function isTouchDevice() {
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+function bindCtrlBtn(id, mask) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        el.setPointerCapture(e.pointerId);
+        controllerBtns |= mask;
+        el.classList.add('pressed');
+    });
+    const release = () => {
+        controllerBtns &= ~mask;
+        el.classList.remove('pressed');
+    };
+    el.addEventListener('pointerup',     release);
+    el.addEventListener('pointercancel', release);
+}
+
+if (isTouchDevice()) {
+    bindCtrlBtn('dpad-up',    BTN_UP);
+    bindCtrlBtn('dpad-down',  BTN_DOWN);
+    bindCtrlBtn('dpad-left',  BTN_LEFT);
+    bindCtrlBtn('dpad-right', BTN_RIGHT);
+    bindCtrlBtn('btn-a',      BTN_A);
+    bindCtrlBtn('btn-b',      BTN_B);
+    bindCtrlBtn('btn-select', BTN_SELECT);
+    bindCtrlBtn('btn-start',  BTN_START);
+
+    const menuBtn = document.getElementById('btn-menu');
+    menuBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (romLoaded) Module._nes_web_reset();
+    });
+}
 
 // ── File UI ───────────────────────────────────────────────────────────────────
 dropZone.addEventListener('click', () => fileInput.click());
