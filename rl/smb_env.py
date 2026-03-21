@@ -598,7 +598,7 @@ class SMBEnv(gym.Env):
         else:
             self._time_since_ground = min(self._time_since_ground + 1, 60)
         last_action = self._action_history[-1]
-        if last_action in _JUMP_ACTIONS:
+        if int(last_action) in _JUMP_ACTIONS:
             self._time_since_jump = 0
         else:
             self._time_since_jump = min(self._time_since_jump + 1, 60)
@@ -1261,7 +1261,7 @@ class SMBEnv(gym.Env):
 
         # Unnecessary jump penalty: jumping while on solid ground with no
         # obstacle/gap ahead wastes time (small discouragement)
-        if action in _JUMP_ACTIONS:
+        if int(action) in _JUMP_ACTIONS:
             on_ground    = obs["player_state"][5] > 0.5
             gap_any      = float(obs["gap_ahead"].max())      > 0.1
             obstacle_any = float(obs["obstacle_ahead"].max()) > 0.1
