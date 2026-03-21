@@ -1,4 +1,5 @@
-<!-- Last audited: 2026-03-20 -->
+<!-- Last audited: 2026-03-21 -->
+<!-- Action space expanded 14→20: MED_JUMP and MAX_JUMP added 2026-03-21 -->
 <!-- RND added: 2026-03-19 -->
 <!-- on_ground fix: 2026-03-20 (RAM[0x001D]==0x00 confirmed via frame-level diff) -->
 <!-- VisitedCellsWrapper added: 2026-03-20 (replaces NewMaxXWrapper 1D frontier reward) -->
@@ -173,7 +174,32 @@ All components listed in order of application. The base env clips total to `[-15
 | `trajectory_memory` | (14,) | [-1,1] | Recent motion, time-since events, support state |
 | `route_viability` | (11,) | [0,1] | Viability score + dead-end signals + doomed flag |
 
-Action space: `Discrete(14)` — 14 motor primitives (WAIT, STEP_RIGHT, RUN_RIGHT, STEP_LEFT, RUN_LEFT, SHORT_JUMP_R, FULL_JUMP_R, SHORT_JUMP_L, FULL_JUMP_L, SHORT_JUMP_IP, FULL_JUMP_IP, BRAKE, CROUCH, FIREBALL).
+Action space: `Discrete(20)` — 20 motor primitives. Indices 0-13 are unchanged (backward compatible with prior checkpoints that used 14 actions). Indices 14-19 are new medium and maximum jump actions added 2026-03-21. **Any checkpoint trained on 14 actions is INCOMPATIBLE with action_space.n=20 — a fresh training run is required.**
+
+| Index | Name | Input sequence | Total frames | Notes |
+|-------|------|---------------|-------------|-------|
+| 0 | WAIT | None (5f) | 5 | No input |
+| 1 | STEP_RIGHT | RIGHT (5f) | 5 | Walk right |
+| 2 | RUN_RIGHT | RIGHT+B (5f) | 5 | Run right |
+| 3 | STEP_LEFT | LEFT (5f) | 5 | Walk left |
+| 4 | RUN_LEFT | LEFT+B (5f) | 5 | Run left |
+| 5 | SHORT_JUMP_R | RIGHT+A (5f) → RIGHT (1f) | 6 | Short jump right |
+| 6 | FULL_JUMP_R | RIGHT+B+A (9f) → RIGHT+B (1f) | 10 | Full jump right |
+| 7 | SHORT_JUMP_L | LEFT+A (5f) → LEFT (1f) | 6 | Short jump left |
+| 8 | FULL_JUMP_L | LEFT+B+A (9f) → LEFT+B (1f) | 10 | Full jump left |
+| 9 | SHORT_JUMP_IP | A (5f) → nothing (1f) | 6 | Short jump in place |
+| 10 | FULL_JUMP_IP | A (9f) → nothing (1f) | 10 | Full jump in place |
+| 11 | BRAKE | None (5f) | 5 | Stop/decelerate |
+| 12 | CROUCH | DOWN (5f) | 5 | Crouch / enter pipe |
+| 13 | FIREBALL | B (5f) | 5 | Throw fireball |
+| 14 | MED_JUMP_R | RIGHT+B+A (24f) → RIGHT+B (1f) | 25 | **NEW** Medium jump right — reaches tall platforms |
+| 15 | MED_JUMP_L | LEFT+B+A (24f) → LEFT+B (1f) | 25 | **NEW** Medium jump left |
+| 16 | MED_JUMP_IP | A (24f) → nothing (1f) | 25 | **NEW** Medium jump in place |
+| 17 | MAX_JUMP_R | RIGHT+B+A (32f) → RIGHT+B (1f) | 33 | **NEW** Maximum jump right — full SMB1 height |
+| 18 | MAX_JUMP_L | LEFT+B+A (32f) → LEFT+B (1f) | 33 | **NEW** Maximum jump left |
+| 19 | MAX_JUMP_IP | A (32f) → nothing (1f) | 33 | **NEW** Maximum jump in place |
+
+Jump frame count rationale: 9f (FULL_JUMP) cannot reach tall platforms encountered in World 1-3. 24f (MED_JUMP) and 32f (MAX_JUMP) added to give the agent access to the full SMB1 jump height range. All new jumps use B (running button) to match the existing FULL_JUMP pattern which also uses B for consistent sprint-jump behavior.
 
 ---
 

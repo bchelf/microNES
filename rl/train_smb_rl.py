@@ -415,6 +415,12 @@ def main():
         print(f"[RND] predictor params: {sum(p.numel() for p in rnd_predictor.parameters()):,}")
         print(f"[RND] intrinsic_scale:  {args.rnd_scale}")
 
+    # Print action space size so mismatches with old checkpoints are immediately visible.
+    _tmp_action_env = SMBEnv(rom_path=args.rom, lib_path=args.lib)
+    print(f"Action space: {_tmp_action_env.action_space.n} actions")
+    _tmp_action_env.close()
+    del _tmp_action_env
+
     print(f"ROM:            {args.rom}")
     print(f"Envs:           {args.n_envs}")
     print(f"Timesteps:      {args.timesteps:,}")

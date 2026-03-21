@@ -5,7 +5,7 @@ Structured observations from emulator RAM and PPU nametables.
 No pixels used. Frame skip = 3.
 
 Observation space: Dict of grouped Box spaces (all float32, range [-1,1] or [0,1]).
-Action space: Discrete(12) — meaningful NES button combinations.
+Action space: Discrete(20) — 20 motor primitives (14 original + 6 new medium/max jumps).
 """
 
 from __future__ import annotations
@@ -63,26 +63,44 @@ _B   = NES_BUTTON_B
 _D   = NES_BUTTON_DOWN
 
 _BASE_FRAMES     = 5   # NES frames for all non-jump actions
-_SHORT_JUMP_HOLD = 5   # NES frames to hold A → short arc
-_FULL_JUMP_HOLD  = 9   # NES frames to hold A → full arc
+_SHORT_JUMP_HOLD = 5   # NES frames to hold A → short arc  (~50-60% max height)
+_FULL_JUMP_HOLD  = 9   # NES frames to hold A → near-full arc
+_MED_JUMP_HOLD   = 24  # NES frames to hold A → medium arc  (reaches tall platforms)
+_MAX_JUMP_HOLD   = 32  # NES frames to hold A → maximum arc (full SMB1 jump height)
+# Jump duration rationale:
+#   9f jumps cannot reach tall platforms in World 1-3.
+#   24f and 32f jumps added to give agent access to full jump height range.
+#
+# NOTE: The action space changed from 14 → 20 actions (indices 14-19 are new).
+#       Any checkpoint trained on 14 actions is INCOMPATIBLE with this environment
+#       and a fresh training run is required.
 
-# Action durations: non-jump = 5 frames, short jump = 6, full jump = 10.
+# Action durations: non-jump = 5 frames, short jump = 6, full jump = 10,
+#                   medium jump = 25, max jump = 33.
 # Index  Name              Segments: [(buttons, n_frames), ...]
+# --- Indices 0-13: UNCHANGED — backward compatible with prior checkpoints ---
 _ACTION_SEQUENCES: list[list[tuple[int, int]]] = [
     [(0,              _BASE_FRAMES)],                              # 0  WAIT
     [(_R,             _BASE_FRAMES)],                              # 1  STEP_RIGHT
     [(_R | _B,        _BASE_FRAMES)],                              # 2  RUN_RIGHT
     [(_L,             _BASE_FRAMES)],                              # 3  STEP_LEFT
     [(_L | _B,        _BASE_FRAMES)],                              # 4  RUN_LEFT
-    [(_R | _A,        _SHORT_JUMP_HOLD), (_R,       1)],           # 5  SHORT_JUMP_R   (6)
-    [(_R | _B | _A,   _FULL_JUMP_HOLD),  (_R | _B,  1)],           # 6  FULL_JUMP_R   (10)
-    [(_L | _A,        _SHORT_JUMP_HOLD), (_L,       1)],           # 7  SHORT_JUMP_L   (6)
-    [(_L | _B | _A,   _FULL_JUMP_HOLD),  (_L | _B,  1)],           # 8  FULL_JUMP_L   (10)
-    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],           # 9  SHORT_JUMP_IP  (6)
-    [(_A,             _FULL_JUMP_HOLD),  (0,         1)],           # 10 FULL_JUMP_IP  (10)
+    [(_R | _A,        _SHORT_JUMP_HOLD), (_R,       1)],           # 5  SHORT_JUMP_R   (6f total)
+    [(_R | _B | _A,   _FULL_JUMP_HOLD),  (_R | _B,  1)],           # 6  FULL_JUMP_R   (10f total)
+    [(_L | _A,        _SHORT_JUMP_HOLD), (_L,       1)],           # 7  SHORT_JUMP_L   (6f total)
+    [(_L | _B | _A,   _FULL_JUMP_HOLD),  (_L | _B,  1)],           # 8  FULL_JUMP_L   (10f total)
+    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],           # 9  SHORT_JUMP_IP  (6f total)
+    [(_A,             _FULL_JUMP_HOLD),  (0,         1)],           # 10 FULL_JUMP_IP  (10f total)
     [(0,              _BASE_FRAMES)],                              # 11 BRAKE
     [(_D,             _BASE_FRAMES)],                              # 12 CROUCH / pipe
     [(_B,             _BASE_FRAMES)],                              # 13 FIREBALL
+    # --- Indices 14-19: NEW medium and maximum jump actions ---
+    [(_R | _B | _A,   _MED_JUMP_HOLD),  (_R | _B,  1)],           # 14 MED_JUMP_R    (25f total)
+    [(_L | _B | _A,   _MED_JUMP_HOLD),  (_L | _B,  1)],           # 15 MED_JUMP_L    (25f total)
+    [(_A,             _MED_JUMP_HOLD),  (0,          1)],           # 16 MED_JUMP_IP   (25f total)
+    [(_R | _B | _A,   _MAX_JUMP_HOLD),  (_R | _B,  1)],           # 17 MAX_JUMP_R    (33f total)
+    [(_L | _B | _A,   _MAX_JUMP_HOLD),  (_L | _B,  1)],           # 18 MAX_JUMP_L    (33f total)
+    [(_A,             _MAX_JUMP_HOLD),  (0,          1)],           # 19 MAX_JUMP_IP   (33f total)
 ]
 N_ACTIONS = len(_ACTION_SEQUENCES)
 
@@ -164,7 +182,7 @@ MAX_FALL_HEIGHT  = 8    # tiles below foot level scanned for surfaces
 MAX_SPAN_WIDTH   = 12   # normalization ceiling for surface span width
 TRAJ_HIST_LEN    = 8    # steps of trajectory history
 
-_JUMP_ACTIONS = frozenset([5, 6, 7, 8, 9, 10])  # action indices that press A
+_JUMP_ACTIONS = frozenset([5, 6, 7, 8, 9, 10, 14, 15, 16, 17, 18, 19])  # action indices that press A
 
 # ---------------------------------------------------------------------------
 # Route viability reward shaping parameters
