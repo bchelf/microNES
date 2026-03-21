@@ -553,7 +553,7 @@ class SMBEnv(gym.Env):
 
         # --- Game flags ---
         player_dead    = int(int(ram[0x000E]) == 0x0B)
-        level_complete = int(int(ram[0x001D]) == 0x03)
+        level_complete = int(int(ram[0x001D]) == 0x03 or int(ram[0x0770]) == 0x02)
         in_pipe        = int(ram[0x0001] != 0)
 
         # --- Objects (powerup + 2 fireballs) ---

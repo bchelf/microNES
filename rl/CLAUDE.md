@@ -1,8 +1,9 @@
-<!-- Last audited: 2026-03-20 -->
+<!-- Last audited: 2026-03-21 -->
 <!-- RND added: 2026-03-19 -->
 <!-- on_ground fix: 2026-03-20 (RAM[0x001D]==0x00 confirmed via frame-level diff) -->
 <!-- VisitedCellsWrapper added: 2026-03-20 (replaces NewMaxXWrapper 1D frontier reward) -->
 <!-- StickyActionWrapper + StompRewardWrapper + PlatformClimbRewardWrapper added: 2026-03-20 -->
+<!-- castle level_complete fix: 2026-03-21 (RAM[0x0770]==0x02 added as castle-end signal) -->
 <!-- Audit confidence: INFO KEYS=HIGH | WRAPPER STACK=HIGH | REWARD=HIGH | CALLBACKS=HIGH | BUGS=HIGH | METRICS=HIGH | RND=HIGH -->
 
 # CLAUDE.md — SMB RL Training Project
@@ -67,10 +68,13 @@ Both paths:
 - `info["level_complete"]` will be `False`
 
 **Level Complete** (`terminated=True, truncated=False`):
-- RAM address: `RAM[0x001D] == 0x03` (end-of-level game mode)
+- **Normal levels (flagpole):** `RAM[0x001D] == 0x03` (flagpole-slide Player_State)
+- **Castle levels (axe, x-4):** `RAM[0x0770] == 0x02` (OperMode transitions 1→2 when the castle cutscene begins, before the area change at step ~+90 later)
+- Both are OR'd: `level_complete = int(RAM[0x001D]==0x03 or RAM[0x0770]==0x02)`
 - Detected in `_get_obs()` → `obs["game_flags"][1] = 1.0`
 - `info["level_complete"]` will be `True`
 - `info["death_penalty_applied"]` will be `False`
+- **Note:** `RAM[0x001D]` never reaches `0x03` for castle levels — confirmed by `diag_castle_end.py` (2026-03-21). Castle-level completion was silently missed before this fix.
 
 **Truncation** (`terminated=False, truncated=True`):
 Three causes, all in `SMBEnv.step()` lines 345–354:

@@ -10,7 +10,7 @@ roms/
 
 # RL training outputs
 checkpoints*
-eval_videos*
+eval*
 logs*
 old-data*
 best_runs*
