@@ -14,6 +14,7 @@ eval_videos*
 logs*
 old-data*
 best_runs*
+game_runs*
 
 # Python
 .venv/
