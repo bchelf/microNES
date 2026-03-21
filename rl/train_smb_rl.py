@@ -54,6 +54,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
 from eval_callback import (
+    BestRunRecorderCallback,
     CurriculumStageCallback,
     DiagnosticsCallback,
     EntropySchedulerCallback,
@@ -205,6 +206,8 @@ def main():
                         help="Max env steps per eval episode")
     parser.add_argument("--checkpoint-dir",  default="checkpoints")
     parser.add_argument("--video-dir",       default="eval_videos")
+    parser.add_argument("--best-run-dir",    default="best_runs",
+                        help="Directory for best-episode .npy + MP4 files (default: best_runs/)")
     parser.add_argument("--log-dir",         default="logs")
     parser.add_argument("--resume",          default=None, help="Resume from .zip")
     parser.add_argument(
@@ -621,6 +624,12 @@ def main():
         ))
 
     callbacks += [
+        BestRunRecorderCallback(
+            rom_path  = args.rom,
+            level     = stage1_levels[0],
+            video_dir = args.best_run_dir,
+            verbose   = 1,
+        ),
         EvalVideoCallback(
             rom_path       = args.rom,
             checkpoint_dir = args.checkpoint_dir,

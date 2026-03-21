@@ -13,6 +13,7 @@ Training envs continue using libmicrones_rl.dylib (framebuffer disabled).
 from __future__ import annotations
 
 import os
+import threading
 import warnings
 from collections import deque
 from pathlib import Path
@@ -660,6 +661,159 @@ class EvalVideoCallback(BaseCallback):
         else:
             if self.verbose:
                 print(f"[eval] {level}  no frames captured (framebuffer disabled?)")
+
+
+class BestRunRecorderCallback(BaseCallback):
+    """
+    Records the best training episode from env-0 as a .npy actions file + MP4.
+
+    Watches env-0's world_x throughout training. When an episode ends with a
+    max_x that exceeds the previous best by at least `min_improvement`, the
+    episode's action sequence is replayed in a fresh render env and saved as
+    an MP4, along with a .npy of the action array (dtype int32).
+
+    Replay and video write run in a background thread so training is not
+    blocked. If a new best arrives before the prior save thread finishes, the
+    callback joins the thread first (serialised saves, never concurrent).
+
+    Args:
+        rom_path:            Path to SMB1 .nes ROM.
+        level:               Level string for env-0 (e.g. "1-1"). Used when
+                             replaying the episode. Should match the level
+                             env-0 trains on; defaults to "1-1".
+        video_dir:           Directory for output files (default "best_runs").
+        min_improvement:     Min max_x gain over previous best to trigger a
+                             save (default 50.0).
+        initial_best_max_x:  Pre-seed the best threshold — useful when resuming
+                             training so early episodes don't re-trigger for
+                             already-known territory (default 0.0).
+        video_fps:           Output video frame rate (default 60).
+        render_lib_path:     Override path to libmicrones_rl_render.
+                             Auto-detected if None.
+        verbose:             SB3 verbosity level.
+    """
+
+    def __init__(
+        self,
+        rom_path:            str,
+        level:               str   = "1-1",
+        video_dir:           str   = "best_runs",
+        min_improvement:     float = 50.0,
+        initial_best_max_x:  float = 0.0,
+        video_fps:           int   = 60,
+        render_lib_path:     str | None = None,
+        verbose:             int   = 1,
+    ):
+        super().__init__(verbose)
+        self._rom_path           = rom_path
+        self._level              = level
+        self._video_dir          = video_dir
+        self._min_improvement    = min_improvement
+        self._video_fps          = video_fps
+        self._render_lib         = render_lib_path or _find_render_lib()
+
+        self._best_max_x: float          = initial_best_max_x
+        self._episode_actions: list[int] = []
+        self._episode_max_x: float       = 0.0
+        self._bg_thread: threading.Thread | None = None
+
+    # ------------------------------------------------------------------
+    def _on_training_start(self) -> None:
+        os.makedirs(self._video_dir, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        action = int(self.locals["actions"][0])
+        info   = self.locals["infos"][0]
+        done   = bool(self.locals["dones"][0])
+
+        self._episode_actions.append(action)
+        wx = float(info.get("world_x", 0.0))
+        if wx > self._episode_max_x:
+            self._episode_max_x = wx
+
+        if done:
+            if self._episode_max_x >= self._best_max_x + self._min_improvement:
+                actions_snap = list(self._episode_actions)
+                max_x_snap   = self._episode_max_x
+                step_snap    = self.num_timesteps
+                old_best     = self._best_max_x
+                self._best_max_x = self._episode_max_x
+                self._save_async(actions_snap, max_x_snap, step_snap)
+                if self.verbose:
+                    print(
+                        f"\n[best_run] new best x={max_x_snap:.0f} "
+                        f"(prev={old_best:.0f}, +{max_x_snap - old_best:.0f}) "
+                        f"step={step_snap:,} — saving ..."
+                    )
+
+            self._episode_actions = []
+            self._episode_max_x   = 0.0
+
+        return True
+
+    def _on_training_end(self) -> None:
+        if self._bg_thread is not None and self._bg_thread.is_alive():
+            self._bg_thread.join()
+
+    # ------------------------------------------------------------------
+    def _save_async(self, actions: list[int], max_x: float, step: int) -> None:
+        if self._bg_thread is not None and self._bg_thread.is_alive():
+            self._bg_thread.join()
+        self._bg_thread = threading.Thread(
+            target=self._save_run,
+            args=(actions, max_x, step),
+            daemon=True,
+        )
+        self._bg_thread.start()
+
+    def _save_run(self, actions: list[int], max_x: float, step: int) -> None:
+        tag = f"step{step:010d}_x{int(max_x)}"
+
+        # Save action sequence.
+        npy_path = os.path.join(self._video_dir, f"best_{tag}.npy")
+        np.save(npy_path, np.array(actions, dtype=np.int32))
+
+        # Replay through a fresh render env.
+        env = SMBEnv(
+            rom_path    = self._rom_path,
+            lib_path    = self._render_lib,
+            render_mode = "rgb_array",
+        )
+        frames: list[np.ndarray] = []
+        try:
+            env.reset(options={"level": self._level})
+            for a in actions:
+                _, _, terminated, truncated, _ = env.step(a)
+                frames.extend(env.pop_step_frames())
+                if terminated or truncated:
+                    break
+        finally:
+            env.close()
+
+        if not frames:
+            if self.verbose:
+                print(f"[best_run] WARNING: no frames captured for {tag} "
+                      f"(render lib missing framebuffer?)")
+            return
+
+        # Write MP4.
+        video_path = os.path.join(self._video_dir, f"best_{tag}.mp4")
+        with imageio.get_writer(
+            video_path,
+            fps     = self._video_fps,
+            codec   = "libx264",
+            quality = 8,
+        ) as writer:
+            for f in frames:
+                writer.append_data(f)
+
+        if self.verbose:
+            print(
+                f"[best_run] saved: x={max_x:.0f}  {len(frames)} frames  "
+                f"step={step:,}\n"
+                f"         npy → {npy_path}\n"
+                f"         mp4 → {video_path}"
+            )
 
 
 class RNDTrainerCallback(BaseCallback):

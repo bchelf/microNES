@@ -306,7 +306,7 @@ Action space: `Discrete(20)` — 20 motor primitives. **Expanded from 14 → 20 
 - `diagnostics/frontier_bonus_blocked_rate` — fraction of steps in episode where bonus was gated by airborne state. Healthy range: 10–30%. Near 0% means Mario rarely reaches new ground while airborne (or fix not working). >50% means ground detection may be broken.
 - `diagnostics/max_x_on_ground` — highest world_x achieved while Mario was on the ground this episode. This is the real navigable progress, distinct from `max_x_episode` which can include airborne positions.
 
-**Impact of the bug:** All training runs before 2026-03-20 that used `NewMaxXWrapper` with `max_x_seen` initialized to 905 were optimizing the wrong objective near the World 1-3 goomba platform. The frontier reward was partially incentivizing running off cliffs and platform edges, not navigating the ground path. The first training run after this fix should show a change in the agent's risk profile near frontier obstacles.
+**Impact of the bug:** All training runs before 2026-03-20 were optimizing the wrong objective near the World 1-3 goomba platform. The frontier reward was partially incentivizing running off cliffs and platform edges, not navigating the ground path. The first training run after this fix should show a change in the agent's risk profile near frontier obstacles.
 
 ---
 
@@ -371,15 +371,9 @@ To resume: `python rl/train_smb_rl.py --rom ... --resume checkpoints/model_XXXXX
 
 ### max_x_seen Initialization
 
-`NewMaxXWrapper.max_x_seen` initializes to `0.0` at construction time. In `train_smb_rl.py`, immediately after `SubprocVecEnv` is created, the frontier is set to the known prior value via:
+`NewMaxXWrapper.max_x_seen` initializes to `0.0` at construction time. Each of the 8 workers has its own independent `max_x_seen`. There is no cross-worker sharing — env 0's value is used as the representative global frontier in diagnostics.
 
-```python
-vec_env.env_method("__setattr__", "max_x_seen", 905)
-```
-
-This pre-loads the lifetime frontier to **905** (the furthest x reached in prior runs). Without this, the frontier bonus fires everywhere below x=905 on the first episode, producing a misleading spike in `max_x_global` and incorrect `died_before_obstacle` thresholds. When starting a genuinely fresh run, remove this line or set it to 0.
-
-Each of the 8 workers has its own independent `max_x_seen`. There is no cross-worker sharing — env 0's value is used as the representative global frontier in diagnostics.
+When resuming from a checkpoint, pre-seed the frontier via `vec_env.env_method("__setattr__", "max_x_seen", N)` where N is the furthest x the agent reached in prior training. Without this, the frontier bonus re-fires everywhere below that x in the first episode, producing a misleading spike in `max_x_global` and incorrect `died_before_obstacle` thresholds.
 
 ### Default Training Invocation
 
