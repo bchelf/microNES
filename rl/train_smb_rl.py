@@ -169,7 +169,7 @@ def make_env_fn(
         env = AirborneActionMaskWrapper(env)
         if use_sticky:
             env = StickyActionWrapper(env, sticky_prob=sticky_prob)
-        env = NewMaxXWrapper(env, scale=2.0, active=False)  # diagnostic only
+        env = NewMaxXWrapper(env, scale=2.0, active=True)
         env = SurvivalBonusWrapper(env)
         env = DeathPenaltyWrapper(env)
         if use_stomp:

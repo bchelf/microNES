@@ -181,7 +181,10 @@ DOOM_DROP_MIN     = 0.25  # delta-V drop magnitude that triggers doomed-state pe
 DOOM_PENALTY      = 0.3   # one-shot doomed-state entry penalty
 LANDING_BONUS     = 0.2   # bonus when landing on a viability-improving surface
 VIABILITY_IMPROVE = 0.10  # min V improvement on landing to grant landing bonus
-PROGRESS_COEF     = 0.01  # reward/penalty per pixel of horizontal movement: +coef*dx (right) / -coef*abs(dx) (left)
+PROGRESS_RIGHT_COEF    = 0.02   # reward per pixel of rightward movement (dx > 0)
+PROGRESS_LEFT_COEF     = 0.04   # penalty per pixel of leftward movement (dx < 0) — 2× asymmetric
+BEHIND_FRONTIER_COEF   = 0.002  # per-step penalty per pixel behind episode-max (after buffer)
+BEHIND_FRONTIER_BUFFER = 32     # pixels of slack before behind-frontier penalty fires (≈ 2 tiles)
 
 # ---------------------------------------------------------------------------
 # Stagnation / truncation parameters
@@ -1246,9 +1249,16 @@ class SMBEnv(gym.Env):
     def _compute_reward(self, obs: dict, action: int, world_x: int) -> float:
         r = 0.0
 
-        # --- Horizontal progress: reward rightward, penalise leftward ---
+        # --- Horizontal progress: asymmetric reward/penalty ---
         dx = world_x - self._prev_world_x
-        r += PROGRESS_COEF * dx
+        if dx > 0:
+            r += PROGRESS_RIGHT_COEF * dx
+        elif dx < 0:
+            r -= PROGRESS_LEFT_COEF * abs(dx)
+
+        # --- Behind-frontier penalty: ongoing drain when retreating from episode max ---
+        behind = max(0, self._episode_max_x - world_x - BEHIND_FRONTIER_BUFFER)
+        r -= BEHIND_FRONTIER_COEF * behind
 
         # --- Route viability potential (Ng-style shaping, zero-sum over time) ---
         viability_now = self._viability_from_topo(obs["platform_topology"])

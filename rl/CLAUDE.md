@@ -108,7 +108,7 @@ SMBEnv
 | `SMBEnv` | Full reward from `_compute_reward()` — see Reward Structure | `world_x`, `frame`, `stagnating`, `on_ground`, `mario_y` |
 | `AirborneActionMaskWrapper` | **None** — action-only modification | `action_masked` |
 | `StickyActionWrapper` | **None** — action-only modification | `action_was_sticky` |
-| `NewMaxXWrapper` | **None** (active=False — diagnostic only) | `max_x_seen`, `mario_on_ground`, `frontier_bonus_blocked` |
+| `NewMaxXWrapper` | `+2.0 * (world_x - max_x_seen)` when on_ground at new lifetime max | `max_x_seen`, `mario_on_ground`, `frontier_bonus_blocked` |
 | `SurvivalBonusWrapper` | +`0.02` per alive non-terminal step | `total_survival_bonus` |
 | `DeathPenaltyWrapper` | `-4.0` additive on death step | `death_penalty_applied`, `level_complete` |
 | `StompRewardWrapper` | +`stomp_bonus` (+5.0) per stomp of Goomba/GreenKoopa/RedKoopa/BuzzyBeetle | `stomps_this_episode`, `stomp_detection_active` |
@@ -130,7 +130,9 @@ All components listed in order of application. The base env clips total to `[-15
 
 | Component | Source | Scale | Trigger | Notes |
 |-----------|--------|-------|---------|-------|
-| Horizontal progress | `SMBEnv._compute_reward()` | `+0.01 * dx` | Every step | Symmetric: rewards rightward movement, penalises leftward. `dx = world_x - prev_world_x`. |
+| Rightward progress | `SMBEnv._compute_reward()` | `+0.02 * dx` | `dx > 0` | Reward per pixel moved right. |
+| Leftward penalty | `SMBEnv._compute_reward()` | `-0.04 * abs(dx)` | `dx < 0` | 2× asymmetric penalty per pixel moved left. |
+| Behind-frontier penalty | `SMBEnv._compute_reward()` | `-0.002 * max(0, episode_max_x - world_x - 32)` | Every step | Ongoing drain when >32px behind episode-best. Gravitational pull back to the frontier. |
 | Route viability potential | `SMBEnv._compute_reward()` | `0.5 * delta_V` | Every step | Ng-style shaping. Zero-sum over episode. `delta_V` can be negative (doom entry) |
 | Alive bonus | `SMBEnv._compute_reward()` | `+0.002` | Every step | **Separate from SurvivalBonusWrapper's bonus** |
 | Death penalty (base) | `SMBEnv._compute_reward()` | `-10.0` | Death step | |
@@ -139,7 +141,7 @@ All components listed in order of application. The base env clips total to `[-15
 | Landing bonus | `SMBEnv._compute_reward()` | `+0.2` | Landing on viability-improving surface | `delta_V > 0.10` required |
 | Doomed-state penalty | `SMBEnv._compute_reward()` | `-0.3` | Viability drops below 0.15 with delta < -0.25 | One-shot on entry |
 | **Base env reward clip** | `SMBEnv._compute_reward()` | `[-15.0, 15.0]` | Always | Applied before wrappers |
-| Frontier bonus (lifetime) | `NewMaxXWrapper` | **disabled** (`active=False`) | — | `max_x_seen` still tracked for diagnostics; no reward |
+| Frontier bonus (lifetime) | `NewMaxXWrapper` | `+2.0 * (world_x - max_x_seen)` | New lifetime-max x while `on_ground=True` | `max_x_seen` never resets. Fires only at the leading edge of all-time rightward progress. |
 | Stomp bonus | `StompRewardWrapper` | `+stomp_bonus` (default `+5.0`) | Stomping Goomba/GreenKoopa/RedKoopa/BuzzyBeetle | Detected via: enemy alive→dead + mario_falling + position in range. Disabled with `--no-stomp`. |
 | Platform climb bonus | `PlatformClimbRewardWrapper` | `+climb_bonus` (default `+2.0`) | Landing that is both forward (world_x >) AND higher (mario_y <) than takeoff position | One bonus per landing event (False→True on_ground transition). Disabled with `--no-climb`. |
 | Cell exploration bonus | `VisitedCellsWrapper` | `+cell_bonus` (default `+1.0`) | New ground-level `(cx,cy)` tile cell at or near rightward frontier | Only fires when `cx >= episode_max_cx - rightward_buffer` (default buffer=2). Prevents leftward cell harvesting. |
