@@ -11,9 +11,6 @@ enum {
     APU_FRAME_STEP_5 = 18641,
 };
 
-static const float k_apu_triangle_mix_boost = 1.35f;
-static const float k_apu_noise_mix_boost = 1.10f;
-
 static const uint8_t k_apu_length_table[32] = {
     10, 254, 20,  2, 40,  4, 80,  6,
     160, 8, 60, 10, 14, 12, 26, 14,
@@ -317,6 +314,9 @@ static void apu_clock_frame_counter(Apu *apu) {
     }
 }
 
+/* The three per-cycle clock_*_timer functions below are kept only for unit
+ * test reference. They are NOT called from the normal emulation path; timers
+ * are advanced via the batched apu_timer_advance() calls in apu_step(). */
 static void apu_clock_pulse_timer(ApuPulseChannel *pulse) {
     if (pulse->timer_counter == 0) {
         pulse->timer_counter = pulse->timer_period;
@@ -434,10 +434,8 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
 
     pulse1 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1) ? (float)pulse1_raw : 0.0f;
     pulse2 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2) ? (float)pulse2_raw : 0.0f;
-    triangle = (apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE) ?
-        (float)triangle_raw * k_apu_triangle_mix_boost : 0.0f;
-    noise = (apu->mix_enable_mask & APU_DEBUG_MASK_NOISE) ?
-        (float)noise_raw * k_apu_noise_mix_boost : 0.0f;
+    triangle = (apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE) ? (float)triangle_raw : 0.0f;
+    noise = (apu->mix_enable_mask & APU_DEBUG_MASK_NOISE) ? (float)noise_raw : 0.0f;
     pulse_sum = pulse1 + pulse2;
 
     if (pulse_sum > 0.0f) {
@@ -449,15 +447,14 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
 
     mixed = pulse_out + tnd_out;
 
-    /* Single-pole IIR low-pass, α=0.2 → cutoff ≈ 1.7kHz at 48kHz.
-     * Mimics the RC low-pass filters on the real NES audio output path.
-     * Smooths square-wave transitions and eliminates aliased high-frequency
-     * harmonics that cause buzz in the PWM output. dc_prev_output holds the
-     * filter state (renamed in spirit; DC filter was removed). */
-    mixed = 0.2f * mixed + 0.8f * (float)apu->dc_prev_output;
-    apu->dc_prev_output = (double)mixed;
+    /* Leaky DC-level tracker. Chases the mean of `mixed` at ~0.76 Hz.
+     * Subtracting it removes DC offset without creating step discontinuities
+     * at note-on/off transitions — equivalent to the analog capacitor coupling
+     * on the real NES output circuit. R = 0.9999 per sample at 48 kHz. */
+    apu->dc_level_tracker += ((double)mixed - apu->dc_level_tracker) * 0.0001;
+    mixed = mixed - (float)apu->dc_level_tracker;
 
-    sample = (int)lrintf(mixed * 32767.0f * 1.1f);
+    sample = (int)lrintf(mixed * 32767.0f);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -656,8 +653,8 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         if (pulse->enabled) {
             pulse->length_counter = k_apu_length_table[(value >> 3) & 0x1fu];
         }
-        pulse->timer_counter = pulse->timer_period;
-        pulse->duty_step = 0;
+        /* Do not reset timer_counter or duty_step: the 2A03 duty sequencer is
+         * free-running and the timer reloads naturally at the next expiry. */
         pulse->envelope_start = true;
         break;
     }
