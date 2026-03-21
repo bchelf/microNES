@@ -103,6 +103,15 @@ class NesLib:
         lib.micrones_rl_write_ram.restype  = None
         lib.micrones_rl_write_ram.argtypes = [vp, ctypes.c_uint16, ctypes.c_uint8]
 
+        lib.micrones_rl_state_size.restype  = ctypes.c_size_t
+        lib.micrones_rl_state_size.argtypes = []
+
+        lib.micrones_rl_save_state.restype  = None
+        lib.micrones_rl_save_state.argtypes = [vp, vp]
+
+        lib.micrones_rl_load_state.restype  = None
+        lib.micrones_rl_load_state.argtypes = [vp, vp]
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -155,3 +164,22 @@ class NesLib:
     def framebuffer_view(self, h: int) -> np.ndarray:
         ptr = self._lib.micrones_rl_framebuffer(h)
         return np.ctypeslib.as_array(ptr, shape=(240, 256))
+
+    # ------------------------------------------------------------------
+    # Savestate
+    # ------------------------------------------------------------------
+    def state_size(self) -> int:
+        """Return sizeof(MicroNESSaveState) — fixed blob size in bytes."""
+        return int(self._lib.micrones_rl_state_size())
+
+    def save_state_bytes(self, h: int) -> bytes:
+        """Capture complete emulator state; returns opaque bytes of fixed size."""
+        sz  = self.state_size()
+        buf = ctypes.create_string_buffer(sz)
+        self._lib.micrones_rl_save_state(h, buf)
+        return bytes(buf)
+
+    def load_state_bytes(self, h: int, data: bytes) -> None:
+        """Restore emulator state from bytes previously returned by save_state_bytes."""
+        buf = ctypes.create_string_buffer(data, len(data))
+        self._lib.micrones_rl_load_state(h, buf)

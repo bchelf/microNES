@@ -423,6 +423,71 @@ class SMBEnv(gym.Env):
             self._h = 0
 
     # ------------------------------------------------------------------
+    # Savestate API
+    # ------------------------------------------------------------------
+    def save_state(self) -> bytes:
+        """
+        Capture complete emulator state.
+
+        Returns an opaque bytes blob of fixed size (sizeof(MicroNESSaveState)).
+        Can be called at any point during an episode; safe to call multiple
+        times with independent results.  Use load_state() to restore.
+        """
+        return self._lib.save_state_bytes(self._h)
+
+    def load_state(self, state: bytes) -> None:
+        """
+        Restore emulator to a previously saved state.
+
+        After this call, stepping the env produces identical results to
+        stepping from the original saved point.  All Python-side tracking
+        state is re-synchronised from the restored emulator RAM so that
+        reward signals and termination detection remain consistent.
+
+        Python state synced after load
+        --------------------------------
+        _prev_lives          ← RAM[0x075A]  (critical: prevents false pit_death)
+        _prev_world_x        ← recomputed world_x
+        _episode_max_x       ← set to restored world_x (conservative reset)
+        _world_x_history     ← cleared, seeded with restored world_x
+        _last_progress_step  ← set to current _step_count
+        _prev_enemy_screen_* ← zeroed (one-step velocity approximation error)
+        _traj_*              ← filled with restored position
+        _time_since_*        ← reset to defaults
+        _prev_facing         ← derived from RAM[0x0033]
+        _prev_viability_score← reset to neutral 0.5
+        _action_history      ← reset to [0, 0, 0, 0]
+        """
+        self._lib.load_state_bytes(self._h, state)
+
+        # Re-derive all Python tracking state from the freshly restored RAM.
+        world_x = self._read_world_x()
+        self._prev_world_x   = world_x
+        self._prev_lives     = int(self._ram[0x075A])   # CRITICAL for pit_death
+
+        self._world_x_history.clear()
+        self._world_x_history.append(world_x)
+        self._episode_max_x    = world_x
+        self._last_progress_step = self._step_count
+
+        self._prev_enemy_screen_x[:] = 0
+        self._prev_enemy_screen_y[:] = 0
+
+        sy        = int(self._ram[0x00CE])
+        on_ground = int(self._ram[0x001D]) == 0x00
+        for _ in range(TRAJ_HIST_LEN):
+            self._traj_x.append(world_x)
+            self._traj_sy.append(sy)
+            self._traj_ground.append(on_ground)
+        self._time_since_ground  = 0 if on_ground else 5
+        self._time_since_jump    = 30
+        self._time_since_dir_chg = 30
+        self._prev_facing        = int(int(self._ram[0x0033]) == 0)
+        self._prev_viability_score = 0.5
+
+        self._action_history.extend([0, 0, 0, 0])
+
+    # ------------------------------------------------------------------
     # Observation space
     # ------------------------------------------------------------------
     @staticmethod
