@@ -114,6 +114,7 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_extrinsic_sum:     list[float] = []   # cumulative extrinsic per episode
         self._ep_blocked_steps:     list[int]   = []   # steps where frontier bonus was blocked
         self._ep_max_x_on_ground:   list[float] = []   # highest world_x while on ground
+        self._ep_sticky_steps:      list[int]   = []   # steps where action was repeated
         self._max_episode_steps: float = 600.0   # overwritten in _on_training_start
         self._last_cells_check: int = 0          # step count of last visited_cells_count log
 
@@ -128,6 +129,7 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_extrinsic_sum       = [0.0]   * n
         self._ep_blocked_steps       = [0]     * n
         self._ep_max_x_on_ground     = [0.0]   * n
+        self._ep_sticky_steps        = [0]     * n
 
         # Try to read MAX_STEPS from the env; fall back to 600.
         # Assumption: if get_attr fails, 600 steps/episode is a reasonable upper bound
@@ -171,6 +173,10 @@ class DiagnosticsCallback(BaseCallback):
             # still fires the key — it does, so this is fine either way).
             if info.get("frontier_bonus_blocked", False):
                 self._ep_blocked_steps[i] += 1
+
+            # Sticky action tracking (absent when StickyActionWrapper is disabled).
+            if info.get("action_was_sticky", False):
+                self._ep_sticky_steps[i] += 1
             # max_x_on_ground: read directly from SMBEnv's info["on_ground"] so this
             # metric works regardless of whether NewMaxXWrapper is active or not.
             if info.get("on_ground", True):
@@ -281,6 +287,17 @@ class DiagnosticsCallback(BaseCallback):
             self.logger.record_mean("diagnostics/cells_visited_total",   float(total_cells))
             self.logger.record_mean("diagnostics/cells_per_step",        cells_per_step)
 
+            # Group I — Combat & Action Quality
+            # stomps_this_episode: read from StompRewardWrapper's cumulative counter.
+            #   Absent (0) when StompRewardWrapper is disabled via --no-stomp.
+            stomps = int(info.get("stomps_this_episode", 0))
+            self.logger.record_mean("diagnostics/stomps_this_episode", float(stomps))
+            # sticky_action_rate: fraction of steps where the previous action was repeated.
+            #   Absent (0) when StickyActionWrapper is disabled via --no-sticky.
+            #   Healthy range: near sticky_prob (e.g. 0.25). Deviations indicate RNG issues.
+            sticky_rate = float(self._ep_sticky_steps[i]) / ep_steps_nonzero
+            self.logger.record_mean("diagnostics/sticky_action_rate", sticky_rate)
+
             # Reset accumulators for this env slot.
             self._ep_max_x[i]               = 0.0
             self._ep_steps[i]               = 0
@@ -290,6 +307,7 @@ class DiagnosticsCallback(BaseCallback):
             self._ep_extrinsic_sum[i]       = 0.0
             self._ep_blocked_steps[i]       = 0
             self._ep_max_x_on_ground[i]     = 0.0
+            self._ep_sticky_steps[i]        = 0
 
         # ---- Group D — Entropy & Policy Health (every step) ----
         coef = self.model.ent_coef

@@ -551,3 +551,173 @@ class VisitedCellsWrapper(gym.Wrapper):
             f"[VisitedCells] warmup complete: {self._total_cells} cells "
             f"from {n_episodes} episodes."
         )
+
+
+# ---------------------------------------------------------------------------
+# Stompable enemy types (from RAM[0x000F+i])
+# ---------------------------------------------------------------------------
+# Goomba=0x01, GreenKoopa=0x02, RedKoopa=0x03, BuzzyBeetle=0x06
+# NOT included: PiranhaPlant=0x09, HammerBros=0x0A, Bowser=0x0B
+_STOMPABLE_TYPES: frozenset = frozenset({0x01, 0x02, 0x03, 0x06})
+
+
+class StickyActionWrapper(gym.Wrapper):
+    """
+    With probability sticky_prob, repeat the previous action instead of executing
+    the new one from the policy.
+
+    This encourages sustained button-holds across env steps — most notably, holding
+    A for full jump arcs.  The base env's action space uses multi-frame motor
+    primitives where a single FULL_JUMP_R already holds A for 9 NES frames, but
+    sticky actions effectively chain multiple JUMP steps together, allowing the
+    agent to execute repeated jumps or sustained A-button input without requiring
+    the policy to explicitly output the same action multiple times in a row.
+
+    The wrapper is transparent to observation and reward — it only modifies which
+    action is passed down to the base env.
+
+    Info keys added:
+        action_was_sticky (bool) — True if the previous action was repeated this step.
+
+    Args:
+        env:         The wrapped Gymnasium environment.
+        sticky_prob: Probability of repeating the previous action (default 0.25).
+    """
+
+    def __init__(self, env: gym.Env, sticky_prob: float = 0.25):
+        super().__init__(env)
+        self.sticky_prob  = sticky_prob
+        self._last_action: int = 0
+        self._rng = np.random.default_rng()
+
+    def reset(self, **kwargs):
+        self._last_action = 0
+        obs, info = self.env.reset(**kwargs)
+        return obs, info
+
+    def step(self, action):
+        was_sticky = False
+        if self._rng.random() < self.sticky_prob:
+            action     = self._last_action
+            was_sticky = True
+        self._last_action = int(action)
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        info["action_was_sticky"] = was_sticky
+        return obs, reward, terminated, truncated, info
+
+
+class StompRewardWrapper(gym.Wrapper):
+    """
+    Rewards Mario for stomping stompable enemies.
+
+    Stompable types: Goomba (0x01), Green Koopa (0x02), Red Koopa (0x03),
+    Buzzy Beetle (0x06).  Piranha Plants, Hammer Bros, and Bowser are excluded.
+
+    DETECTION MECHANISM:
+    A stomp is detected when all of the following hold on consecutive steps:
+      1. Enemy slot i was alive with a stompable type on the PREVIOUS step.
+      2. Enemy slot i is gone (alive flag = 0) on the CURRENT step.
+      3. Mario was FALLING on the PREVIOUS step (prev_vy > 0.05, positive = down).
+      4. Enemy was in plausible stomp range on the PREVIOUS step:
+         prev_rel_y in [-0.2, 0.5] — enemy within ~24-60 px below Mario, or
+         slightly above (Mario's feet crossing the enemy's top).
+
+    Checking PREVIOUS step state avoids the off-by-one where the enemy has already
+    vanished by the time we'd read it in the current obs.
+
+    Enemy data source: obs["enemies"] (5,8) float32 from _build_enemies():
+        index 0: etype/15.0  → round(val*15) to recover integer type
+        index 2: (ey-mario_sy)/120.0  → rel_y  (positive = enemy below Mario)
+        index 4: vy_raw/80.0 (populated by frame-delta in _get_obs)
+        index 7: 1.0 if alive, 0.0 if dead
+    Mario vy: obs["player_state"][4] = vy_raw/80.0, positive = falling (NES y-down).
+
+    DETECTION FAILURE HANDLING:
+    When an enemy disappears and Mario WAS falling but the position check fails,
+    `_stomp_detection_failures` increments.  After 100 such failures a warning
+    is issued and the wrapper disables itself.  This catches systematic signal
+    failures (broken vy or rel_y) without silently producing zero stomp rewards.
+    Non-stomp enemy deaths (fireball, Starman, pit fall) when Mario is NOT falling
+    are NOT counted as failures — they are normal gameplay.
+
+    Info keys added each step:
+        stomps_this_episode    (int)  — stomps rewarded so far this episode
+        stomp_detection_active (bool) — False if wrapper has self-disabled
+
+    Args:
+        env:         The wrapped Gymnasium environment.
+        stomp_bonus: Reward per confirmed stomp (default 5.0).
+    """
+
+    def __init__(self, env: gym.Env, stomp_bonus: float = 5.0):
+        super().__init__(env)
+        self.stomp_bonus = stomp_bonus
+
+        self._disabled:                  bool          = False
+        self._stomp_detection_failures:  int           = 0
+        self._stomps_this_episode:       int           = 0
+
+        # Previous-step cache (sized for 5 enemy slots)
+        self._prev_etypes: np.ndarray = np.zeros(5, dtype=np.int32)
+        self._prev_alive:  np.ndarray = np.zeros(5, dtype=bool)
+        self._prev_rel_y:  np.ndarray = np.zeros(5, dtype=np.float32)
+        self._prev_vy:     float      = 0.0   # Mario vy last step, positive=falling
+
+    def _update_prev_state(self, obs: dict) -> None:
+        enemies = obs["enemies"]   # (5, 8)
+        for i in range(5):
+            self._prev_etypes[i] = round(float(enemies[i, 0]) * 15.0)
+            self._prev_alive[i]  = bool(enemies[i, 7] > 0.5)
+            self._prev_rel_y[i]  = float(enemies[i, 2])
+        self._prev_vy = float(obs["player_state"][4])   # vy_raw/80.0, positive=falling
+
+    def reset(self, **kwargs):
+        self._stomps_this_episode = 0
+        obs, info = self.env.reset(**kwargs)
+        self._update_prev_state(obs)
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+
+        stomp_bonus_total = 0.0
+        if not self._disabled:
+            enemies       = obs["enemies"]   # (5, 8)
+            mario_falling = self._prev_vy > 0.05   # was Mario falling last step?
+
+            for i in range(5):
+                if not self._prev_alive[i]:
+                    continue   # was already dead last step
+                if self._prev_etypes[i] not in _STOMPABLE_TYPES:
+                    continue   # not a stompable enemy
+
+                if bool(enemies[i, 7] > 0.5):
+                    continue   # enemy still alive this step
+
+                # Enemy was alive with stompable type, now gone.
+                position_ok = -0.2 <= self._prev_rel_y[i] <= 0.5
+                if mario_falling and position_ok:
+                    stomp_bonus_total        += self.stomp_bonus
+                    self._stomps_this_episode += 1
+                elif mario_falling and not position_ok:
+                    # Looks like a stomp attempt (falling + enemy gone) but position
+                    # check failed — may indicate broken rel_y or vy signal.
+                    self._stomp_detection_failures += 1
+                    if self._stomp_detection_failures > 100:
+                        import warnings
+                        warnings.warn(
+                            f"[StompRewardWrapper] {self._stomp_detection_failures} "
+                            "stomp detection failures (mario falling + enemy gone but "
+                            "position check failed). Disabling stomp rewards. "
+                            "Check prev_rel_y range [-0.2, 0.5] or vy signal.",
+                            stacklevel=2,
+                        )
+                        self._disabled = True
+                        break
+
+        reward += stomp_bonus_total
+        self._update_prev_state(obs)
+
+        info["stomps_this_episode"]    = self._stomps_this_episode
+        info["stomp_detection_active"] = not self._disabled
+        return obs, reward, terminated, truncated, info

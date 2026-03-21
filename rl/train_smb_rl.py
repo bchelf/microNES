@@ -66,6 +66,8 @@ from wrappers import (
     DeathPenaltyWrapper,
     NewMaxXWrapper,
     RNDWrapper,
+    StickyActionWrapper,
+    StompRewardWrapper,
     SurvivalBonusWrapper,
     VisitedCellsWrapper,
 )
@@ -102,17 +104,30 @@ def make_env_fn(
     rnd_embedding_dim: int = 512,
     rnd_scale: float = 1.0,
     cell_bonus: float = 1.0,
+    sticky_prob: float = 0.25,
+    stomp_bonus: float = 5.0,
+    use_sticky: bool = True,
+    use_stomp: bool = True,
 ):
     """
     Factory for SubprocVecEnv — runs headless, no rendering.
 
     Wrapper stack (innermost → outermost):
       SMBEnv
+        → StickyActionWrapper(sticky_prob=0.25)    action repeat — helps sustained jumps
         → NewMaxXWrapper(scale=2.0, active=False)  diagnostic only — no reward bonus
         → SurvivalBonusWrapper(bonus=0.02)         per-step alive bonus
         → DeathPenaltyWrapper(penalty=4.0)         additive death penalty
+        → StompRewardWrapper(stomp_bonus=5.0)      +5 for stomping Goomba/Koopa/Beetle
         → VisitedCellsWrapper(cell_bonus=1.0)      2D cell exploration bonus
         → RNDWrapper(scale=rnd_scale)              intrinsic curiosity (when enabled)
+
+    StickyActionWrapper is innermost (closest to SMBEnv) so it intercepts actions
+    before any reward wrapper sees them.
+
+    StompRewardWrapper sits between DeathPenaltyWrapper and VisitedCellsWrapper —
+    after death detection (so stomp bonus doesn't interact with death penalty) and
+    before cell bonus (so a stomp that crosses into a new cell rewards both).
 
     NewMaxXWrapper is kept with active=False so that max_x_seen remains trackable
     via get_attr for EntropySchedulerCallback plateau detection, without adding
@@ -144,9 +159,13 @@ def make_env_fn(
             levels=levels,
             level_weights=level_weights,
         )
+        if use_sticky:
+            env = StickyActionWrapper(env, sticky_prob=sticky_prob)
         env = NewMaxXWrapper(env, scale=2.0, active=False)  # diagnostic only
         env = SurvivalBonusWrapper(env)
         env = DeathPenaltyWrapper(env)
+        if use_stomp:
+            env = StompRewardWrapper(env, stomp_bonus=stomp_bonus)
         env = VisitedCellsWrapper(env, cell_size_x=8, cell_size_y=8,
                                   cell_bonus=cell_bonus)
         if use_rnd:
@@ -239,6 +258,35 @@ def main():
             "  stagnant (0.0)  → reduce cell_size or increase --cell-bonus\n"
             "  0.01-0.05       → healthy exploration rate"
         ),
+    )
+    # ---- StickyAction arguments ----
+    parser.add_argument(
+        "--sticky-prob",
+        type=float,
+        default=0.25,
+        metavar="FLOAT",
+        help="Probability of repeating previous action (default: 0.25). "
+             "Range 0.0–0.5; 0.25 is the Atari standard.",
+    )
+    parser.add_argument(
+        "--no-sticky",
+        action="store_true",
+        default=False,
+        help="Disable StickyActionWrapper entirely (default: enabled).",
+    )
+    # ---- StompReward arguments ----
+    parser.add_argument(
+        "--stomp-bonus",
+        type=float,
+        default=5.0,
+        metavar="FLOAT",
+        help="Reward per Goomba/Koopa/Beetle stomp (default: 5.0).",
+    )
+    parser.add_argument(
+        "--no-stomp",
+        action="store_true",
+        default=False,
+        help="Disable StompRewardWrapper entirely (default: enabled).",
     )
     # ---- RND arguments ----
     parser.add_argument(
@@ -362,12 +410,22 @@ def main():
         f"→ RNDWrapper(scale={args.rnd_scale}, device={device})"
         if use_rnd else "(RND disabled)"
     )
+    _sticky_label = (
+        f"→ StickyActionWrapper(prob={args.sticky_prob})"
+        if not args.no_sticky else "(sticky disabled)"
+    )
+    _stomp_label = (
+        f"→ StompRewardWrapper(bonus={args.stomp_bonus})"
+        if not args.no_stomp else "(stomp disabled)"
+    )
     print(
         f"Wrapper stack:  SMBEnv"
+        f" {_sticky_label}"
         f" → NewMaxXWrapper(scale=2.0, active=False)"
         f" → SurvivalBonusWrapper(bonus=0.02)"
         f" → DeathPenaltyWrapper(penalty=4.0)"
-        f" → VisitedCellsWrapper(cell_bonus={args.cell_bonus}, cell_size=16x16)"
+        f" {_stomp_label}"
+        f" → VisitedCellsWrapper(cell_bonus={args.cell_bonus}, cell_size=8x8)"
         f" {_rnd_label}"
         f" → SubprocVecEnv → VecMonitor"
     )
@@ -381,6 +439,10 @@ def main():
             rnd_embedding_dim=512,
             rnd_scale=args.rnd_scale,
             cell_bonus=args.cell_bonus,
+            sticky_prob=args.sticky_prob,
+            stomp_bonus=args.stomp_bonus,
+            use_sticky=not args.no_sticky,
+            use_stomp=not args.no_stomp,
         )
         for _ in range(args.n_envs)
     ]
@@ -491,7 +553,9 @@ def main():
         f"  (active: {use_rnd})\n"
         "  G — ground:   frontier_bonus_blocked_rate, max_x_on_ground\n"
         "  H — cells:    cells_visited_episode, cells_visited_total, cells_per_step,\n"
-        "                visited_cells_count  (primary exploration progress metric)"
+        "                visited_cells_count  (primary exploration progress metric)\n"
+        f"  I — combat:   stomps_this_episode  (active: {not args.no_stomp}),\n"
+        f"                sticky_action_rate  (active: {not args.no_sticky})"
     )
     if use_rnd:
         print(
@@ -552,8 +616,12 @@ def main():
     print("=" * 60)
     print("TRAINING HEALTH CHECK")
     _stack = (
-        "SMBEnv → NewMaxXWrapper(active=False) → SurvivalBonusWrapper"
-        " → DeathPenaltyWrapper → VisitedCellsWrapper"
+        "SMBEnv"
+        + (" → StickyActionWrapper" if not args.no_sticky else "")
+        + " → NewMaxXWrapper(active=False) → SurvivalBonusWrapper"
+        " → DeathPenaltyWrapper"
+        + (" → StompRewardWrapper" if not args.no_stomp else "")
+        + " → VisitedCellsWrapper"
         + (" → RNDWrapper" if use_rnd else " (no RNDWrapper)")
         + " → SubprocVecEnv → VecMonitor"
     )
