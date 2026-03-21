@@ -721,3 +721,88 @@ class StompRewardWrapper(gym.Wrapper):
         info["stomps_this_episode"]    = self._stomps_this_episode
         info["stomp_detection_active"] = not self._disabled
         return obs, reward, terminated, truncated, info
+
+
+class PlatformClimbRewardWrapper(gym.Wrapper):
+    """
+    Rewards Mario for landing on a platform that is both forward AND higher
+    than his last recorded ground position.
+
+    WHY:
+    VisitedCellsWrapper already rewards new (cx, cy) cells, but gives equal
+    weight to sideways and downward landings.  This wrapper adds a targeted
+    signal specifically for upward platform transitions: the agent gets a
+    bonus only when a jump both advances x AND gains height.
+
+    TRACKING:
+    last_ground_x / last_ground_y are updated every step on_ground=True.
+    They freeze when Mario is airborne, capturing the takeoff position.
+    On landing (on_ground False→True), the landing position is compared to
+    the frozen takeoff position.
+
+    REWARD:
+    Fires only on the False→True transition (one bonus per landing, not per
+    step on the new platform).  Requires world_x > last_ground_x AND
+    mario_y < last_ground_y (both forward AND higher — SMB y is inverted,
+    smaller y = higher on screen).  Either condition failing means no bonus.
+
+    EDGE CASES:
+    - last_ground_x is None (episode just started, Mario spawns airborne):
+      record landing position without bonus.  In normal SMB play Mario
+      always spawns on ground, so last_ground_x is set on step 1 before
+      any landing event can occur.  The None check is a safety valve only.
+    - Pit falls: info["on_ground"] stays False during a fall
+      (RAM[0x001D] remains 0x01), so no False→True transition occurs and
+      no bonus fires.
+
+    Info keys added each step:
+        climbs_this_episode (int) — cumulative climbs rewarded this episode.
+                                     Reset to 0 on reset().
+
+    Args:
+        env:         The wrapped Gymnasium environment.
+        climb_bonus: Reward per qualifying climb landing (default 2.0).
+    """
+
+    def __init__(self, env: gym.Env, climb_bonus: float = 2.0):
+        super().__init__(env)
+        self.climb_bonus = climb_bonus
+
+        self._last_ground_x:       float | None = None
+        self._last_ground_y:       float | None = None
+        self._prev_on_ground:      bool          = True   # Mario spawns on ground
+        self._climbs_this_episode: int           = 0
+
+    def reset(self, **kwargs):
+        self._last_ground_x       = None
+        self._last_ground_y       = None
+        self._prev_on_ground      = True
+        self._climbs_this_episode = 0
+        obs, info = self.env.reset(**kwargs)
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+
+        on_ground = bool(info.get("on_ground", True))
+        world_x   = float(info.get("world_x",  0.0))
+        mario_y   = float(info.get("mario_y",   0.0))
+
+        # Detect landing: on_ground transitioned False → True this step.
+        landing = (not self._prev_on_ground) and on_ground
+
+        if landing and self._last_ground_x is not None:
+            # Award bonus only if forward AND higher than takeoff position.
+            if world_x > self._last_ground_x and mario_y < self._last_ground_y:
+                reward += self.climb_bonus
+                self._climbs_this_episode += 1
+
+        # Update takeoff-position cache whenever on the ground.
+        if on_ground:
+            self._last_ground_x = world_x
+            self._last_ground_y = mario_y
+
+        self._prev_on_ground = on_ground
+
+        info["climbs_this_episode"] = self._climbs_this_episode
+        return obs, reward, terminated, truncated, info

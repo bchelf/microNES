@@ -2,7 +2,7 @@
 <!-- RND added: 2026-03-19 -->
 <!-- on_ground fix: 2026-03-20 (RAM[0x001D]==0x00 confirmed via frame-level diff) -->
 <!-- VisitedCellsWrapper added: 2026-03-20 (replaces NewMaxXWrapper 1D frontier reward) -->
-<!-- StickyActionWrapper + StompRewardWrapper added: 2026-03-20 -->
+<!-- StickyActionWrapper + StompRewardWrapper + PlatformClimbRewardWrapper added: 2026-03-20 -->
 <!-- Audit confidence: INFO KEYS=HIGH | WRAPPER STACK=HIGH | REWARD=HIGH | CALLBACKS=HIGH | BUGS=HIGH | METRICS=HIGH | RND=HIGH -->
 
 # CLAUDE.md — SMB RL Training Project
@@ -38,6 +38,7 @@ These are the **only** keys present in `info` after a `step()` call. Any other k
 | `action_was_sticky` | `bool` | `StickyActionWrapper.step()` | True when the previous action was repeated instead of the policy's action. | Only present when StickyActionWrapper is in the stack (absent with `--no-sticky`). |
 | `stomps_this_episode` | `int` | `StompRewardWrapper.step()` | Cumulative stomps rewarded so far this episode. Reset to 0 on reset(). | Only present when StompRewardWrapper is in the stack (absent with `--no-stomp`). |
 | `stomp_detection_active` | `bool` | `StompRewardWrapper.step()` | False if StompRewardWrapper self-disabled after >100 detection failures. | Monitor if `stomps_this_episode` is unexpectedly always 0. |
+| `climbs_this_episode` | `int` | `PlatformClimbRewardWrapper.step()` | Cumulative forward+higher landings rewarded this episode. Reset to 0 on reset(). | Only present when PlatformClimbRewardWrapper is in the stack (absent with `--no-climb`). |
 | `episode` | `dict` | `VecMonitor` | Contains `r`, `l`, `t` at episode end only | Only present in the final step info of an episode. Note: `r` includes intrinsic reward (it is part of the total env reward). |
 
 **CRITICAL: There is no `info["death"]` key and no `info["x_pos"]` key.** Death is read from `obs["game_flags"][0]`. Level complete is read from `obs["game_flags"][1]` or `info["level_complete"]`.
@@ -78,15 +79,16 @@ Applied in `make_env_fn()` in `train_smb_rl.py`:
 
 ```
 SMBEnv
-  → StickyActionWrapper(sticky_prob=0.25)     --no-sticky to disable
-    → NewMaxXWrapper(scale=2.0, active=False)   diagnostic only — no reward
+  → StickyActionWrapper(sticky_prob=0.25)          --no-sticky to disable
+    → NewMaxXWrapper(scale=2.0, active=False)        diagnostic only — no reward
       → SurvivalBonusWrapper(survival_bonus=0.02)
         → DeathPenaltyWrapper(death_penalty=4.0)
-          → StompRewardWrapper(stomp_bonus=5.0)  --no-stomp to disable
-            → VisitedCellsWrapper(cell_bonus=1.0, cell_size=8×8)
-              → RNDWrapper(intrinsic_scale=1.0)   --no-rnd to disable
-                → SubprocVecEnv (8 workers)
-                  → VecMonitor
+          → StompRewardWrapper(stomp_bonus=5.0)      --no-stomp to disable
+            → PlatformClimbRewardWrapper(climb_bonus=2.0)  --no-climb to disable
+              → VisitedCellsWrapper(cell_bonus=1.0, cell_size=8×8)
+                → RNDWrapper(intrinsic_scale=1.0)    --no-rnd to disable
+                  → SubprocVecEnv (8 workers)
+                    → VecMonitor
 ```
 
 | Layer | Reward modification | Info keys added |
@@ -97,6 +99,7 @@ SMBEnv
 | `SurvivalBonusWrapper` | +`0.02` per alive non-terminal step | `total_survival_bonus` |
 | `DeathPenaltyWrapper` | `-4.0` additive on death step | `death_penalty_applied`, `level_complete` |
 | `StompRewardWrapper` | +`stomp_bonus` (+5.0) per stomp of Goomba/GreenKoopa/RedKoopa/BuzzyBeetle | `stomps_this_episode`, `stomp_detection_active` |
+| `PlatformClimbRewardWrapper` | +`climb_bonus` (+2.0) per landing that is forward AND higher than takeoff | `climbs_this_episode` |
 | `VisitedCellsWrapper` | +`cell_bonus` when on_ground AND new (cx,cy) cell | `new_cell_found`, `total_cells_visited`, `episode_new_cells` |
 | `RNDWrapper` | +`intrinsic_scale * intrinsic_norm` every step | `intrinsic_reward`, `extrinsic_reward`, `raw_intrinsic` |
 | `SubprocVecEnv` | None | None |
@@ -128,6 +131,7 @@ All components listed in order of application. The base env clips total to `[-15
 | **Base env reward clip** | `SMBEnv._compute_reward()` | `[-15.0, 15.0]` | Always | Applied before wrappers |
 | Frontier bonus (lifetime) | `NewMaxXWrapper` | **disabled** (`active=False`) | — | `max_x_seen` still tracked for diagnostics; no reward |
 | Stomp bonus | `StompRewardWrapper` | `+stomp_bonus` (default `+5.0`) | Stomping Goomba/GreenKoopa/RedKoopa/BuzzyBeetle | Detected via: enemy alive→dead + mario_falling + position in range. Disabled with `--no-stomp`. |
+| Platform climb bonus | `PlatformClimbRewardWrapper` | `+climb_bonus` (default `+2.0`) | Landing that is both forward (world_x >) AND higher (mario_y <) than takeoff position | One bonus per landing event (False→True on_ground transition). Disabled with `--no-climb`. |
 | Cell exploration bonus | `VisitedCellsWrapper` | `+cell_bonus` (default `+1.0`) | New ground-level `(cx,cy)` tile cell | Replaces the 1D x-frontier bonus with a 2D signal |
 | Survival bonus | `SurvivalBonusWrapper` | `+0.02` per step | Alive non-terminal step | **See double-counting note** |
 | Extra death penalty | `DeathPenaltyWrapper` | `-4.0` | Death step | Additive on top of base env's `-10.0` |
@@ -225,6 +229,7 @@ Action space: `Discrete(14)` — 14 motor primitives (WAIT, STEP_RIGHT, RUN_RIGH
 | `diagnostics/visited_cells_count` | H | Actual archive size from `len(env.visited_cells)` via `get_attr` (logged every `check_interval` steps). Monotonically non-decreasing by design. | Reliable. |
 | `diagnostics/stomps_this_episode` | I | Mean stomps per episode (from `info["stomps_this_episode"]`). Should be non-zero once the agent reaches the goomba platform in 1-3. Zero with `--no-stomp`. | Reliable. |
 | `diagnostics/sticky_action_rate` | I | Fraction of steps where the previous action was repeated. Expected value ≈ `sticky_prob` (0.25). Zero with `--no-sticky`. | Reliable. |
+| `diagnostics/climbs_this_episode` | I | Mean forward+higher landings per episode. Non-zero once the agent is jumping onto elevated platforms. Zero with `--no-climb`. | Reliable. |
 
 ---
 

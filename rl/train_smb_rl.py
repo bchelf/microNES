@@ -65,6 +65,7 @@ from smb_env import SMBEnv
 from wrappers import (
     DeathPenaltyWrapper,
     NewMaxXWrapper,
+    PlatformClimbRewardWrapper,
     RNDWrapper,
     StickyActionWrapper,
     StompRewardWrapper,
@@ -106,21 +107,24 @@ def make_env_fn(
     cell_bonus: float = 1.0,
     sticky_prob: float = 0.25,
     stomp_bonus: float = 5.0,
+    climb_bonus: float = 2.0,
     use_sticky: bool = True,
     use_stomp: bool = True,
+    use_climb: bool = True,
 ):
     """
     Factory for SubprocVecEnv — runs headless, no rendering.
 
     Wrapper stack (innermost → outermost):
       SMBEnv
-        → StickyActionWrapper(sticky_prob=0.25)    action repeat — helps sustained jumps
-        → NewMaxXWrapper(scale=2.0, active=False)  diagnostic only — no reward bonus
-        → SurvivalBonusWrapper(bonus=0.02)         per-step alive bonus
-        → DeathPenaltyWrapper(penalty=4.0)         additive death penalty
-        → StompRewardWrapper(stomp_bonus=5.0)      +5 for stomping Goomba/Koopa/Beetle
-        → VisitedCellsWrapper(cell_bonus=1.0)      2D cell exploration bonus
-        → RNDWrapper(scale=rnd_scale)              intrinsic curiosity (when enabled)
+        → StickyActionWrapper(sticky_prob=0.25)         action repeat — helps sustained jumps
+        → NewMaxXWrapper(scale=2.0, active=False)       diagnostic only — no reward bonus
+        → SurvivalBonusWrapper(bonus=0.02)              per-step alive bonus
+        → DeathPenaltyWrapper(penalty=4.0)              additive death penalty
+        → StompRewardWrapper(stomp_bonus=5.0)           +5 for stomping Goomba/Koopa/Beetle
+        → PlatformClimbRewardWrapper(climb_bonus=2.0)   +2 for landing forward+higher
+        → VisitedCellsWrapper(cell_bonus=1.0)           2D cell exploration bonus
+        → RNDWrapper(scale=rnd_scale)                   intrinsic curiosity (when enabled)
 
     StickyActionWrapper is innermost (closest to SMBEnv) so it intercepts actions
     before any reward wrapper sees them.
@@ -166,6 +170,8 @@ def make_env_fn(
         env = DeathPenaltyWrapper(env)
         if use_stomp:
             env = StompRewardWrapper(env, stomp_bonus=stomp_bonus)
+        if use_climb:
+            env = PlatformClimbRewardWrapper(env, climb_bonus=climb_bonus)
         env = VisitedCellsWrapper(env, cell_size_x=8, cell_size_y=8,
                                   cell_bonus=cell_bonus)
         if use_rnd:
@@ -287,6 +293,20 @@ def main():
         action="store_true",
         default=False,
         help="Disable StompRewardWrapper entirely (default: enabled).",
+    )
+    # ---- PlatformClimb arguments ----
+    parser.add_argument(
+        "--climb-bonus",
+        type=float,
+        default=2.0,
+        metavar="FLOAT",
+        help="Reward per forward+higher landing (default: 2.0).",
+    )
+    parser.add_argument(
+        "--no-climb",
+        action="store_true",
+        default=False,
+        help="Disable PlatformClimbRewardWrapper entirely (default: enabled).",
     )
     # ---- RND arguments ----
     parser.add_argument(
@@ -418,6 +438,10 @@ def main():
         f"→ StompRewardWrapper(bonus={args.stomp_bonus})"
         if not args.no_stomp else "(stomp disabled)"
     )
+    _climb_label = (
+        f"→ PlatformClimbRewardWrapper(bonus={args.climb_bonus})"
+        if not args.no_climb else "(climb disabled)"
+    )
     print(
         f"Wrapper stack:  SMBEnv"
         f" {_sticky_label}"
@@ -425,6 +449,7 @@ def main():
         f" → SurvivalBonusWrapper(bonus=0.02)"
         f" → DeathPenaltyWrapper(penalty=4.0)"
         f" {_stomp_label}"
+        f" {_climb_label}"
         f" → VisitedCellsWrapper(cell_bonus={args.cell_bonus}, cell_size=8x8)"
         f" {_rnd_label}"
         f" → SubprocVecEnv → VecMonitor"
@@ -441,8 +466,10 @@ def main():
             cell_bonus=args.cell_bonus,
             sticky_prob=args.sticky_prob,
             stomp_bonus=args.stomp_bonus,
+            climb_bonus=args.climb_bonus,
             use_sticky=not args.no_sticky,
             use_stomp=not args.no_stomp,
+            use_climb=not args.no_climb,
         )
         for _ in range(args.n_envs)
     ]
@@ -555,7 +582,8 @@ def main():
         "  H — cells:    cells_visited_episode, cells_visited_total, cells_per_step,\n"
         "                visited_cells_count  (primary exploration progress metric)\n"
         f"  I — combat:   stomps_this_episode  (active: {not args.no_stomp}),\n"
-        f"                sticky_action_rate  (active: {not args.no_sticky})"
+        f"                sticky_action_rate  (active: {not args.no_sticky}),\n"
+        f"                climbs_this_episode (active: {not args.no_climb})"
     )
     if use_rnd:
         print(
@@ -621,6 +649,7 @@ def main():
         + " → NewMaxXWrapper(active=False) → SurvivalBonusWrapper"
         " → DeathPenaltyWrapper"
         + (" → StompRewardWrapper" if not args.no_stomp else "")
+        + (" → PlatformClimbRewardWrapper" if not args.no_climb else "")
         + " → VisitedCellsWrapper"
         + (" → RNDWrapper" if use_rnd else " (no RNDWrapper)")
         + " → SubprocVecEnv → VecMonitor"

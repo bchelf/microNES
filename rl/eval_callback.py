@@ -292,6 +292,8 @@ class DiagnosticsCallback(BaseCallback):
             #   Absent (0) when StompRewardWrapper is disabled via --no-stomp.
             stomps = int(info.get("stomps_this_episode", 0))
             self.logger.record_mean("diagnostics/stomps_this_episode", float(stomps))
+            climbs = int(info.get("climbs_this_episode", 0))
+            self.logger.record_mean("diagnostics/climbs_this_episode", float(climbs))
             # sticky_action_rate: fraction of steps where the previous action was repeated.
             #   Absent (0) when StickyActionWrapper is disabled via --no-sticky.
             #   Healthy range: near sticky_prob (e.g. 0.25). Deviations indicate RNG issues.
