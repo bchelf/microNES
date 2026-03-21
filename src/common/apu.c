@@ -664,14 +664,14 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         break;
     case 0x400au:
         apu->triangle.timer_period = (uint16_t)((apu->triangle.timer_period & 0x0700u) | value);
-        /* Do not reset timer_counter here; only $400B restarts the timer. */
+        /* Do not reset timer_counter: the triangle timer runs continuously. */
         break;
     case 0x400bu:
         apu->triangle.timer_period = (uint16_t)((apu->triangle.timer_period & 0x00ffu) | ((uint16_t)(value & 0x07u) << 8));
         if (apu->triangle.enabled) {
             apu->triangle.length_counter = k_apu_length_table[(value >> 3) & 0x1fu];
         }
-        apu->triangle.timer_counter = apu->triangle.timer_period;
+        /* Do not reset timer_counter: the triangle timer runs continuously. */
         apu->triangle.linear_reload_flag = true;
         break;
     case 0x400cu:
@@ -683,7 +683,7 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         apu->noise.mode = (value & 0x80u) != 0;
         apu->noise.period_index = value & 0x0fu;
         apu->noise.timer_period = k_apu_noise_period_table[apu->noise.period_index];
-        apu->noise.timer_counter = apu->noise.timer_period;
+        /* Do not reset timer_counter: the noise LFSR timer runs continuously. */
         break;
     case 0x400fu:
         if (apu->noise.enabled) {
