@@ -181,8 +181,7 @@ typedef struct {
     bool frame_counter_mode_5;
     bool frame_irq_inhibit;
     int16_t pcm[APU_PCM_CAPACITY];
-    double dc_prev_input;
-    double dc_prev_output;
+    double dc_level_tracker;
     ApuDebugSampleStats channel_stats[APU_DEBUG_CHANNEL_COUNT];
     ApuPulseChannel pulse[2];
     ApuTriangleChannel triangle;
