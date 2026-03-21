@@ -64,6 +64,7 @@ from eval_callback import (
 from rnd import flat_obs_dim_from_space, make_rnd_networks
 from smb_env import SMBEnv
 from wrappers import (
+    AirborneActionMaskWrapper,
     DeathPenaltyWrapper,
     NewMaxXWrapper,
     PlatformClimbRewardWrapper,
@@ -118,6 +119,7 @@ def make_env_fn(
 
     Wrapper stack (innermost → outermost):
       SMBEnv
+        → AirborneActionMaskWrapper                     replaces jump actions with WAIT while airborne
         → StickyActionWrapper(sticky_prob=0.25)         action repeat — helps sustained jumps
         → NewMaxXWrapper(scale=2.0, active=False)       diagnostic only — no reward bonus
         → SurvivalBonusWrapper(bonus=0.02)              per-step alive bonus
@@ -164,6 +166,7 @@ def make_env_fn(
             levels=levels,
             level_weights=level_weights,
         )
+        env = AirborneActionMaskWrapper(env)
         if use_sticky:
             env = StickyActionWrapper(env, sticky_prob=sticky_prob)
         env = NewMaxXWrapper(env, scale=2.0, active=False)  # diagnostic only

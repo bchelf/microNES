@@ -181,7 +181,7 @@ DOOM_DROP_MIN     = 0.25  # delta-V drop magnitude that triggers doomed-state pe
 DOOM_PENALTY      = 0.3   # one-shot doomed-state entry penalty
 LANDING_BONUS     = 0.2   # bonus when landing on a viability-improving surface
 VIABILITY_IMPROVE = 0.10  # min V improvement on landing to grant landing bonus
-BACKTRACK_COEF    = 0.01  # penalty coefficient for moving left (dx < 0): -COEF * abs(dx)
+PROGRESS_COEF     = 0.01  # reward/penalty per pixel of horizontal movement: +coef*dx (right) / -coef*abs(dx) (left)
 
 # ---------------------------------------------------------------------------
 # Stagnation / truncation parameters
@@ -1246,10 +1246,9 @@ class SMBEnv(gym.Env):
     def _compute_reward(self, obs: dict, action: int, world_x: int) -> float:
         r = 0.0
 
-        # --- Backtrack penalty: penalise leftward movement without rewarding rightward ---
+        # --- Horizontal progress: reward rightward, penalise leftward ---
         dx = world_x - self._prev_world_x
-        if dx < 0:
-            r -= BACKTRACK_COEF * abs(dx)
+        r += PROGRESS_COEF * dx
 
         # --- Route viability potential (Ng-style shaping, zero-sum over time) ---
         viability_now = self._viability_from_topo(obs["platform_topology"])

@@ -90,8 +90,9 @@ Applied in `make_env_fn()` in `train_smb_rl.py`:
 
 ```
 SMBEnv
-  → StickyActionWrapper(sticky_prob=0.25)          --no-sticky to disable
-    → NewMaxXWrapper(scale=2.0, active=False)        diagnostic only — no reward
+  → AirborneActionMaskWrapper                       replaces jump actions with WAIT while airborne
+    → StickyActionWrapper(sticky_prob=0.25)          --no-sticky to disable
+      → NewMaxXWrapper(scale=2.0, active=False)        diagnostic only — no reward
       → SurvivalBonusWrapper(survival_bonus=0.02)
         → DeathPenaltyWrapper(death_penalty=4.0)
           → StompRewardWrapper(stomp_bonus=5.0)      --no-stomp to disable
@@ -105,6 +106,7 @@ SMBEnv
 | Layer | Reward modification | Info keys added |
 |-------|--------------------|--------------------|
 | `SMBEnv` | Full reward from `_compute_reward()` — see Reward Structure | `world_x`, `frame`, `stagnating`, `on_ground`, `mario_y` |
+| `AirborneActionMaskWrapper` | **None** — action-only modification | `action_masked` |
 | `StickyActionWrapper` | **None** — action-only modification | `action_was_sticky` |
 | `NewMaxXWrapper` | **None** (active=False — diagnostic only) | `max_x_seen`, `mario_on_ground`, `frontier_bonus_blocked` |
 | `SurvivalBonusWrapper` | +`0.02` per alive non-terminal step | `total_survival_bonus` |
@@ -128,7 +130,7 @@ All components listed in order of application. The base env clips total to `[-15
 
 | Component | Source | Scale | Trigger | Notes |
 |-----------|--------|-------|---------|-------|
-| Backtrack penalty | `SMBEnv._compute_reward()` | `-0.01 * abs(dx)` | `dx < 0` (moved left this step) | Asymmetric: penalises leftward movement, does NOT reward rightward. `dx = world_x - prev_world_x`. |
+| Horizontal progress | `SMBEnv._compute_reward()` | `+0.01 * dx` | Every step | Symmetric: rewards rightward movement, penalises leftward. `dx = world_x - prev_world_x`. |
 | Route viability potential | `SMBEnv._compute_reward()` | `0.5 * delta_V` | Every step | Ng-style shaping. Zero-sum over episode. `delta_V` can be negative (doom entry) |
 | Alive bonus | `SMBEnv._compute_reward()` | `+0.002` | Every step | **Separate from SurvivalBonusWrapper's bonus** |
 | Death penalty (base) | `SMBEnv._compute_reward()` | `-10.0` | Death step | |

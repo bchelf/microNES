@@ -568,6 +568,9 @@ class VisitedCellsWrapper(gym.Wrapper):
         )
 
 
+# Jump action indices (actions 5–13) — must match smb_env._JUMP_ACTIONS.
+_JUMP_ACTIONS: frozenset = frozenset(range(5, 14))
+
 # ---------------------------------------------------------------------------
 # Stompable enemy types (from RAM[0x000F+i])
 # ---------------------------------------------------------------------------
@@ -576,17 +579,54 @@ class VisitedCellsWrapper(gym.Wrapper):
 _STOMPABLE_TYPES: frozenset = frozenset({0x01, 0x02, 0x03, 0x06})
 
 
+class AirborneActionMaskWrapper(gym.Wrapper):
+    """
+    Suppresses jump actions when Mario is already airborne.
+
+    When the policy selects a jump action (actions 5–13) but Mario is not on
+    the ground, the action is silently replaced with WAIT (action 0).  Pressing
+    A while airborne has no effect in SMB1 anyway, so these slots are wasted
+    policy capacity.  Masking them out forces the policy to learn a meaningful
+    secondary action for the airborne phase.
+
+    On-ground state is tracked from the previous step's info["on_ground"]; at
+    reset() it is initialised to True (Mario always starts on the ground).
+
+    Info keys added each step:
+        action_masked  (bool) — True if the action was replaced this step.
+    """
+
+    def __init__(self, env: gym.Env, fallback_action: int = 0):
+        super().__init__(env)
+        self.fallback_action = fallback_action
+        self._on_ground: bool = True
+
+    def reset(self, **kwargs):
+        self._on_ground = True
+        obs, info = self.env.reset(**kwargs)
+        return obs, info
+
+    def step(self, action: int):
+        masked = False
+        if not self._on_ground and int(action) in _JUMP_ACTIONS:
+            action = self.fallback_action
+            masked = True
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self._on_ground = bool(info.get("on_ground", True))
+        info["action_masked"] = masked
+        return obs, reward, terminated, truncated, info
+
+
 class StickyActionWrapper(gym.Wrapper):
     """
     With probability sticky_prob, repeat the previous action instead of executing
     the new one from the policy.
 
-    This encourages sustained button-holds across env steps — most notably, holding
-    A for full jump arcs.  The base env's action space uses multi-frame motor
-    primitives where a single FULL_JUMP_R already holds A for 9 NES frames, but
-    sticky actions effectively chain multiple JUMP steps together, allowing the
-    agent to execute repeated jumps or sustained A-button input without requiring
-    the policy to explicitly output the same action multiple times in a row.
+    Sticky repeats only apply to non-jump actions (WAIT, STEP_RIGHT, RUN_RIGHT,
+    STEP_LEFT, RUN_LEFT — indices 0–4).  If the previous action was any jump
+    (indices 5–13), the sticky roll is skipped and the policy action is used as-is.
+    This prevents chained unintended jumps while still encouraging sustained
+    walk/run momentum.
 
     The wrapper is transparent to observation and reward — it only modifies which
     action is passed down to the base env.
@@ -612,7 +652,8 @@ class StickyActionWrapper(gym.Wrapper):
 
     def step(self, action):
         was_sticky = False
-        if self._rng.random() < self.sticky_prob:
+        # Never repeat a jump action — sticky only applies to wait/walk/run (0–4).
+        if self._last_action not in _JUMP_ACTIONS and self._rng.random() < self.sticky_prob:
             action     = self._last_action
             was_sticky = True
         self._last_action = int(action)
