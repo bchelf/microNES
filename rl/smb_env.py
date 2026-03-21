@@ -272,6 +272,7 @@ class SMBEnv(gym.Env):
         self._time_since_dir_chg: int  = 30
         self._prev_facing:        int  = 1   # 1 = facing right
         self._prev_viability_score: float = 0.5   # neutral start
+        self._current_level:   str = self._levels[0]
         self._episode_max_x:   int = 0
         self._last_progress_step: int = 0
         self._prev_lives:      int = 2   # RAM[0x075A]; updated in reset() and step()
@@ -292,6 +293,7 @@ class SMBEnv(gym.Env):
             rng = self.np_random if self.np_random is not None else np.random.default_rng()
             level = rng.choice(self._levels, p=self._level_weights)
 
+        self._current_level = level
         self._warm_reset(level)
 
         self._step_count   = 0
@@ -396,6 +398,7 @@ class SMBEnv(gym.Env):
             "mario_y":        int(self._ram[0x00CE]),   # screen-y pixel (0=top, 240=bottom)
             "pit_death":      pit_dead,
             "lives_remaining": current_lives,
+            "level":          self._current_level,
         }
         return obs, float(reward), terminated, truncated, info
 

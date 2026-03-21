@@ -116,21 +116,23 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_blocked_steps:     list[int]   = []   # steps where frontier bonus was blocked
         self._ep_max_x_on_ground:   list[float] = []   # highest world_x while on ground
         self._ep_sticky_steps:      list[int]   = []   # steps where action was repeated
+        self._ep_level:             list[str]   = []   # current level tag for this episode
         self._max_episode_steps: float = 600.0   # overwritten in _on_training_start
         self._last_cells_check: int = 0          # step count of last visited_cells_count log
 
     # ------------------------------------------------------------------
     def _on_training_start(self) -> None:
         n = self.training_env.num_envs
-        self._ep_max_x               = [0.0]   * n
-        self._ep_steps               = [0]     * n
-        self._ep_death_flag          = [False] * n
-        self._ep_level_complete_flag = [False] * n
-        self._ep_intrinsic_sum       = [0.0]   * n
-        self._ep_extrinsic_sum       = [0.0]   * n
-        self._ep_blocked_steps       = [0]     * n
-        self._ep_max_x_on_ground     = [0.0]   * n
-        self._ep_sticky_steps        = [0]     * n
+        self._ep_max_x               = [0.0]      * n
+        self._ep_steps               = [0]        * n
+        self._ep_death_flag          = [False]    * n
+        self._ep_level_complete_flag = [False]    * n
+        self._ep_intrinsic_sum       = [0.0]      * n
+        self._ep_extrinsic_sum       = [0.0]      * n
+        self._ep_blocked_steps       = [0]        * n
+        self._ep_max_x_on_ground     = [0.0]      * n
+        self._ep_sticky_steps        = [0]        * n
+        self._ep_level               = ["unknown"] * n
 
         # Try to read MAX_STEPS from the env; fall back to 600.
         # Assumption: if get_attr fails, 600 steps/episode is a reasonable upper bound
@@ -156,6 +158,10 @@ class DiagnosticsCallback(BaseCallback):
             world_x = float(info.get("world_x", 0.0))
             self._ep_max_x[i] = max(self._ep_max_x[i], world_x)
             self._ep_steps[i] += 1
+
+            # Track which level this env is playing (set every step; stable within episode).
+            level_tag = info.get("level", "unknown")
+            self._ep_level[i] = level_tag
 
             # Latch death / level-complete flags for the episode.
             # Both are terminal events so they only fire on the last step, but
@@ -245,6 +251,11 @@ class DiagnosticsCallback(BaseCallback):
             self.logger.record_mean("diagnostics/truncation_rate",       float(truncated_ep))
             self.logger.record_mean("diagnostics/level_complete_rate",   float(complete_ep))
 
+            # Per-level metrics — tagged by level string (e.g. "1-1", "1-3").
+            lvl = self._ep_level[i]
+            self.logger.record_mean(f"diagnostics/completion_rate_{lvl}",  float(complete_ep))
+            self.logger.record_mean(f"diagnostics/max_x_on_ground_{lvl}",  self._ep_max_x_on_ground[i])
+
             # Group F — RND intrinsic reward health (only logged when RND active).
             ep_intrinsic = self._ep_intrinsic_sum[i]
             ep_extrinsic = self._ep_extrinsic_sum[i]
@@ -309,6 +320,7 @@ class DiagnosticsCallback(BaseCallback):
             self._ep_intrinsic_sum[i]       = 0.0
             self._ep_extrinsic_sum[i]       = 0.0
             self._ep_blocked_steps[i]       = 0
+            self._ep_level[i]               = "unknown"
             self._ep_max_x_on_ground[i]     = 0.0
             self._ep_sticky_steps[i]        = 0
 
@@ -620,11 +632,20 @@ class EvalVideoCallback(BaseCallback):
 
     def _eval_level(self, step: int, level: str) -> None:
         """Run one deterministic episode on `level` and write an MP4."""
-        env = SMBEnv(
+        from wrappers import AirborneActionMaskWrapper, StickyActionWrapper
+
+        base_env = SMBEnv(
             rom_path    = self._rom_path,
             lib_path    = self._render_lib,
             render_mode = "rgb_array",
         )
+        # Wrap with the action-execution layers from the training stack so the
+        # policy sees the same action semantics it was trained with.
+        # sticky_prob=0.0 — no randomness, but the wrapper must be present so
+        # _last_action bookkeeping matches training.
+        # Reward wrappers are omitted — they don't affect action selection.
+        env = AirborneActionMaskWrapper(base_env)
+        env = StickyActionWrapper(env, sticky_prob=0.0)
 
         frames: list[np.ndarray] = []
         total_reward = 0.0
@@ -636,7 +657,7 @@ class EvalVideoCallback(BaseCallback):
                 obs, reward, terminated, truncated, _ = env.step(int(action))
                 total_reward += float(reward)
 
-                frames.extend(env.pop_step_frames())
+                frames.extend(env.unwrapped.pop_step_frames())
 
                 if terminated or truncated:
                     break
@@ -727,11 +748,15 @@ class BestRunRecorderCallback(BaseCallback):
         done   = bool(self.locals["dones"][0])
 
         # Record the actually-executed action, not the policy's intended action.
-        # StickyActionWrapper silently replaces the policy action with the
-        # previous action when it fires, so self.locals["actions"][0] is wrong
-        # on sticky steps.  info["action_was_sticky"] tells us when this happened;
-        # in that case the executed action equals the last recorded action.
-        if info.get("action_was_sticky", False) and self._episode_actions:
+        # Two wrappers can silently change what reaches the emulator:
+        #   1. AirborneActionMaskWrapper replaces jump actions with WAIT (0) when
+        #      Mario is airborne. Detected via info["action_masked"]. Innermost.
+        #   2. StickyActionWrapper repeats the previous action with prob=sticky_prob.
+        #      Detected via info["action_was_sticky"]. Outermost of the two.
+        # Check masking first (it is applied after stickiness, closer to the emulator).
+        if info.get("action_masked", False):
+            action = 0  # AirborneActionMaskWrapper always falls back to WAIT
+        elif info.get("action_was_sticky", False) and self._episode_actions:
             action = self._episode_actions[-1]
         else:
             action = int(self.locals["actions"][0])
@@ -784,18 +809,24 @@ class BestRunRecorderCallback(BaseCallback):
         npy_path = os.path.join(self._video_dir, f"best_{tag}.npy")
         np.save(npy_path, np.array(actions, dtype=np.int32))
 
-        # Replay through a fresh render env.
-        env = SMBEnv(
+        # Replay through a fresh render env with the same action-execution wrappers
+        # used during training, so the video matches what actually ran.
+        from wrappers import AirborneActionMaskWrapper, StickyActionWrapper
+
+        base_env = SMBEnv(
             rom_path    = self._rom_path,
             lib_path    = self._render_lib,
             render_mode = "rgb_array",
         )
+        env = AirborneActionMaskWrapper(base_env)
+        env = StickyActionWrapper(env, sticky_prob=0.0)
+
         frames: list[np.ndarray] = []
         try:
             env.reset(options={"level": self._level})
             for a in actions:
                 _, _, terminated, truncated, _ = env.step(a)
-                frames.extend(env.pop_step_frames())
+                frames.extend(env.unwrapped.pop_step_frames())
                 if terminated or truncated:
                     break
         finally:

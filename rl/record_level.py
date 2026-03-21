@@ -30,6 +30,7 @@ import numpy as np
 from stable_baselines3 import PPO
 
 from smb_env import SMBEnv
+from wrappers import AirborneActionMaskWrapper, StickyActionWrapper
 
 
 def find_render_lib() -> str:
@@ -61,7 +62,7 @@ def run_episode(model: PPO, env: SMBEnv, level: str, max_steps: int) -> dict:
         if wx > max_world_x:
             max_world_x = wx
 
-        frames.extend(env.pop_step_frames())
+        frames.extend(env.unwrapped.pop_step_frames())
 
         if terminated and obs["game_flags"][1] > 0.5:
             completed = True
@@ -106,8 +107,10 @@ def main():
     print(f"Episodes:   {args.n_episodes}")
     print(f"Output:     {out_path}")
 
-    # Build env first so PPO.load can bind its observation space to the current env.
+    # Build env with the same action-execution wrappers used during training.
     env = SMBEnv(rom_path=args.rom, lib_path=lib_path, render_mode="rgb_array")
+    env = AirborneActionMaskWrapper(env)
+    env = StickyActionWrapper(env, sticky_prob=0.0)
 
     try:
         model = PPO.load(args.model, env=env)
