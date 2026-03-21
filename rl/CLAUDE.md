@@ -76,7 +76,7 @@ Both paths:
 Three causes, all in `SMBEnv.step()` lines 345–354:
 1. `step_count >= MAX_STEPS` (MAX_STEPS = 20,000)
 2. Stagnation: max x progress < 64px over last 100 steps
-3. Steps since last x-progress ≥ `STAGNATION_EARLY_STOP` (300 steps)
+3. Steps since last x-progress ≥ `STAGNATION_EARLY_STOP` (120 steps)
 
 Truncation does **not** set `info["death_penalty_applied"]` or `info["level_complete"]`. `DeathPenaltyWrapper` does not apply its penalty on truncation — verified in code.
 
@@ -128,6 +128,7 @@ All components listed in order of application. The base env clips total to `[-15
 
 | Component | Source | Scale | Trigger | Notes |
 |-----------|--------|-------|---------|-------|
+| Backtrack penalty | `SMBEnv._compute_reward()` | `-0.01 * abs(dx)` | `dx < 0` (moved left this step) | Asymmetric: penalises leftward movement, does NOT reward rightward. `dx = world_x - prev_world_x`. |
 | Route viability potential | `SMBEnv._compute_reward()` | `0.5 * delta_V` | Every step | Ng-style shaping. Zero-sum over episode. `delta_V` can be negative (doom entry) |
 | Alive bonus | `SMBEnv._compute_reward()` | `+0.002` | Every step | **Separate from SurvivalBonusWrapper's bonus** |
 | Death penalty (base) | `SMBEnv._compute_reward()` | `-10.0` | Death step | |
@@ -139,7 +140,7 @@ All components listed in order of application. The base env clips total to `[-15
 | Frontier bonus (lifetime) | `NewMaxXWrapper` | **disabled** (`active=False`) | — | `max_x_seen` still tracked for diagnostics; no reward |
 | Stomp bonus | `StompRewardWrapper` | `+stomp_bonus` (default `+5.0`) | Stomping Goomba/GreenKoopa/RedKoopa/BuzzyBeetle | Detected via: enemy alive→dead + mario_falling + position in range. Disabled with `--no-stomp`. |
 | Platform climb bonus | `PlatformClimbRewardWrapper` | `+climb_bonus` (default `+2.0`) | Landing that is both forward (world_x >) AND higher (mario_y <) than takeoff position | One bonus per landing event (False→True on_ground transition). Disabled with `--no-climb`. |
-| Cell exploration bonus | `VisitedCellsWrapper` | `+cell_bonus` (default `+1.0`) | New ground-level `(cx,cy)` tile cell | Replaces the 1D x-frontier bonus with a 2D signal |
+| Cell exploration bonus | `VisitedCellsWrapper` | `+cell_bonus` (default `+1.0`) | New ground-level `(cx,cy)` tile cell at or near rightward frontier | Only fires when `cx >= episode_max_cx - rightward_buffer` (default buffer=2). Prevents leftward cell harvesting. |
 | Survival bonus | `SurvivalBonusWrapper` | `+0.02` per step | Alive non-terminal step | **See double-counting note** |
 | Extra death penalty | `DeathPenaltyWrapper` | `-4.0` | Death step | Additive on top of base env's `-10.0` |
 

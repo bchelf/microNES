@@ -181,12 +181,13 @@ DOOM_DROP_MIN     = 0.25  # delta-V drop magnitude that triggers doomed-state pe
 DOOM_PENALTY      = 0.3   # one-shot doomed-state entry penalty
 LANDING_BONUS     = 0.2   # bonus when landing on a viability-improving surface
 VIABILITY_IMPROVE = 0.10  # min V improvement on landing to grant landing bonus
+BACKTRACK_COEF    = 0.01  # penalty coefficient for moving left (dx < 0): -COEF * abs(dx)
 
 # ---------------------------------------------------------------------------
 # Stagnation / truncation parameters
 # ---------------------------------------------------------------------------
 STAGNATION_WINDOW     = 120  # steps without new x-frontier before stagnation truncation fires
-STAGNATION_EARLY_STOP = 300  # truncate if no new episode-max-x for this many steps
+STAGNATION_EARLY_STOP = 120  # truncate if no new episode-max-x for this many steps
 
 
 def _nt_semantic(nametables, world_tx: int, world_ty: int) -> int:
@@ -366,7 +367,7 @@ class SMBEnv(gym.Env):
             self._episode_max_x      = world_x
             self._last_progress_step = self._step_count
 
-        reward = self._compute_reward(obs, action)
+        reward = self._compute_reward(obs, action, world_x)
         self._prev_world_x = world_x
 
         dead     = bool(obs["game_flags"][0])
@@ -1242,8 +1243,13 @@ class SMBEnv(gym.Env):
     # ------------------------------------------------------------------
     # Reward
     # ------------------------------------------------------------------
-    def _compute_reward(self, obs: dict, action: int) -> float:
+    def _compute_reward(self, obs: dict, action: int, world_x: int) -> float:
         r = 0.0
+
+        # --- Backtrack penalty: penalise leftward movement without rewarding rightward ---
+        dx = world_x - self._prev_world_x
+        if dx < 0:
+            r -= BACKTRACK_COEF * abs(dx)
 
         # --- Route viability potential (Ng-style shaping, zero-sum over time) ---
         viability_now = self._viability_from_topo(obs["platform_topology"])

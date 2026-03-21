@@ -476,22 +476,26 @@ class VisitedCellsWrapper(gym.Wrapper):
 
     def __init__(
         self,
-        env:         gym.Env,
-        cell_size_x: int   = 16,
-        cell_size_y: int   = 16,
-        cell_bonus:  float = 1.0,
+        env:              gym.Env,
+        cell_size_x:      int   = 16,
+        cell_size_y:      int   = 16,
+        cell_bonus:       float = 1.0,
+        rightward_buffer: int   = 2,
     ):
         super().__init__(env)
-        self.cell_size_x = cell_size_x
-        self.cell_size_y = cell_size_y
-        self.cell_bonus  = cell_bonus
+        self.cell_size_x      = cell_size_x
+        self.cell_size_y      = cell_size_y
+        self.cell_bonus       = cell_bonus
+        self.rightward_buffer = rightward_buffer
 
         self.visited_cells: set      = set()   # lifetime — never reset
         self._episode_new_cells: int = 0       # reset each episode
         self._total_cells:       int = 0       # lifetime total (== len(visited_cells))
+        self._episode_max_cx:    int = 0       # max cx reached this episode (reset each episode)
 
     def reset(self, **kwargs):
         self._episode_new_cells = 0
+        self._episode_max_cx    = 0
         # Do NOT reset visited_cells or _total_cells — lifetime persistence.
         obs, info = self.env.reset(**kwargs)
         return obs, info
@@ -503,11 +507,18 @@ class VisitedCellsWrapper(gym.Wrapper):
         current_y = float(info.get("mario_y",  0.0))
         on_ground = bool(info.get("on_ground", True))
 
-        cell = (int(current_x // self.cell_size_x),
-                int(current_y // self.cell_size_y))
+        cx = int(current_x // self.cell_size_x)
+        cy = int(current_y // self.cell_size_y)
+        cell = (cx, cy)
+
+        if on_ground and cx > self._episode_max_cx:
+            self._episode_max_cx = cx
 
         new_cell = False
-        if on_ground and cell not in self.visited_cells:
+        # Only reward cells at or near the rightward frontier — prevents the policy
+        # from harvesting unvisited cells behind the current episode max x.
+        rightward_enough = cx >= self._episode_max_cx - self.rightward_buffer
+        if on_ground and rightward_enough and cell not in self.visited_cells:
             self.visited_cells.add(cell)
             reward += self.cell_bonus
             self._episode_new_cells += 1
