@@ -94,7 +94,7 @@ canvas {
     max-width: 560px;
     background: #1c1c1c;
     border-radius: 14px;
-    padding: 14px 16px 16px;
+    padding: 12px 10px;
     user-select: none;
     -webkit-user-select: none;
     touch-action: none;
@@ -124,22 +124,23 @@ canvas {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 0;
 }
 
 /* ── D-pad ───────────────────────────────────────────────────────────────── */
 .dpad {
     display: grid;
-    grid-template-columns: repeat(3, 46px);
-    grid-template-rows: repeat(3, 46px);
+    grid-template-columns: repeat(3, 38px);
+    grid-template-rows: repeat(3, 38px);
     gap: 2px;
+    flex-shrink: 0;
 }
 
 .dpad-btn {
     background: #111;
     border: none;
     color: #444;
-    font-size: 13px;
+    font-size: 11px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -156,10 +157,7 @@ canvas {
 #dpad-right { border-radius: 0 6px 6px 0; }
 #dpad-down  { border-radius: 0 0 6px 6px; }
 
-.dpad-center-dot {
-    background: #111;
-}
-
+.dpad-center-dot { background: #111; }
 .dpad-corner { background: transparent; }
 
 /* ── Center select/start ─────────────────────────────────────────────────── */
@@ -167,23 +165,24 @@ canvas {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
+    flex: 1;
 }
 
 .sys-btns-row {
     background: #f0f0f0;
-    border-radius: 10px;
-    padding: 8px 12px;
+    border-radius: 8px;
+    padding: 7px 8px;
     display: flex;
-    gap: 12px;
+    gap: 8px;
 }
 
 .sys-btn {
-    width: 40px;
-    height: 14px;
+    width: 34px;
+    height: 12px;
     background: #222;
     border: none;
-    border-radius: 7px;
+    border-radius: 6px;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     outline: none;
@@ -195,15 +194,15 @@ canvas {
 
 .sys-labels {
     display: flex;
-    gap: 16px;
+    gap: 8px;
 }
 
 .sys-labels span {
-    font-size: 0.55em;
+    font-size: 0.5em;
     color: #c00;
     font-weight: bold;
     letter-spacing: 1px;
-    width: 40px;
+    width: 34px;
     text-align: center;
 }
 
@@ -212,21 +211,22 @@ canvas {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     position: relative;
-    padding-top: 10px;
+    padding-top: 8px;
+    flex-shrink: 0;
 }
 
 .menu-btn {
     position: absolute;
-    top: -4px;
-    right: -8px;
-    width: 30px;
-    height: 30px;
+    top: -2px;
+    right: -4px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     background: #e8e8e8;
     border: none;
-    font-size: 0.42em;
+    font-size: 0.38em;
     color: #555;
     font-family: monospace;
     cursor: pointer;
@@ -243,21 +243,21 @@ canvas {
 
 .ab-group {
     display: flex;
-    gap: 12px;
+    gap: 8px;
 }
 
 .ab-col {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
 }
 
 .ab-wrap {
-    width: 62px;
-    height: 62px;
+    width: 54px;
+    height: 54px;
     background: #d8d8d8;
-    border-radius: 12px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -265,8 +265,8 @@ canvas {
 }
 
 .ab-btn {
-    width: 50px;
-    height: 50px;
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
     background: radial-gradient(circle at 38% 32%, #ff6060, #bb0000);
     border: none;
@@ -284,7 +284,7 @@ canvas {
 }
 
 .ab-label {
-    font-size: 0.72em;
+    font-size: 0.68em;
     color: #bb0000;
     font-weight: bold;
     letter-spacing: 2px;
@@ -625,6 +625,12 @@ if (isTouchDevice()) {
         e.preventDefault();
         if (romLoaded) Module._nes_web_reset();
     });
+
+    // iOS Safari suspends AudioContext until a user gesture occurs on the page.
+    // Resume it on the first touch of the controller.
+    touchCtrl.addEventListener('pointerdown', () => {
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }, { once: false });
 }
 
 // ── File UI ───────────────────────────────────────────────────────────────────
