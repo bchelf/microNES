@@ -12,6 +12,8 @@ roms/
 checkpoints*
 eval_videos*
 logs*
+old-data*
+best_runs*
 
 # Python
 .venv/

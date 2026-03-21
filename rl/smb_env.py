@@ -74,34 +74,21 @@ _MAX_JUMP_HOLD   = 32  # NES frames to hold A → maximum arc (~33f total)
 
 # Action durations: non-jump = 5f, short jump = 10f, med = 25f, max = 33f.
 # Index  Name              Segments: [(buttons, n_frames), ...]
-# -----------------------------------------------------------------------
-# INDICES 0-13 ARE UNCHANGED — backward-compatible with existing checkpoints
-# as long as action_space.n is not checked. (action_history obs normalisation
-# changes from /13 to /19, so the full observation space changes regardless.)
-# -----------------------------------------------------------------------
 _ACTION_SEQUENCES: list[list[tuple[int, int]]] = [
     [(0,              _BASE_FRAMES)],                               # 0  WAIT
     [(_R,             _BASE_FRAMES)],                               # 1  STEP_RIGHT
     [(_R | _B,        _BASE_FRAMES)],                               # 2  RUN_RIGHT
     [(_L,             _BASE_FRAMES)],                               # 3  STEP_LEFT
     [(_L | _B,        _BASE_FRAMES)],                               # 4  RUN_LEFT
-    [(_R | _A,        _SHORT_JUMP_HOLD), (_R,       1)],            # 5  SHORT_JUMP_R   (10)
-    [(_R | _B | _A,   _SHORT_JUMP_HOLD), (_R | _B,  1)],            # 6  FULL_JUMP_R   (10) — alias for SHORT
-    [(_L | _A,        _SHORT_JUMP_HOLD), (_L,       1)],            # 7  SHORT_JUMP_L   (10)
-    [(_L | _B | _A,   _SHORT_JUMP_HOLD), (_L | _B,  1)],            # 8  FULL_JUMP_L   (10) — alias for SHORT
-    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],            # 9  SHORT_JUMP_IP  (10)
-    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],            # 10 FULL_JUMP_IP  (10) — alias for SHORT
-    [(0,              _BASE_FRAMES)],                               # 11 BRAKE
-    [(_D,             _BASE_FRAMES)],                               # 12 CROUCH / pipe
-    [(_B,             _BASE_FRAMES)],                               # 13 FIREBALL
-    # ---- NEW: medium jumps (A held 24f) — indices 14-16 ----
-    [(_R | _B | _A,   _MED_JUMP_HOLD),  (_R | _B,  1)],             # 14 MED_JUMP_R    (25)
-    [(_L | _B | _A,   _MED_JUMP_HOLD),  (_L | _B,  1)],             # 15 MED_JUMP_L    (25)
-    [(_A,             _MED_JUMP_HOLD),  (0,         1)],             # 16 MED_JUMP_IP   (25)
-    # ---- NEW: maximum jumps (A held 32f) — indices 17-19 ----
-    [(_R | _B | _A,   _MAX_JUMP_HOLD),  (_R | _B,  1)],             # 17 MAX_JUMP_R    (33)
-    [(_L | _B | _A,   _MAX_JUMP_HOLD),  (_L | _B,  1)],             # 18 MAX_JUMP_L    (33)
-    [(_A,             _MAX_JUMP_HOLD),  (0,         1)],             # 19 MAX_JUMP_IP   (33)
+    [(_R | _A,        _SHORT_JUMP_HOLD), (_R,       1)],            # 5  SHORT_JUMP_R  (10)
+    [(_L | _A,        _SHORT_JUMP_HOLD), (_L,       1)],            # 6  SHORT_JUMP_L  (10)
+    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],           # 7  SHORT_JUMP_IP (10)
+    [(_R | _B | _A,   _MED_JUMP_HOLD),  (_R | _B,  1)],            # 8  MED_JUMP_R    (25)
+    [(_L | _B | _A,   _MED_JUMP_HOLD),  (_L | _B,  1)],            # 9  MED_JUMP_L    (25)
+    [(_A,             _MED_JUMP_HOLD),  (0,         1)],            # 10 MED_JUMP_IP   (25)
+    [(_R | _B | _A,   _MAX_JUMP_HOLD),  (_R | _B,  1)],            # 11 MAX_JUMP_R    (33)
+    [(_L | _B | _A,   _MAX_JUMP_HOLD),  (_L | _B,  1)],            # 12 MAX_JUMP_L    (33)
+    [(_A,             _MAX_JUMP_HOLD),  (0,         1)],            # 13 MAX_JUMP_IP   (33)
 ]
 N_ACTIONS = len(_ACTION_SEQUENCES)
 
@@ -183,13 +170,12 @@ MAX_FALL_HEIGHT  = 8    # tiles below foot level scanned for surfaces
 MAX_SPAN_WIDTH   = 12   # normalization ceiling for surface span width
 TRAJ_HIST_LEN    = 8    # steps of trajectory history
 
-_JUMP_ACTIONS = frozenset([5, 6, 7, 8, 9, 10])  # action indices that press A
+_JUMP_ACTIONS = frozenset([5, 6, 7, 8, 9, 10, 11, 12, 13])  # action indices that press A
 
 # ---------------------------------------------------------------------------
 # Route viability reward shaping parameters
 # ---------------------------------------------------------------------------
 VIABILITY_SCALE   = 0.5   # Ng-style potential shaping weight
-VIABILITY_FLOOR   = 0.2   # minimum dx multiplier even on a doomed route
 DOOM_THRESHOLD    = 0.15  # viability below this = "doomed"
 DOOM_DROP_MIN     = 0.25  # delta-V drop magnitude that triggers doomed-state penalty
 DOOM_PENALTY      = 0.3   # one-shot doomed-state entry penalty
@@ -197,12 +183,10 @@ LANDING_BONUS     = 0.2   # bonus when landing on a viability-improving surface
 VIABILITY_IMPROVE = 0.10  # min V improvement on landing to grant landing bonus
 
 # ---------------------------------------------------------------------------
-# Exploration / breakthrough reward parameters
+# Stagnation / truncation parameters
 # ---------------------------------------------------------------------------
-NEW_MAX_X_COEF    = 0.05  # bonus per pixel of new episode-max progress
-STAGNATION_WINDOW = 120   # steps without new max-x before penalty kicks in
-STAGNATION_PENALTY= 0.01  # reward penalty per step while stagnating
-STAGNATION_EARLY_STOP = 300  # truncate if stuck for this many steps
+STAGNATION_WINDOW     = 120  # steps without new x-frontier before stagnation truncation fires
+STAGNATION_EARLY_STOP = 300  # truncate if no new episode-max-x for this many steps
 
 
 def _nt_semantic(nametables, world_tx: int, world_ty: int) -> int:
@@ -274,7 +258,6 @@ class SMBEnv(gym.Env):
         self._prev_enemy_screen_y = np.zeros(5, dtype=np.int32)
         self._step_frames: list[np.ndarray] = []   # per-emulator-frame capture
         self._action_history: deque[int] = deque([0, 0, 0, 0], maxlen=4)
-        self._prev_reward_x: int = 0
 
         # Trajectory memory (rolling history for recent-motion features)
         self._traj_x:      deque[int]  = deque([0] * TRAJ_HIST_LEN, maxlen=TRAJ_HIST_LEN)
@@ -287,6 +270,7 @@ class SMBEnv(gym.Env):
         self._prev_viability_score: float = 0.5   # neutral start
         self._episode_max_x:   int = 0
         self._last_progress_step: int = 0
+        self._prev_lives:      int = 2   # RAM[0x075A]; updated in reset() and step()
 
         self.action_space = spaces.Discrete(N_ACTIONS)
         self.observation_space = self._build_obs_space()
@@ -308,7 +292,6 @@ class SMBEnv(gym.Env):
 
         self._step_count   = 0
         self._prev_world_x = self._read_world_x()
-        self._prev_reward_x = self._prev_world_x
         self._world_x_history.clear()
         self._world_x_history.append(self._prev_world_x)
         self._prev_enemy_screen_x[:] = 0
@@ -328,6 +311,7 @@ class SMBEnv(gym.Env):
         self._prev_viability_score = 0.5
         self._episode_max_x    = self._prev_world_x
         self._last_progress_step = 0
+        self._prev_lives       = int(self._ram[0x075A])
 
         obs = self._get_obs()
         return obs, {}
@@ -337,6 +321,7 @@ class SMBEnv(gym.Env):
         # When recording, capture one frame per emulator frame (not per step).
         self._step_frames.clear()
         _recording = self._render_mode == "rgb_array"
+        _pit_fall = False
         for buttons, n_frames in _ACTION_SEQUENCES[action]:
             self._lib.set_buttons(self._h, buttons)
             for _ in range(n_frames):
@@ -344,6 +329,14 @@ class SMBEnv(gym.Env):
                 if _recording:
                     fb = self._lib.framebuffer_view(self._h)
                     self._step_frames.append(NES_PALETTE_RGB[fb & 0x3F].copy())
+                # Per-frame pit detection: mario_y > 176 means below the ground
+                # floor, which only happens in a pit.  Check per-frame so we
+                # catch it before RAM[0x00CE] wraps as a byte (~255→0).
+                if int(self._ram[0x00CE]) > 176:
+                    _pit_fall = True
+                    break
+            if _pit_fall:
+                break
         self._lib.set_buttons(self._h, 0)
 
         self._action_history.append(int(action))
@@ -351,10 +344,29 @@ class SMBEnv(gym.Env):
 
         obs = self._get_obs()
 
+        # Pit-death detection — two paths, OR'd together:
+        #   1. Per-frame early detection (primary): _pit_fall set above when
+        #      RAM[0x00CE] > 176 during action frames.  Fires within 1-2 NES
+        #      frames of entering a pit, before the byte wraps.  world_x at
+        #      detection is the actual fall position (not 0).
+        #   2. Lives-counter fallback: RAM[0x075A] decremented means the NES
+        #      completed the full death animation + respawn within the action
+        #      frames (world_x resets to 0 at that point).
+        current_lives = int(self._ram[0x075A])
+        pit_dead = _pit_fall or (current_lives < self._prev_lives)
+        self._prev_lives = current_lives
+        if pit_dead:
+            obs["game_flags"][0] = 1.0   # inject so _compute_reward and wrappers see it
+
         world_x = self._read_world_x()
         self._world_x_history.append(world_x)
 
-        reward = self._compute_reward(obs, action, world_x)
+        # Track episode-max-x for the stagnation truncation signal (no reward).
+        if world_x > self._episode_max_x:
+            self._episode_max_x      = world_x
+            self._last_progress_step = self._step_count
+
+        reward = self._compute_reward(obs, action)
         self._prev_world_x = world_x
 
         dead     = bool(obs["game_flags"][0])
@@ -373,11 +385,13 @@ class SMBEnv(gym.Env):
         )
 
         info: dict[str, Any] = {
-            "world_x":    world_x,
-            "frame":      self._lib.frame_count(self._h),
-            "stagnating": stagnating,
-            "on_ground":  bool(int(self._ram[0x001D]) == 0x00),
-            "mario_y":    int(self._ram[0x00CE]),   # screen-y pixel (0=top, 240=bottom)
+            "world_x":        world_x,
+            "frame":          self._lib.frame_count(self._h),
+            "stagnating":     stagnating,
+            "on_ground":      bool(int(self._ram[0x001D]) == 0x00),
+            "mario_y":        int(self._ram[0x00CE]),   # screen-y pixel (0=top, 240=bottom)
+            "pit_death":      pit_dead,
+            "lives_remaining": current_lives,
         }
         return obs, float(reward), terminated, truncated, info
 
@@ -1228,7 +1242,7 @@ class SMBEnv(gym.Env):
     # ------------------------------------------------------------------
     # Reward
     # ------------------------------------------------------------------
-    def _compute_reward(self, obs: dict, action: int, world_x: int) -> float:
+    def _compute_reward(self, obs: dict, action: int) -> float:
         r = 0.0
 
         # --- Route viability potential (Ng-style shaping, zero-sum over time) ---
@@ -1236,16 +1250,6 @@ class SMBEnv(gym.Env):
         delta_V       = viability_now - self._prev_viability_score
         r += VIABILITY_SCALE * delta_V
         self._prev_viability_score = viability_now
-
-        # --- Dense forward progress, attenuated by route viability ---
-        dx = world_x - self._prev_reward_x
-        viability_factor = VIABILITY_FLOOR + (1.0 - VIABILITY_FLOOR) * viability_now
-        if dx > 0:
-            r += float(np.clip(dx / 40.0, 0, 1.5)) * viability_factor
-        elif dx < 0:
-            r += float(np.clip(dx / 40.0, -0.5, 0))   # backtrack penalty unchanged
-
-        self._prev_reward_x = world_x
 
         # Alive bonus (tiny, encourages staying alive over stagnating)
         r += 0.002
@@ -1276,17 +1280,6 @@ class SMBEnv(gym.Env):
         # --- Doomed-state entry penalty: sharp viability drop into doomed zone ---
         if viability_now < DOOM_THRESHOLD and delta_V < -DOOM_DROP_MIN:
             r -= DOOM_PENALTY
-
-        # --- New-episode-max-x bonus ---
-        new_max_delta = world_x - self._episode_max_x
-        if new_max_delta > 0:
-            r += NEW_MAX_X_COEF * new_max_delta
-            self._episode_max_x    = world_x
-            self._last_progress_step = self._step_count
-
-        # --- Stagnation penalty ---
-        if (self._step_count - self._last_progress_step) > STAGNATION_WINDOW:
-            r -= STAGNATION_PENALTY
 
         return float(np.clip(r, -15.0, 15.0))
 

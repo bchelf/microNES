@@ -16,11 +16,15 @@ Gym wrappers for SMBEnv training.
 #    obs["game_flags"][1] (complete) directly from the observation.
 #
 # 3. DEATH DETECTION MECHANISM
-#    player_dead    = (RAM[0x000E] == 0x0B)  — death animation state
+#    player_dead    = (RAM[0x000E] == 0x0B)  — enemy-contact death animation
+#    pit_dead       = (RAM[0x075A] < prev_lives) — lives decremented this step
 #    level_complete = (RAM[0x001D] == 0x03)  — end-of-level game mode
-#    Both are read in _get_obs() AFTER all action frames have executed.
-#    There is no distinction between death-by-enemy and death-by-pit —
-#    both result in state 0x0B. The two are treated identically.
+#    Both are read in step() AFTER all action frames have executed.
+#    Enemy deaths set RAM[0x000E]==0x0B immediately.  Pit falls never set
+#    0x0B — the NES handles the full death animation and respawn internally
+#    within the action frames, so we detect pit deaths by watching the lives
+#    counter (RAM[0x075A]) instead.  Both paths set obs["game_flags"][0]=1.0
+#    and terminated=True.  See smb_env.py step() for implementation.
 #
 # 4. OFF-BY-ONE RISK
 #    None found. The step() call sequence is:

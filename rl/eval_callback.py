@@ -667,8 +667,9 @@ class BestRunRecorderCallback(BaseCallback):
     """
     Records the best training episode from env-0 as a .npy actions file + MP4.
 
-    Watches env-0's world_x throughout training. When an episode ends with a
-    max_x that exceeds the previous best by at least `min_improvement`, the
+    Watches env-0's max_x_on_ground (highest world_x while Mario is on the
+    ground) throughout training. When an episode ends with a max_x_on_ground
+    that exceeds the previous best by at least `min_improvement`, the
     episode's action sequence is replayed in a fresh render env and saved as
     an MP4, along with a .npy of the action array (dtype int32).
 
@@ -682,8 +683,8 @@ class BestRunRecorderCallback(BaseCallback):
                              replaying the episode. Should match the level
                              env-0 trains on; defaults to "1-1".
         video_dir:           Directory for output files (default "best_runs").
-        min_improvement:     Min max_x gain over previous best to trigger a
-                             save (default 50.0).
+        min_improvement:     Min max_x_on_ground gain over previous best to
+                             trigger a save (default 50.0).
         initial_best_max_x:  Pre-seed the best threshold — useful when resuming
                              training so early episodes don't re-trigger for
                              already-known territory (default 0.0).
@@ -714,7 +715,7 @@ class BestRunRecorderCallback(BaseCallback):
 
         self._best_max_x: float          = initial_best_max_x
         self._episode_actions: list[int] = []
-        self._episode_max_x: float       = 0.0
+        self._episode_max_x_on_ground: float = 0.0
         self._bg_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
@@ -722,32 +723,42 @@ class BestRunRecorderCallback(BaseCallback):
         os.makedirs(self._video_dir, exist_ok=True)
 
     def _on_step(self) -> bool:
-        action = int(self.locals["actions"][0])
         info   = self.locals["infos"][0]
         done   = bool(self.locals["dones"][0])
 
+        # Record the actually-executed action, not the policy's intended action.
+        # StickyActionWrapper silently replaces the policy action with the
+        # previous action when it fires, so self.locals["actions"][0] is wrong
+        # on sticky steps.  info["action_was_sticky"] tells us when this happened;
+        # in that case the executed action equals the last recorded action.
+        if info.get("action_was_sticky", False) and self._episode_actions:
+            action = self._episode_actions[-1]
+        else:
+            action = int(self.locals["actions"][0])
+
         self._episode_actions.append(action)
-        wx = float(info.get("world_x", 0.0))
-        if wx > self._episode_max_x:
-            self._episode_max_x = wx
+        if info.get("on_ground", False):
+            wx = float(info.get("world_x", 0.0))
+            if wx > self._episode_max_x_on_ground:
+                self._episode_max_x_on_ground = wx
 
         if done:
-            if self._episode_max_x >= self._best_max_x + self._min_improvement:
+            if self._episode_max_x_on_ground >= self._best_max_x + self._min_improvement:
                 actions_snap = list(self._episode_actions)
-                max_x_snap   = self._episode_max_x
+                max_x_snap   = self._episode_max_x_on_ground
                 step_snap    = self.num_timesteps
                 old_best     = self._best_max_x
-                self._best_max_x = self._episode_max_x
+                self._best_max_x = self._episode_max_x_on_ground
                 self._save_async(actions_snap, max_x_snap, step_snap)
                 if self.verbose:
                     print(
-                        f"\n[best_run] new best x={max_x_snap:.0f} "
+                        f"\n[best_run] new best x_on_ground={max_x_snap:.0f} "
                         f"(prev={old_best:.0f}, +{max_x_snap - old_best:.0f}) "
                         f"step={step_snap:,} — saving ..."
                     )
 
-            self._episode_actions = []
-            self._episode_max_x   = 0.0
+            self._episode_actions        = []
+            self._episode_max_x_on_ground = 0.0
 
         return True
 

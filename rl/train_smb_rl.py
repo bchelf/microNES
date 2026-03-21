@@ -408,8 +408,8 @@ def main():
     _action_check_env.close()
     del _action_check_env
     print(f"Action space: {_n_actions} actions")
-    assert _n_actions == 20, (
-        f"Expected 20 actions, got {_n_actions}. "
+    assert _n_actions == 14, (
+        f"Expected 14 actions, got {_n_actions}. "
         "Check _ACTION_SEQUENCES in smb_env.py."
     )
 

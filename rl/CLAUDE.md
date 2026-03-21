@@ -32,7 +32,9 @@ These are the **only** keys present in `info` after a `step()` call. Any other k
 | `extrinsic_reward` | `float` | `RNDWrapper.step()` | Raw extrinsic reward from inner env (before intrinsic addition) | Only present when RND enabled. |
 | `raw_intrinsic` | `float` | `RNDWrapper.step()` | Un-normalised MSE between predictor and target | Only present when RND enabled. For debugging scale. |
 | `on_ground` | `bool` | `SMBEnv.step()` | True when Mario is on the ground. Source: `RAM[0x001D] == 0x00`. 0x01 = airborne (jump or pit fall), 0x03 = level complete. Clears immediately on landing. | Foundation for on-ground gating in NewMaxXWrapper and VisitedCellsWrapper. |
-| `mario_y` | `int` | `SMBEnv.step()` | Screen-Y pixel position (`RAM[0x00CE]`). 0 = top, ~240 = bottom. Ground level ≈ 176. Higher platforms have lower values (e.g. 128, 144). | Used by VisitedCellsWrapper for 2D cell y-coordinate. |
+| `mario_y` | `int` | `SMBEnv.step()` | Screen-Y pixel position (`RAM[0x00CE]`). 0 = top, ~240 = bottom. Ground level ≈ 176. Higher platforms have lower values (e.g. 128, 144). | Used by VisitedCellsWrapper for 2D cell y-coordinate. **Do not use as a pit-fall threshold** — it is a single byte that wraps continuously during a fall. |
+| `pit_death` | `bool` | `SMBEnv.step()` | True on the step a pit-fall death was detected (lives decremented). | Complements `info["death_penalty_applied"]` from DeathPenaltyWrapper. At the detection step, `world_x=0` because the NES has already respawned Mario. |
+| `lives_remaining` | `int` | `SMBEnv.step()` | Current value of `RAM[0x075A]` (NES lives counter). Starts at 2 each episode. | Decrements on every pit death. Enemy deaths terminate the episode before lives can decrement, so this is effectively always 2 unless a pit death has occurred. |
 | `mario_on_ground` | `bool` | `NewMaxXWrapper.step()` | True when Mario is on the ground. Reads `info["on_ground"]` from SMBEnv. | Used by DiagnosticsCallback for Group G metrics. |
 | `frontier_bonus_blocked` | `bool` | `NewMaxXWrapper.step()` | True when Mario was airborne and would have set a new max_x but the frontier bonus was gated. | Key verification metric for the on-ground bug fix (2026-03-20). |
 | `action_was_sticky` | `bool` | `StickyActionWrapper.step()` | True when the previous action was repeated instead of the policy's action. | Only present when StickyActionWrapper is in the stack (absent with `--no-sticky`). |
@@ -48,10 +50,19 @@ These are the **only** keys present in `info` after a `step()` call. Any other k
 ### Episode Termination Types
 
 **Death** (`terminated=True, truncated=False`):
-- RAM address: `RAM[0x000E] == 0x0B` (death animation state)
-- Detected in `_get_obs()` → `obs["game_flags"][0] = 1.0`
-- In `step()`: `terminated = dead or complete` (line 343)
-- No distinction between death-by-enemy and death-by-pit — both produce state `0x0B`
+
+Two distinct detection paths, both set `obs["game_flags"][0] = 1.0` and `terminated = True`:
+
+*Enemy-contact death:*
+- `RAM[0x000E] == 0x0B` (death animation state), read in `_get_obs()`
+- Detected on the step the death animation begins; `world_x` reflects actual death position
+
+*Pit-fall death:*
+- `RAM[0x075A] < prev_lives` (lives counter decremented), detected in `step()` after action frames
+- The NES completes the full death animation and respawns Mario within the action frames, so at the detection step `world_x = 0` (respawn position) and `info["pit_death"] = True`
+- **Confirmed by instrumentation (2026-03-21):** `RAM[0x000E]` never reaches `0x0B` for pit falls. `RAM[0x00CE]` (mario_y) wraps as a single byte and cannot be used as a threshold.
+
+Both paths:
 - `info["death_penalty_applied"]` will be `True`
 - `info["level_complete"]` will be `False`
 
@@ -118,16 +129,12 @@ All components listed in order of application. The base env clips total to `[-15
 | Component | Source | Scale | Trigger | Notes |
 |-----------|--------|-------|---------|-------|
 | Route viability potential | `SMBEnv._compute_reward()` | `0.5 * delta_V` | Every step | Ng-style shaping. Zero-sum over episode. `delta_V` can be negative (doom entry) |
-| Dense forward progress | `SMBEnv._compute_reward()` | `clip(dx/40, 0, 1.5) * viability_factor` | dx > 0 | `viability_factor = 0.2 + 0.8 * V_now` |
-| Backtrack penalty | `SMBEnv._compute_reward()` | `clip(dx/40, -0.5, 0)` | dx < 0 | |
 | Alive bonus | `SMBEnv._compute_reward()` | `+0.002` | Every step | **Separate from SurvivalBonusWrapper's bonus** |
 | Death penalty (base) | `SMBEnv._compute_reward()` | `-10.0` | Death step | |
 | Level completion | `SMBEnv._compute_reward()` | `+10.0 + time_bonus` | Complete step | `time_bonus` = up to `+5.0` |
 | Unnecessary jump penalty | `SMBEnv._compute_reward()` | `-0.005` | Jump with no obstacle/gap ahead | |
 | Landing bonus | `SMBEnv._compute_reward()` | `+0.2` | Landing on viability-improving surface | `delta_V > 0.10` required |
 | Doomed-state penalty | `SMBEnv._compute_reward()` | `-0.3` | Viability drops below 0.15 with delta < -0.25 | One-shot on entry |
-| New-episode-max-x | `SMBEnv._compute_reward()` | `+0.05 * new_delta_x` | New episode-max x | Episode max resets each episode |
-| Stagnation penalty | `SMBEnv._compute_reward()` | `-0.01` per step | After 120 steps without new max x | |
 | **Base env reward clip** | `SMBEnv._compute_reward()` | `[-15.0, 15.0]` | Always | Applied before wrappers |
 | Frontier bonus (lifetime) | `NewMaxXWrapper` | **disabled** (`active=False`) | — | `max_x_seen` still tracked for diagnostics; no reward |
 | Stomp bonus | `StompRewardWrapper` | `+stomp_bonus` (default `+5.0`) | Stomping Goomba/GreenKoopa/RedKoopa/BuzzyBeetle | Detected via: enemy alive→dead + mario_falling + position in range. Disabled with `--no-stomp`. |
@@ -136,13 +143,11 @@ All components listed in order of application. The base env clips total to `[-15
 | Survival bonus | `SurvivalBonusWrapper` | `+0.02` per step | Alive non-terminal step | **See double-counting note** |
 | Extra death penalty | `DeathPenaltyWrapper` | `-4.0` | Death step | Additive on top of base env's `-10.0` |
 
-**Double-counting notes:**
+**Notes:**
 
 1. **Two alive bonuses:** The base env adds `+0.002` per step AND `SurvivalBonusWrapper` adds `+0.02` per step. Combined alive-step bonus = `+0.022`. Not a bug per se, but the base env's `+0.002` is often forgotten.
 
-2. **Two x-progress bonuses:** The base env has a new-episode-max-x bonus (`0.05 * delta`) that resets each episode, AND `NewMaxXWrapper` has a lifetime-max-x bonus (`2.0 * delta`). They fire at the same time when progress is also a new lifetime record. This is intentional — the episode bonus provides denser signal; the lifetime bonus creates long-range curriculum pressure.
-
-3. **Total on-death penalty: approximately `-14.0`** (base `-10.0` + wrapper `-4.0`) before considering clipping and other components on that step. The `[-15.0, 15.0]` clip is applied inside `_compute_reward()`, so the wrapper's `-4.0` is applied *after* clipping.
+2. **Total on-death penalty: approximately `-14.0`** (base `-10.0` + wrapper `-4.0`) before considering clipping and other components on that step. The `[-15.0, 15.0]` clip is applied inside `_compute_reward()`, so the wrapper's `-4.0` is applied *after* clipping.
 
 ---
 
@@ -173,7 +178,7 @@ All components listed in order of application. The base env clips total to `[-15
 | `trajectory_memory` | (14,) | [-1,1] | Recent motion, time-since events, support state |
 | `route_viability` | (11,) | [0,1] | Viability score + dead-end signals + doomed flag |
 
-Action space: `Discrete(20)` — 20 motor primitives. **Expanded from 14 → 20 on 2026-03-20.** Any checkpoint trained on `Discrete(14)` is incompatible — requires a fresh training run. The `action_history` observation normalizes by `N_ACTIONS-1` (now `/19` instead of `/13`), so observation values for all existing indices also change.
+Action space: `Discrete(14)` — 14 motor primitives. Any checkpoint trained on a different action space is incompatible — requires a fresh training run. The `action_history` observation normalizes by `N_ACTIONS-1` (`/13`).
 
 | Index | Name | Input | A-hold | Total | Notes |
 |-------|------|-------|--------|-------|-------|
@@ -183,24 +188,16 @@ Action space: `Discrete(20)` — 20 motor primitives. **Expanded from 14 → 20 
 | 3 | STEP_LEFT | Left | — | 5f | |
 | 4 | RUN_LEFT | Left+B | — | 5f | |
 | 5 | SHORT_JUMP_R | Right+A → Right | 9f | 10f | Short arc, rightward |
-| 6 | FULL_JUMP_R | Right+B+A → Right+B | 9f | 10f | Short arc, running speed |
-| 7 | SHORT_JUMP_L | Left+A → Left | 9f | 10f | Short arc, leftward |
-| 8 | FULL_JUMP_L | Left+B+A → Left+B | 9f | 10f | Short arc left, running speed |
-| 9 | SHORT_JUMP_IP | A → — | 9f | 10f | Short arc, in-place |
-| 10 | FULL_JUMP_IP | A → — | 9f | 10f | Alias for SHORT_JUMP_IP |
-| 11 | BRAKE | — | — | 5f | |
-| 12 | CROUCH | Down | — | 5f | Also enters pipes |
-| 13 | FIREBALL | B | — | 5f | |
-| **14** | **MED_JUMP_R** | Right+B+A → Right+B | **24f** | **25f** | NEW — medium arc |
-| **15** | **MED_JUMP_L** | Left+B+A → Left+B | **24f** | **25f** | NEW — medium arc |
-| **16** | **MED_JUMP_IP** | A → — | **24f** | **25f** | NEW — medium arc, in-place |
-| **17** | **MAX_JUMP_R** | Right+B+A → Right+B | **32f** | **33f** | NEW — maximum arc |
-| **18** | **MAX_JUMP_L** | Left+B+A → Left+B | **32f** | **33f** | NEW — maximum arc |
-| **19** | **MAX_JUMP_IP** | A → — | **32f** | **33f** | NEW — maximum arc, in-place |
+| 6 | SHORT_JUMP_L | Left+A → Left | 9f | 10f | Short arc, leftward |
+| 7 | SHORT_JUMP_IP | A → — | 9f | 10f | Short arc, in-place |
+| 8 | MED_JUMP_R | Right+B+A → Right+B | 24f | 25f | Medium arc, rightward |
+| 9 | MED_JUMP_L | Left+B+A → Left+B | 24f | 25f | Medium arc, leftward |
+| 10 | MED_JUMP_IP | A → — | 24f | 25f | Medium arc, in-place |
+| 11 | MAX_JUMP_R | Right+B+A → Right+B | 32f | 33f | Maximum arc, rightward |
+| 12 | MAX_JUMP_L | Left+B+A → Left+B | 32f | 33f | Maximum arc, leftward |
+| 13 | MAX_JUMP_IP | A → — | 32f | 33f | Maximum arc, in-place |
 
-**Why expanded:** 9-frame jumps cannot reliably reach tall platforms in World 1-3. The goomba section requires jumping several tiles higher than the approach ground. 24f and 32f jumps give the agent access to the full SMB1 jump height range.
-
-**Note on indices 5–10:** The old `_SHORT_JUMP_HOLD` was 5f and `_FULL_JUMP_HOLD` was 9f. Both are now unified to 9f under `_SHORT_JUMP_HOLD`. The total frame count per action is unchanged (still 10f). This was a necessary prerequisite — the old 5f SHORT and 9f FULL were both inadequate for tall platforms; the new medium/max jumps fill the gap above 9f.
+**Removed actions:** FULL_JUMP_R, FULL_JUMP_L, FULL_JUMP_IP (aliases for SHORT jumps — redundant), BRAKE (alias for WAIT), CROUCH (enters pipes, not needed for 1-x), FIREBALL (requires fire Mario).
 
 ---
 
