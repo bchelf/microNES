@@ -173,7 +173,34 @@ All components listed in order of application. The base env clips total to `[-15
 | `trajectory_memory` | (14,) | [-1,1] | Recent motion, time-since events, support state |
 | `route_viability` | (11,) | [0,1] | Viability score + dead-end signals + doomed flag |
 
-Action space: `Discrete(14)` — 14 motor primitives (WAIT, STEP_RIGHT, RUN_RIGHT, STEP_LEFT, RUN_LEFT, SHORT_JUMP_R, FULL_JUMP_R, SHORT_JUMP_L, FULL_JUMP_L, SHORT_JUMP_IP, FULL_JUMP_IP, BRAKE, CROUCH, FIREBALL).
+Action space: `Discrete(20)` — 20 motor primitives. **Expanded from 14 → 20 on 2026-03-20.** Any checkpoint trained on `Discrete(14)` is incompatible — requires a fresh training run. The `action_history` observation normalizes by `N_ACTIONS-1` (now `/19` instead of `/13`), so observation values for all existing indices also change.
+
+| Index | Name | Input | A-hold | Total | Notes |
+|-------|------|-------|--------|-------|-------|
+| 0 | WAIT | — | — | 5f | |
+| 1 | STEP_RIGHT | Right | — | 5f | |
+| 2 | RUN_RIGHT | Right+B | — | 5f | |
+| 3 | STEP_LEFT | Left | — | 5f | |
+| 4 | RUN_LEFT | Left+B | — | 5f | |
+| 5 | SHORT_JUMP_R | Right+A → Right | 9f | 10f | Short arc, rightward |
+| 6 | FULL_JUMP_R | Right+B+A → Right+B | 9f | 10f | Short arc, running speed |
+| 7 | SHORT_JUMP_L | Left+A → Left | 9f | 10f | Short arc, leftward |
+| 8 | FULL_JUMP_L | Left+B+A → Left+B | 9f | 10f | Short arc left, running speed |
+| 9 | SHORT_JUMP_IP | A → — | 9f | 10f | Short arc, in-place |
+| 10 | FULL_JUMP_IP | A → — | 9f | 10f | Alias for SHORT_JUMP_IP |
+| 11 | BRAKE | — | — | 5f | |
+| 12 | CROUCH | Down | — | 5f | Also enters pipes |
+| 13 | FIREBALL | B | — | 5f | |
+| **14** | **MED_JUMP_R** | Right+B+A → Right+B | **24f** | **25f** | NEW — medium arc |
+| **15** | **MED_JUMP_L** | Left+B+A → Left+B | **24f** | **25f** | NEW — medium arc |
+| **16** | **MED_JUMP_IP** | A → — | **24f** | **25f** | NEW — medium arc, in-place |
+| **17** | **MAX_JUMP_R** | Right+B+A → Right+B | **32f** | **33f** | NEW — maximum arc |
+| **18** | **MAX_JUMP_L** | Left+B+A → Left+B | **32f** | **33f** | NEW — maximum arc |
+| **19** | **MAX_JUMP_IP** | A → — | **32f** | **33f** | NEW — maximum arc, in-place |
+
+**Why expanded:** 9-frame jumps cannot reliably reach tall platforms in World 1-3. The goomba section requires jumping several tiles higher than the approach ground. 24f and 32f jumps give the agent access to the full SMB1 jump height range.
+
+**Note on indices 5–10:** The old `_SHORT_JUMP_HOLD` was 5f and `_FULL_JUMP_HOLD` was 9f. Both are now unified to 9f under `_SHORT_JUMP_HOLD`. The total frame count per action is unchanged (still 10f). This was a necessary prerequisite — the old 5f SHORT and 9f FULL were both inadequate for tall platforms; the new medium/max jumps fill the gap above 9f.
 
 ---
 

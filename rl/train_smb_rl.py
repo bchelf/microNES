@@ -399,6 +399,17 @@ def main():
     rnd_predictor = None
     _obs_shape    = None
 
+    # Print and verify action space size before creating envs.
+    _action_check_env = SMBEnv(rom_path=args.rom, lib_path=args.lib)
+    _n_actions = _action_check_env.action_space.n
+    _action_check_env.close()
+    del _action_check_env
+    print(f"Action space: {_n_actions} actions")
+    assert _n_actions == 20, (
+        f"Expected 20 actions, got {_n_actions}. "
+        "Check _ACTION_SEQUENCES in smb_env.py."
+    )
+
     if use_rnd:
         _shape_env = SMBEnv(rom_path=args.rom, lib_path=args.lib)
         _obs_shape = (_flat_dim := flat_obs_dim_from_space(_shape_env.observation_space),)

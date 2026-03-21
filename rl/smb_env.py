@@ -63,26 +63,45 @@ _B   = NES_BUTTON_B
 _D   = NES_BUTTON_DOWN
 
 _BASE_FRAMES     = 5   # NES frames for all non-jump actions
-_SHORT_JUMP_HOLD = 5   # NES frames to hold A → short arc
-_FULL_JUMP_HOLD  = 9   # NES frames to hold A → full arc
+_SHORT_JUMP_HOLD = 9   # NES frames to hold A → short arc   (~10f total)
+_MED_JUMP_HOLD   = 24  # NES frames to hold A → medium arc  (~25f total)
+_MAX_JUMP_HOLD   = 32  # NES frames to hold A → maximum arc (~33f total)
+# NOTE: _FULL_JUMP_HOLD removed — SHORT_JUMP is now 9f (was 5f, FULL was 9f).
+# Action space expanded from 14 → 20 on 2026-03-20. Existing checkpoint
+# (trained on Discrete(14)) is INCOMPATIBLE — requires a fresh training run.
+# Reason: 9f jumps cannot reliably reach tall platforms in World 1-3.
+# 24f and 32f jumps give the agent access to the full SMB1 jump height range.
 
-# Action durations: non-jump = 5 frames, short jump = 6, full jump = 10.
+# Action durations: non-jump = 5f, short jump = 10f, med = 25f, max = 33f.
 # Index  Name              Segments: [(buttons, n_frames), ...]
+# -----------------------------------------------------------------------
+# INDICES 0-13 ARE UNCHANGED — backward-compatible with existing checkpoints
+# as long as action_space.n is not checked. (action_history obs normalisation
+# changes from /13 to /19, so the full observation space changes regardless.)
+# -----------------------------------------------------------------------
 _ACTION_SEQUENCES: list[list[tuple[int, int]]] = [
-    [(0,              _BASE_FRAMES)],                              # 0  WAIT
-    [(_R,             _BASE_FRAMES)],                              # 1  STEP_RIGHT
-    [(_R | _B,        _BASE_FRAMES)],                              # 2  RUN_RIGHT
-    [(_L,             _BASE_FRAMES)],                              # 3  STEP_LEFT
-    [(_L | _B,        _BASE_FRAMES)],                              # 4  RUN_LEFT
-    [(_R | _A,        _SHORT_JUMP_HOLD), (_R,       1)],           # 5  SHORT_JUMP_R   (6)
-    [(_R | _B | _A,   _FULL_JUMP_HOLD),  (_R | _B,  1)],           # 6  FULL_JUMP_R   (10)
-    [(_L | _A,        _SHORT_JUMP_HOLD), (_L,       1)],           # 7  SHORT_JUMP_L   (6)
-    [(_L | _B | _A,   _FULL_JUMP_HOLD),  (_L | _B,  1)],           # 8  FULL_JUMP_L   (10)
-    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],           # 9  SHORT_JUMP_IP  (6)
-    [(_A,             _FULL_JUMP_HOLD),  (0,         1)],           # 10 FULL_JUMP_IP  (10)
-    [(0,              _BASE_FRAMES)],                              # 11 BRAKE
-    [(_D,             _BASE_FRAMES)],                              # 12 CROUCH / pipe
-    [(_B,             _BASE_FRAMES)],                              # 13 FIREBALL
+    [(0,              _BASE_FRAMES)],                               # 0  WAIT
+    [(_R,             _BASE_FRAMES)],                               # 1  STEP_RIGHT
+    [(_R | _B,        _BASE_FRAMES)],                               # 2  RUN_RIGHT
+    [(_L,             _BASE_FRAMES)],                               # 3  STEP_LEFT
+    [(_L | _B,        _BASE_FRAMES)],                               # 4  RUN_LEFT
+    [(_R | _A,        _SHORT_JUMP_HOLD), (_R,       1)],            # 5  SHORT_JUMP_R   (10)
+    [(_R | _B | _A,   _SHORT_JUMP_HOLD), (_R | _B,  1)],            # 6  FULL_JUMP_R   (10) — alias for SHORT
+    [(_L | _A,        _SHORT_JUMP_HOLD), (_L,       1)],            # 7  SHORT_JUMP_L   (10)
+    [(_L | _B | _A,   _SHORT_JUMP_HOLD), (_L | _B,  1)],            # 8  FULL_JUMP_L   (10) — alias for SHORT
+    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],            # 9  SHORT_JUMP_IP  (10)
+    [(_A,             _SHORT_JUMP_HOLD), (0,         1)],            # 10 FULL_JUMP_IP  (10) — alias for SHORT
+    [(0,              _BASE_FRAMES)],                               # 11 BRAKE
+    [(_D,             _BASE_FRAMES)],                               # 12 CROUCH / pipe
+    [(_B,             _BASE_FRAMES)],                               # 13 FIREBALL
+    # ---- NEW: medium jumps (A held 24f) — indices 14-16 ----
+    [(_R | _B | _A,   _MED_JUMP_HOLD),  (_R | _B,  1)],             # 14 MED_JUMP_R    (25)
+    [(_L | _B | _A,   _MED_JUMP_HOLD),  (_L | _B,  1)],             # 15 MED_JUMP_L    (25)
+    [(_A,             _MED_JUMP_HOLD),  (0,         1)],             # 16 MED_JUMP_IP   (25)
+    # ---- NEW: maximum jumps (A held 32f) — indices 17-19 ----
+    [(_R | _B | _A,   _MAX_JUMP_HOLD),  (_R | _B,  1)],             # 17 MAX_JUMP_R    (33)
+    [(_L | _B | _A,   _MAX_JUMP_HOLD),  (_L | _B,  1)],             # 18 MAX_JUMP_L    (33)
+    [(_A,             _MAX_JUMP_HOLD),  (0,         1)],             # 19 MAX_JUMP_IP   (33)
 ]
 N_ACTIONS = len(_ACTION_SEQUENCES)
 
