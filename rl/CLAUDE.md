@@ -1,6 +1,7 @@
 <!-- Last audited: 2026-03-20 -->
 <!-- RND added: 2026-03-19 -->
 <!-- on_ground fix: 2026-03-20 (RAM[0x001D]==0x00 confirmed via frame-level diff) -->
+<!-- VisitedCellsWrapper added: 2026-03-20 (replaces NewMaxXWrapper 1D frontier reward) -->
 <!-- Audit confidence: INFO KEYS=HIGH | WRAPPER STACK=HIGH | REWARD=HIGH | CALLBACKS=HIGH | BUGS=HIGH | METRICS=HIGH | RND=HIGH -->
 
 # CLAUDE.md — SMB RL Training Project
@@ -29,7 +30,8 @@ These are the **only** keys present in `info` after a `step()` call. Any other k
 | `intrinsic_reward` | `float` | `RNDWrapper.step()` | Normalised intrinsic reward this step | Only present when RND enabled. Used by DiagnosticsCallback Group F. |
 | `extrinsic_reward` | `float` | `RNDWrapper.step()` | Raw extrinsic reward from inner env (before intrinsic addition) | Only present when RND enabled. |
 | `raw_intrinsic` | `float` | `RNDWrapper.step()` | Un-normalised MSE between predictor and target | Only present when RND enabled. For debugging scale. |
-| `on_ground` | `bool` | `SMBEnv.step()` | True when Mario is on the ground. Source: `RAM[0x001D] == 0x00`. 0x01 = airborne (jump or pit fall), 0x03 = level complete. Clears immediately on landing. | Foundation for NewMaxXWrapper on-ground gate. |
+| `on_ground` | `bool` | `SMBEnv.step()` | True when Mario is on the ground. Source: `RAM[0x001D] == 0x00`. 0x01 = airborne (jump or pit fall), 0x03 = level complete. Clears immediately on landing. | Foundation for on-ground gating in NewMaxXWrapper and VisitedCellsWrapper. |
+| `mario_y` | `int` | `SMBEnv.step()` | Screen-Y pixel position (`RAM[0x00CE]`). 0 = top, ~240 = bottom. Ground level ≈ 176. Higher platforms have lower values (e.g. 128, 144). | Used by VisitedCellsWrapper for 2D cell y-coordinate. |
 | `mario_on_ground` | `bool` | `NewMaxXWrapper.step()` | True when Mario is on the ground. Reads `info["on_ground"]` from SMBEnv. | Used by DiagnosticsCallback for Group G metrics. |
 | `frontier_bonus_blocked` | `bool` | `NewMaxXWrapper.step()` | True when Mario was airborne and would have set a new max_x but the frontier bonus was gated. | Key verification metric for the on-ground bug fix (2026-03-20). |
 | `episode` | `dict` | `VecMonitor` | Contains `r`, `l`, `t` at episode end only | Only present in the final step info of an episode. Note: `r` includes intrinsic reward (it is part of the total env reward). |
@@ -72,20 +74,22 @@ Applied in `make_env_fn()` in `train_smb_rl.py`:
 
 ```
 SMBEnv
-  → NewMaxXWrapper(scale=2.0)
+  → NewMaxXWrapper(scale=2.0, active=False)   diagnostic only — no reward
     → SurvivalBonusWrapper(survival_bonus=0.02)
       → DeathPenaltyWrapper(death_penalty=4.0)
-        → RNDWrapper(intrinsic_scale=1.0)    ← NEW (enabled by default, --no-rnd to disable)
-          → SubprocVecEnv (8 workers)
-            → VecMonitor
+        → VisitedCellsWrapper(cell_bonus=1.0, cell_size=16×16)
+          → RNDWrapper(intrinsic_scale=1.0)   --no-rnd to disable
+            → SubprocVecEnv (8 workers)
+              → VecMonitor
 ```
 
 | Layer | Reward modification | Info keys added |
 |-------|--------------------|--------------------|
-| `SMBEnv` | Full reward from `_compute_reward()` — see Reward Structure | `world_x`, `frame`, `stagnating` |
-| `NewMaxXWrapper` | +`(world_x - max_x_seen) * 2.0` when new lifetime max | `max_x_seen` |
+| `SMBEnv` | Full reward from `_compute_reward()` — see Reward Structure | `world_x`, `frame`, `stagnating`, `on_ground`, `mario_y` |
+| `NewMaxXWrapper` | **None** (active=False — diagnostic only) | `max_x_seen`, `mario_on_ground`, `frontier_bonus_blocked` |
 | `SurvivalBonusWrapper` | +`0.02` per alive non-terminal step | `total_survival_bonus` |
 | `DeathPenaltyWrapper` | `-4.0` additive on death step | `death_penalty_applied`, `level_complete` |
+| `VisitedCellsWrapper` | +`cell_bonus` when on_ground AND new (cx,cy) cell | `new_cell_found`, `total_cells_visited`, `episode_new_cells` |
 | `RNDWrapper` | +`intrinsic_scale * intrinsic_norm` every step | `intrinsic_reward`, `extrinsic_reward`, `raw_intrinsic` |
 | `SubprocVecEnv` | None | None |
 | `VecMonitor` | None | `episode` dict at episode end |
@@ -114,7 +118,8 @@ All components listed in order of application. The base env clips total to `[-15
 | New-episode-max-x | `SMBEnv._compute_reward()` | `+0.05 * new_delta_x` | New episode-max x | Episode max resets each episode |
 | Stagnation penalty | `SMBEnv._compute_reward()` | `-0.01` per step | After 120 steps without new max x | |
 | **Base env reward clip** | `SMBEnv._compute_reward()` | `[-15.0, 15.0]` | Always | Applied before wrappers |
-| Frontier bonus (lifetime) | `NewMaxXWrapper` | `+(x - max_x_seen) * 2.0` | New **lifetime** max x | Additive on top of clipped base reward |
+| Frontier bonus (lifetime) | `NewMaxXWrapper` | **disabled** (`active=False`) | — | `max_x_seen` still tracked for diagnostics; no reward |
+| Cell exploration bonus | `VisitedCellsWrapper` | `+cell_bonus` (default `+1.0`) | New ground-level `(cx,cy)` tile cell | Replaces the 1D x-frontier bonus with a 2D signal |
 | Survival bonus | `SurvivalBonusWrapper` | `+0.02` per step | Alive non-terminal step | **See double-counting note** |
 | Extra death penalty | `DeathPenaltyWrapper` | `-4.0` | Death step | Additive on top of base env's `-10.0` |
 
@@ -205,6 +210,10 @@ Action space: `Discrete(14)` — 14 motor primitives (WAIT, STEP_RIGHT, RUN_RIGH
 | `diagnostics/intrinsic_extrinsic_ratio` | F | `total_intrinsic / total_extrinsic` for the episode. Target: 0.3–1.0. See tuning guide below. | Reliable. Primary RND tuning signal. |
 | `diagnostics/frontier_bonus_blocked_rate` | G | Fraction of steps per episode where Mario was airborne and would have set a new max_x but the bonus was gated. Healthy: 10–30%. | Reliable. Primary verification that the on-ground fix (Bug 4, 2026-03-20) is working. |
 | `diagnostics/max_x_on_ground` | G | Highest world_x achieved while Mario was on the ground this episode. Excludes airborne positions. | Reliable. True navigable progress metric, complementary to max_x_episode. |
+| `diagnostics/cells_visited_episode` | H | New (cx,cy) tile cells discovered this episode. Should be non-zero while the agent is exploring new territory. | Reliable. Episode-level exploration rate. |
+| `diagnostics/cells_visited_total` | H | Lifetime total cells visited across all episodes. **Primary exploration progress metric** — replaces max_x_global as the frontier tracker. Should grow monotonically; flat means agent is looping in known territory. | Reliable. |
+| `diagnostics/cells_per_step` | H | `episode_new_cells / ep_len`. Exploration efficiency. Healthy range: 0.01–0.05. High early in training, should decline as agent revisits territory. | Reliable. |
+| `diagnostics/visited_cells_count` | H | Actual archive size from `len(env.visited_cells)` via `get_attr` (logged every `check_interval` steps). Monotonically non-decreasing by design. | Reliable. |
 
 ---
 
@@ -437,7 +446,9 @@ If `max_x_episode` stops growing but `rnd/intrinsic_reward_mean` is high: the ag
 
 ## DO NOT
 
-1. **Do not reset `max_x_seen` on episode end.** `NewMaxXWrapper.reset()` intentionally does not reset `self.max_x_seen`. If you reset it, the frontier bonus fires on familiar ground every episode, destroying the curriculum pressure it provides. The comment in the code explicitly warns against this.
+1. **Do not reset `visited_cells` on episode end.** `VisitedCellsWrapper.reset()` intentionally does not reset `self.visited_cells`. Resetting it would re-reward familiar territory every episode, destroying the curriculum pressure. See the wrapper docstring for the rationale.
+
+2. **Do not reset `max_x_seen` on episode end.** `NewMaxXWrapper.reset()` intentionally does not reset `self.max_x_seen`. If you reset it, the frontier bonus fires on familiar ground every episode, destroying the curriculum pressure it provides. The comment in the code explicitly warns against this.
 
 2. **Do not use `info["x_pos"]` or `info["death"]`.** These keys do not exist. Death is `obs["game_flags"][0] > 0.5`. x position is `info["world_x"]`. Adding logic that reads either of these non-existent keys will silently produce 0 / False without raising an exception.
 

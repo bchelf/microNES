@@ -358,6 +358,7 @@ class SMBEnv(gym.Env):
             "frame":      self._lib.frame_count(self._h),
             "stagnating": stagnating,
             "on_ground":  bool(int(self._ram[0x001D]) == 0x00),
+            "mario_y":    int(self._ram[0x00CE]),   # screen-y pixel (0=top, 240=bottom)
         }
         return obs, float(reward), terminated, truncated, info
 

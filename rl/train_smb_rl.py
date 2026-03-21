@@ -62,7 +62,13 @@ from eval_callback import (
 )
 from rnd import flat_obs_dim_from_space, make_rnd_networks
 from smb_env import SMBEnv
-from wrappers import DeathPenaltyWrapper, NewMaxXWrapper, RNDWrapper, SurvivalBonusWrapper
+from wrappers import (
+    DeathPenaltyWrapper,
+    NewMaxXWrapper,
+    RNDWrapper,
+    SurvivalBonusWrapper,
+    VisitedCellsWrapper,
+)
 
 
 class SpeedCallback(BaseCallback):
@@ -95,16 +101,24 @@ def make_env_fn(
     rnd_obs_shape: tuple | None = None,
     rnd_embedding_dim: int = 512,
     rnd_scale: float = 1.0,
+    cell_bonus: float = 1.0,
 ):
     """
     Factory for SubprocVecEnv — runs headless, no rendering.
 
     Wrapper stack (innermost → outermost):
       SMBEnv
-        → NewMaxXWrapper(scale=2.0)        lifetime frontier bonus
-        → SurvivalBonusWrapper(bonus=0.02) per-step alive bonus
-        → DeathPenaltyWrapper(penalty=4.0) additive death penalty
-        → RNDWrapper(scale=rnd_scale)      intrinsic curiosity (when enabled)
+        → NewMaxXWrapper(scale=2.0, active=False)  diagnostic only — no reward bonus
+        → SurvivalBonusWrapper(bonus=0.02)         per-step alive bonus
+        → DeathPenaltyWrapper(penalty=4.0)         additive death penalty
+        → VisitedCellsWrapper(cell_bonus=1.0)      2D cell exploration bonus
+        → RNDWrapper(scale=rnd_scale)              intrinsic curiosity (when enabled)
+
+    NewMaxXWrapper is kept with active=False so that max_x_seen remains trackable
+    via get_attr for EntropySchedulerCallback plateau detection, without adding
+    any 1D frontier reward.  VisitedCellsWrapper replaces the frontier signal with
+    a 2D (world_x, screen_y) tile-cell exploration bonus that incentivizes both
+    horizontal progress AND vertical platform exploration.
 
     RNDWrapper is the outermost single-env wrapper.  RND networks are created
     INSIDE each subprocess worker (always on CPU) to avoid MPS + forkserver
@@ -130,9 +144,11 @@ def make_env_fn(
             levels=levels,
             level_weights=level_weights,
         )
-        env = NewMaxXWrapper(env)
+        env = NewMaxXWrapper(env, scale=2.0, active=False)  # diagnostic only
         env = SurvivalBonusWrapper(env)
         env = DeathPenaltyWrapper(env)
+        env = VisitedCellsWrapper(env, cell_size_x=8, cell_size_y=8,
+                                  cell_bonus=cell_bonus)
         if use_rnd:
             # Create networks fresh inside the worker, always on CPU.
             # Weights are overwritten immediately by the initial sync in main().
@@ -209,6 +225,20 @@ def main():
         default=None,
         metavar="W",
         help="Sampling weights for --stage2-levels (default: uniform).",
+    )
+    # ---- VisitedCells arguments ----
+    parser.add_argument(
+        "--cell-bonus",
+        type=float,
+        default=1.0,
+        metavar="FLOAT",
+        help=(
+            "Reward per new (world_x, screen_y) tile cell visited while on ground "
+            "(default: 1.0). Monitor diagnostics/cells_per_step:\n"
+            "  too fast (>0.1) → increase cell_size or reduce --cell-bonus\n"
+            "  stagnant (0.0)  → reduce cell_size or increase --cell-bonus\n"
+            "  0.01-0.05       → healthy exploration rate"
+        ),
     )
     # ---- RND arguments ----
     parser.add_argument(
@@ -333,9 +363,11 @@ def main():
         if use_rnd else "(RND disabled)"
     )
     print(
-        f"Wrapper stack:  SMBEnv → NewMaxXWrapper(scale=2.0, max_x_seen_init=0.0)"
+        f"Wrapper stack:  SMBEnv"
+        f" → NewMaxXWrapper(scale=2.0, active=False)"
         f" → SurvivalBonusWrapper(bonus=0.02)"
-        f" → DeathPenaltyWrapper(penalty=4.0, additive)"
+        f" → DeathPenaltyWrapper(penalty=4.0)"
+        f" → VisitedCellsWrapper(cell_bonus={args.cell_bonus}, cell_size=16x16)"
         f" {_rnd_label}"
         f" → SubprocVecEnv → VecMonitor"
     )
@@ -348,6 +380,7 @@ def main():
             rnd_obs_shape=_obs_shape if use_rnd else None,
             rnd_embedding_dim=512,
             rnd_scale=args.rnd_scale,
+            cell_bonus=args.cell_bonus,
         )
         for _ in range(args.n_envs)
     ]
@@ -420,6 +453,29 @@ def main():
             k: v for k, v in ppo_kwargs.items()
             if k not in ("policy", "env")
         })
+
+        # ---- VisitedCells warmup on checkpoint resume ----
+        # Run n_episodes deterministically on a temporary single env to pre-populate
+        # visited_cells with territory the agent has already explored.  Without this,
+        # the agent would re-collect huge cell bonuses on familiar ground at the start
+        # of resumed training, distorting the value function.
+        print("[VisitedCells] warming up visited_cells from resumed checkpoint ...")
+        _vcw_env = make_env_fn(
+            args.rom, args.lib,
+            levels=stage1_levels, level_weights=stage1_weights,
+            # No RND for warmup — avoids side-effects on obs_rms in workers.
+        )()
+        # Walk the wrapper chain to find VisitedCellsWrapper.
+        _vcw = _vcw_env
+        while not isinstance(_vcw, VisitedCellsWrapper):
+            _vcw = _vcw.env
+        _vcw.warmup_from_policy(model, n_episodes=20)
+        _visited_cells = frozenset(_vcw.visited_cells)   # immutable for IPC safety
+        _vcw_env.close()
+        del _vcw_env, _vcw
+        # Sync the pre-populated archive to all workers.
+        vec_env.env_method("set_visited_cells", _visited_cells)
+        print(f"[VisitedCells] synced {len(_visited_cells)} cells to all workers.")
     else:
         model = PPO(**ppo_kwargs)
 
@@ -432,7 +488,10 @@ def main():
         f"  E — value:    value_at_start_state  (every 10,000 steps, "
         f"start_obs={'captured' if _start_obs else 'MISSING'})\n"
         "  F — RND:      intrinsic_reward_episode_mean, intrinsic_extrinsic_ratio"
-        f"  (active: {use_rnd})"
+        f"  (active: {use_rnd})\n"
+        "  G — ground:   frontier_bonus_blocked_rate, max_x_on_ground\n"
+        "  H — cells:    cells_visited_episode, cells_visited_total, cells_per_step,\n"
+        "                visited_cells_count  (primary exploration progress metric)"
     )
     if use_rnd:
         print(
@@ -493,8 +552,8 @@ def main():
     print("=" * 60)
     print("TRAINING HEALTH CHECK")
     _stack = (
-        "SMBEnv → NewMaxXWrapper → SurvivalBonusWrapper"
-        " → DeathPenaltyWrapper"
+        "SMBEnv → NewMaxXWrapper(active=False) → SurvivalBonusWrapper"
+        " → DeathPenaltyWrapper → VisitedCellsWrapper"
         + (" → RNDWrapper" if use_rnd else " (no RNDWrapper)")
         + " → SubprocVecEnv → VecMonitor"
     )

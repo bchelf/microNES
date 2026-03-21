@@ -87,14 +87,20 @@ class NewMaxXWrapper(gym.Wrapper):
     True if the key is absent (safe degradation: treats unknown state as grounded).
 
     Args:
-        env:   The wrapped Gymnasium environment.
-        scale: Multiplier applied to (current_x - max_x_seen) on a new record.
-               Default: 2.0.
+        env:    The wrapped Gymnasium environment.
+        scale:  Multiplier applied to (current_x - max_x_seen) on a new record.
+                Default: 2.0.
+        active: If False, the wrapper tracks max_x_seen and updates info but does
+                NOT add any reward bonus.  Use active=False when VisitedCellsWrapper
+                replaces the 1D frontier reward but diagnostic continuity is needed
+                (EntropySchedulerCallback still reads max_x_seen via get_attr).
+                Default: True.
     """
 
-    def __init__(self, env: gym.Env, scale: float = 2.0):
+    def __init__(self, env: gym.Env, scale: float = 2.0, active: bool = True):
         super().__init__(env)
         self.scale = scale
+        self.active = active
         self.max_x_seen: float = 0.0  # lifetime max — intentionally never reset
 
     def reset(self, **kwargs):
@@ -113,13 +119,14 @@ class NewMaxXWrapper(gym.Wrapper):
 
         bonus = 0.0
         if on_ground and current_x > self.max_x_seen:
-            bonus = (current_x - self.max_x_seen) * self.scale
-            self.max_x_seen = current_x
+            if self.active:
+                bonus = (current_x - self.max_x_seen) * self.scale
+            self.max_x_seen = current_x  # always track, even when inactive
 
         # Always update info["max_x_seen"] so diagnostics remain accurate regardless
-        # of the on_ground gate.
-        info["max_x_seen"]            = self.max_x_seen
-        info["mario_on_ground"]       = on_ground
+        # of the on_ground gate or active flag.
+        info["max_x_seen"]             = self.max_x_seen
+        info["mario_on_ground"]        = on_ground
         info["frontier_bonus_blocked"] = (not on_ground) and (current_x > self.max_x_seen)
         return obs, reward + bonus, terminated, truncated, info
 
@@ -401,3 +408,146 @@ class RNDWrapper(gym.Wrapper):
         }
         self.rnd_target.load_state_dict(state_dict)
         self.rnd_target.eval()  # target must stay in eval mode
+
+
+class VisitedCellsWrapper(gym.Wrapper):
+    """
+    Rewards Mario for visiting new (world_x, screen_y) tile cells while on the ground.
+
+    WHY 2D CELLS INSTEAD OF 1D X-FRONTIER:
+    NewMaxXWrapper's 1D frontier only rewards rightward progress: the agent gets bonus
+    for any x position never seen before, but two positions at the same x on different
+    height platforms are treated identically. This causes a failure mode where the agent
+    finds a lower platform edge, collects the x-frontier bonus up to that point, then
+    stalls — there is no gradient pointing upward to a higher platform at the same x
+    that leads forward. The 2D cell bonus rewards any new (cx, cy) ground-level
+    position, so higher platforms at the same x are distinct cells that carry reward.
+
+    THE LOCAL OPTIMUM THIS SOLVES:
+    The agent plateaued at x≈650 on a lower platform edge. The correct path requires
+    jumping up to a higher platform at roughly the same x. With a 1D x-only frontier,
+    both the lower and higher platforms map to the same frontier value — there is no
+    incentive to choose the higher one. With 2D cells, the higher platform is a
+    distinct (cx, cy_high) cell that has never been visited, carrying a fresh
+    cell_bonus. This breaks the symmetry and pulls the agent upward.
+
+    CELL LIFETIME PERSISTENCE:
+    visited_cells is NEVER reset between episodes. Like max_x_seen in NewMaxXWrapper,
+    this is intentional: once a cell has been visited, it offers no further exploration
+    reward. This creates a curriculum — early training collects dense rewards on
+    familiar territory, and as the frontier advances the reward gradient naturally
+    concentrates at the edge of known space. Resetting on episode end would re-reward
+    familiar territory every episode, destroying the curriculum pressure.
+
+    CELL SIZE TUNING:
+    cell_size_x = 16: one NES tile width in world_x pixels — matches the game's
+        native tile grid. Each horizontal tile is one cell.
+    cell_size_y = 16: one NES tile height in screen_y pixels — each platform layer
+        is one cell vertically.
+    Too large (e.g. 64): many positions map to the same cell, sparse reward signal.
+    Too small (e.g. 1): every pixel is a new cell, reward floods in the first episode.
+
+    # Cell size tuning: if cells_visited_total grows too fast (agent collects all
+    # cells in first 100k steps), increase cell_size. If cells_visited_total is flat
+    # after 200k steps, decrease cell_size or increase cell_bonus.
+    # Monitor diagnostics/cells_per_step — healthy range is 0.01-0.05
+    # (1-5 new cells per 100 steps during active exploration).
+
+    ON-GROUND GATE:
+    New cells are only registered when info["on_ground"] is True (RAM[0x001D] == 0x00).
+    Airborne x/y positions (during jumps or pit falls) do not count. Only physically
+    navigable ground-level positions advance the exploration frontier.
+
+    Info keys added each step:
+        new_cell_found       (bool)  — True if this step registered a new cell
+        total_cells_visited  (int)   — lifetime total cells across all episodes
+        episode_new_cells    (int)   — new cells found so far this episode (reset each reset())
+
+    Args:
+        env:          The wrapped Gymnasium environment.
+        cell_size_x:  World-x units per cell (default 16 = one NES tile width).
+        cell_size_y:  Screen-y units per cell (default 16 = one NES tile height).
+        cell_bonus:   Reward added per newly discovered cell (default 1.0).
+    """
+
+    def __init__(
+        self,
+        env:         gym.Env,
+        cell_size_x: int   = 16,
+        cell_size_y: int   = 16,
+        cell_bonus:  float = 1.0,
+    ):
+        super().__init__(env)
+        self.cell_size_x = cell_size_x
+        self.cell_size_y = cell_size_y
+        self.cell_bonus  = cell_bonus
+
+        self.visited_cells: set      = set()   # lifetime — never reset
+        self._episode_new_cells: int = 0       # reset each episode
+        self._total_cells:       int = 0       # lifetime total (== len(visited_cells))
+
+    def reset(self, **kwargs):
+        self._episode_new_cells = 0
+        # Do NOT reset visited_cells or _total_cells — lifetime persistence.
+        obs, info = self.env.reset(**kwargs)
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+
+        current_x = float(info.get("world_x", 0.0))
+        current_y = float(info.get("mario_y",  0.0))
+        on_ground = bool(info.get("on_ground", True))
+
+        cell = (int(current_x // self.cell_size_x),
+                int(current_y // self.cell_size_y))
+
+        new_cell = False
+        if on_ground and cell not in self.visited_cells:
+            self.visited_cells.add(cell)
+            reward += self.cell_bonus
+            self._episode_new_cells += 1
+            self._total_cells += 1
+            new_cell = True
+
+        info["new_cell_found"]      = new_cell
+        info["total_cells_visited"] = self._total_cells
+        info["episode_new_cells"]   = self._episode_new_cells
+        return obs, reward, terminated, truncated, info
+
+    def set_visited_cells(self, cells: set) -> None:
+        """
+        Replace visited_cells with the provided set and resync _total_cells.
+
+        Called via SubprocVecEnv.env_method("set_visited_cells", cells) after
+        loading a checkpoint, to pre-populate the archive with territory the
+        agent has already explored so resumed training starts from the true
+        frontier rather than re-rewarding familiar ground.
+        """
+        self.visited_cells = set(cells)
+        self._total_cells  = len(self.visited_cells)
+
+    def warmup_from_policy(self, model, n_episodes: int = 10) -> None:
+        """
+        Run n_episodes deterministically to pre-populate visited_cells.
+
+        Call this on a single-env instance after loading a checkpoint, before
+        creating SubprocVecEnv.  The resulting visited_cells set is then synced
+        to all workers via env_method("set_visited_cells", wrapper.visited_cells).
+
+        Args:
+            model:      A loaded SB3 model with a predict() method.
+            n_episodes: Number of episodes to run for warm-up (default 10).
+        """
+        obs, _ = self.reset()
+        episodes_done = 0
+        while episodes_done < n_episodes:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, _, terminated, truncated, _ = self.step(action)
+            if terminated or truncated:
+                obs, _ = self.reset()
+                episodes_done += 1
+        print(
+            f"[VisitedCells] warmup complete: {self._total_cells} cells "
+            f"from {n_episodes} episodes."
+        )

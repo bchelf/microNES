@@ -78,6 +78,9 @@ class DiagnosticsCallback(BaseCallback):
       C — Survival Bonus       (episode end): survival_bonus_total, survival_fraction
       D — Entropy & Policy     (every step):  ent_coef_current, policy_entropy
       E — Value Function       (every check_interval steps): value_at_start_state
+      H — 2D Cell Exploration  (episode end): cells_visited_episode,
+                                              cells_visited_total, cells_per_step
+                               (every check_interval): visited_cells_count
 
     Args:
         start_obs:       Dict observation from a single-env reset, used for Group E.
@@ -112,6 +115,7 @@ class DiagnosticsCallback(BaseCallback):
         self._ep_blocked_steps:     list[int]   = []   # steps where frontier bonus was blocked
         self._ep_max_x_on_ground:   list[float] = []   # highest world_x while on ground
         self._max_episode_steps: float = 600.0   # overwritten in _on_training_start
+        self._last_cells_check: int = 0          # step count of last visited_cells_count log
 
     # ------------------------------------------------------------------
     def _on_training_start(self) -> None:
@@ -162,13 +166,16 @@ class DiagnosticsCallback(BaseCallback):
             self._ep_intrinsic_sum[i] += float(info.get("intrinsic_reward", 0.0))
             self._ep_extrinsic_sum[i] += float(info.get("extrinsic_reward", 0.0))
 
-            # Ground-gated frontier metrics (from NewMaxXWrapper on-ground fix).
+            # Ground-gated frontier metrics.
+            # frontier_bonus_blocked comes from NewMaxXWrapper (may be absent if active=False
+            # still fires the key — it does, so this is fine either way).
             if info.get("frontier_bonus_blocked", False):
                 self._ep_blocked_steps[i] += 1
-            if info.get("mario_on_ground", True):
-                self._ep_max_x_on_ground[i] = max(
-                    self._ep_max_x_on_ground[i], world_x
-                )
+            # max_x_on_ground: read directly from SMBEnv's info["on_ground"] so this
+            # metric works regardless of whether NewMaxXWrapper is active or not.
+            if info.get("on_ground", True):
+                if world_x > self._ep_max_x_on_ground[i]:
+                    self._ep_max_x_on_ground[i] = world_x
 
             if "episode" not in info:
                 continue
@@ -262,6 +269,18 @@ class DiagnosticsCallback(BaseCallback):
                 self._ep_max_x_on_ground[i],
             )
 
+            # Group H — 2D cell exploration (from VisitedCellsWrapper).
+            # episode_new_cells: new cells found this episode (from info dict at episode end).
+            # total_cells_visited: lifetime total at this point in time.
+            # cells_per_step: exploration efficiency — should be high early, drop as
+            #   the agent revisits territory. Healthy range: 0.01-0.05.
+            ep_new_cells   = int(info.get("episode_new_cells", 0))
+            total_cells    = int(info.get("total_cells_visited", 0))
+            cells_per_step = float(ep_new_cells) / ep_steps_nonzero
+            self.logger.record_mean("diagnostics/cells_visited_episode", float(ep_new_cells))
+            self.logger.record_mean("diagnostics/cells_visited_total",   float(total_cells))
+            self.logger.record_mean("diagnostics/cells_per_step",        cells_per_step)
+
             # Reset accumulators for this env slot.
             self._ep_max_x[i]               = 0.0
             self._ep_steps[i]               = 0
@@ -284,6 +303,24 @@ class DiagnosticsCallback(BaseCallback):
         entropy_loss = self.model.logger.name_to_value.get("train/entropy_loss")
         if entropy_loss is not None:
             self.logger.record("diagnostics/policy_entropy", -float(entropy_loss))
+
+        # ---- Group H (periodic) — visited_cells archive size ----
+        # Read the actual set length from env 0's VisitedCellsWrapper via get_attr.
+        # gym.Wrapper.__getattr__ delegates unknown attrs down the chain, so
+        # visited_cells resolves to VisitedCellsWrapper.visited_cells. ✓
+        if (
+            self.num_timesteps > 0
+            and self.num_timesteps % self._check_interval == 0
+            and self.num_timesteps != self._last_cells_check
+        ):
+            self._last_cells_check = self.num_timesteps
+            try:
+                cells_archive = self.training_env.get_attr("visited_cells")[0]
+                self.logger.record(
+                    "diagnostics/visited_cells_count", len(cells_archive)
+                )
+            except Exception:
+                pass   # VisitedCellsWrapper may not be in the stack (non-fatal)
 
         # ---- Group E — Value Function Health (every check_interval steps) ----
         if (
