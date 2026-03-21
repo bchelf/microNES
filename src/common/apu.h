@@ -182,6 +182,7 @@ typedef struct {
     bool frame_irq_inhibit;
     int16_t pcm[APU_PCM_CAPACITY];
     double dc_level_tracker;
+    float mix_ramp;   /* 0.0=silent, 1.0=full, ramps between */
     ApuDebugSampleStats channel_stats[APU_DEBUG_CHANNEL_COUNT];
     ApuPulseChannel pulse[2];
     ApuTriangleChannel triangle;

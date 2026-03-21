@@ -404,7 +404,7 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
     float tnd_out = 0.0f;
     float mixed;
     int sample;
-
+    
     if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_PULSE1) {
         apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] += k_apu_test_tone_step_pulse1;
         pulse1_raw = (apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] & 0x80000000u) ? 12 : 0;
@@ -446,6 +446,24 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
     }
 
     mixed = pulse_out + tnd_out;
+
+    /* Attack ramp: smooths the 0->signal step at note-on.
+     * Without this, starting from silence produces a one-sample
+     * full-amplitude step that sounds like a percussive click.
+     * 32 samples at 48kHz = 0.67ms - inaudible as delay but
+     * eliminates the transient. */
+    if (mixed > 0.0f) {
+        if (apu->mix_ramp < 1.0f) {
+            apu->mix_ramp += 0.03125f;  /* 32 sample ramp up */
+            if (apu->mix_ramp > 1.0f) apu->mix_ramp = 1.0f;
+        }
+    } else {
+        if (apu->mix_ramp > 0.0f) {
+            apu->mix_ramp -= 0.03125f;  /* 32 sample ramp down */
+            if (apu->mix_ramp < 0.0f) apu->mix_ramp = 0.0f;
+        }
+    }
+    mixed *= apu->mix_ramp;
 
     /* Leaky DC-level tracker. Chases the mean of `mixed` at ~0.76 Hz.
      * Subtracting it removes DC offset without creating step discontinuities

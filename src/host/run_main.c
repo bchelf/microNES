@@ -559,6 +559,17 @@ int main(int argc, char **argv) {
         }
         nes_set_controller_state(&nes, 0, host_build_controller_state(&input));
 
+        /* Use audio queue as timing reference to prevent overproduction */
+        if (host_audio_sdl_is_enabled(audio)) {
+            while (true) {
+                uint32_t queued_bytes = host_audio_sdl_queued_bytes(audio);
+                uint32_t queued_ms = queued_bytes * 1000u /
+                    (nes_audio_sample_rate(&nes) * 2u);
+                if (queued_ms < 60) break;
+                SDL_DelayNS(1000000);  /* wait 1ms */
+            }
+        }
+
         while (running && nes.ppu.completed_frame_count < target_completed_frame) {
             if (!nes_step_instruction(&nes)) {
                 fprintf(stderr, "Emulation stopped: %s\n", nes_last_error(&nes));
