@@ -671,7 +671,16 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         if (apu->triangle.enabled) {
             apu->triangle.length_counter = k_apu_length_table[(value >> 3) & 0x1fu];
         }
-        /* Do not reset timer_counter: the triangle timer runs continuously. */
+         /* Clamp timer_counter to new period. Without this, a note change to a
+         * shorter period leaves a stale large timer_counter. The first scanline
+         * batch (n_cycles≈114) then causes apu_timer_advance to return a burst
+         * of fires (e.g. fires=11) that skips sequence_step past positions 15/16
+         * (value=0), producing an audible mid-wave click on every note change.
+         * Clamping here matches real NES behavior where the timer never holds a
+         * count larger than its current period. */
+        if (apu->triangle.timer_counter > apu->triangle.timer_period) {
+          apu->triangle.timer_counter = apu->triangle.timer_period;
+        }
         apu->triangle.linear_reload_flag = true;
         break;
     case 0x400cu:
