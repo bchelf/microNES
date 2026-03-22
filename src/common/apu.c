@@ -372,7 +372,7 @@ static uint8_t apu_triangle_output(const ApuTriangleChannel *triangle) {
     if (!triangle->enabled ||
         triangle->length_counter == 0 ||
         triangle->linear_counter == 0 ||
-        triangle->timer_period < 2u) {
+        triangle->timer_period < 8u) {
         return 0;
     }
 
@@ -720,6 +720,7 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         }
         if (!apu->triangle.enabled) {
             apu->triangle.length_counter = 0;
+            apu->triangle.linear_counter = 0;
         }
         if (!apu->noise.enabled) {
             apu->noise.length_counter = 0;
