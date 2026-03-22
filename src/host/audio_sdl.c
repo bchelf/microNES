@@ -9,7 +9,10 @@
 enum {
     HOST_AUDIO_CHANNELS = 1,
     HOST_AUDIO_BYTES_PER_SAMPLE = 2,
-    HOST_AUDIO_MAX_QUEUED_MS = 100,
+    // Drop new samples once the SDL audio queue exceeds this depth.
+    // 40 ms is enough headroom for a 60 fps frame (~16.6 ms) plus driver
+    // jitter, while keeping end-to-end audio latency well below 100 ms.
+    HOST_AUDIO_MAX_QUEUED_MS = 40,
 };
 
 struct HostAudioSdl {

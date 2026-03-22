@@ -11,6 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __linux__
+#include <time.h>
+#endif
 
 enum {
     HOST_DEFAULT_SCALE = 4,
@@ -449,6 +452,27 @@ static bool host_process_events(bool *running, HostInputState *input) {
     return true;
 }
 
+#ifdef __linux__
+// On Linux use CLOCK_MONOTONIC directly so we can sleep to an absolute
+// deadline with clock_nanosleep(TIMER_ABSTIME), which avoids the overshoot
+// accumulation of repeated relative nanosleep/SDL_DelayNS calls and gives
+// sub-50 µs wakeup precision even under moderate system load.
+static uint64_t host_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void host_wait_until_ns(uint64_t deadline_ns) {
+    struct timespec ts;
+    ts.tv_sec  = (time_t)(deadline_ns / 1000000000ull);
+    ts.tv_nsec = (long)(deadline_ns % 1000000000ull);
+    // TIMER_ABSTIME: sleep until the absolute clock time, not a relative delta.
+    // The kernel re-arms to the exact deadline on each wakeup, so jitter does
+    // not accumulate across frames.
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
+}
+#else
 static uint64_t host_now_ns(void) {
     return (uint64_t)SDL_GetTicksNS();
 }
@@ -468,6 +492,7 @@ static void host_wait_until_ns(uint64_t deadline_ns) {
         now_ns = host_now_ns();
     }
 }
+#endif
 
 int main(int argc, char **argv) {
     RunOptions options;

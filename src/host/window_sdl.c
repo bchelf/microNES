@@ -12,8 +12,6 @@ struct HostSdlWindow {
     SDL_Window *window;
     SDL_Renderer *renderer;
     SDL_Texture *texture;
-    uint8_t *rgba_pixels;
-    int rgba_pitch_bytes;
     bool enable_color;
 };
 
@@ -89,6 +87,10 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
 
+    // Bypass the desktop compositor for this window, eliminating 1-2 frames of
+    // compositor-induced latency on X11 (KWin, Mutter, etc.).
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
+
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         host_sdl_set_sdl_error("SDL_Init failed");
         return NULL;
@@ -125,10 +127,23 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
 
-    if (!SDL_SetRenderVSync(window->renderer, enable_vsync ? 1 : SDL_RENDERER_VSYNC_DISABLED)) {
-        host_sdl_set_sdl_error("SDL_SetRenderVSync failed");
-        host_sdl_window_destroy(window);
-        return NULL;
+    if (enable_vsync) {
+        // Prefer adaptive vsync (tears instead of stalling when a frame is late)
+        // to avoid worst-case +1 frame latency from missing a vblank deadline.
+        // Fall back to regular vsync if the driver doesn't support it.
+        if (!SDL_SetRenderVSync(window->renderer, SDL_RENDERER_VSYNC_ADAPTIVE)) {
+            if (!SDL_SetRenderVSync(window->renderer, 1)) {
+                host_sdl_set_sdl_error("SDL_SetRenderVSync failed");
+                host_sdl_window_destroy(window);
+                return NULL;
+            }
+        }
+    } else {
+        if (!SDL_SetRenderVSync(window->renderer, SDL_RENDERER_VSYNC_DISABLED)) {
+            host_sdl_set_sdl_error("SDL_SetRenderVSync failed");
+            host_sdl_window_destroy(window);
+            return NULL;
+        }
     }
 
     window->texture = SDL_CreateTexture(
@@ -150,13 +165,6 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
 
-    window->rgba_pitch_bytes = NES_FRAME_WIDTH * 4;
-    window->rgba_pixels = (uint8_t *)malloc((size_t)NES_FRAME_WIDTH * NES_FRAME_HEIGHT * 4u);
-    if (window->rgba_pixels == NULL) {
-        host_sdl_set_error("malloc failed");
-        host_sdl_window_destroy(window);
-        return NULL;
-    }
     window->enable_color = enable_color;
 
     return window;
@@ -176,31 +184,39 @@ void host_sdl_window_destroy(HostSdlWindow *window) {
     if (window->window != NULL) {
         SDL_DestroyWindow(window->window);
     }
-    free(window->rgba_pixels);
     free(window);
     SDL_Quit();
 }
 
 bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, int width, int height) {
+    void *tex_pixels;
+    int tex_pitch;
+
     if (window == NULL || pixels == NULL || width != NES_FRAME_WIDTH || height != NES_FRAME_HEIGHT) {
         host_sdl_set_error("invalid frame upload parameters");
         return false;
     }
 
-    for (int i = 0; i < width * height; ++i) {
-        uint8_t *rgba = &window->rgba_pixels[i * 4];
+    // SDL_LockTexture gives a direct pointer into the streaming texture,
+    // eliminating the extra CPU-to-staging-buffer copy that SDL_UpdateTexture does.
+    if (!SDL_LockTexture(window->texture, NULL, &tex_pixels, &tex_pitch)) {
+        host_sdl_set_sdl_error("SDL_LockTexture failed");
+        return false;
+    }
 
-        if (window->enable_color) {
-            host_convert_palette_to_rgba(pixels[i], rgba);
-        } else {
-            host_convert_gray_to_rgba(pixels[i], rgba);
+    for (int y = 0; y < height; ++y) {
+        uint8_t *row = (uint8_t *)tex_pixels + y * tex_pitch;
+        for (int x = 0; x < width; ++x) {
+            uint8_t *rgba = row + x * 4;
+            if (window->enable_color) {
+                host_convert_palette_to_rgba(pixels[y * width + x], rgba);
+            } else {
+                host_convert_gray_to_rgba(pixels[y * width + x], rgba);
+            }
         }
     }
 
-    if (!SDL_UpdateTexture(window->texture, NULL, window->rgba_pixels, window->rgba_pitch_bytes)) {
-        host_sdl_set_sdl_error("SDL_UpdateTexture failed");
-        return false;
-    }
+    SDL_UnlockTexture(window->texture);
     return true;
 }
 

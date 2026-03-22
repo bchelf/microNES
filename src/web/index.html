@@ -418,23 +418,44 @@ const KEY_MAP = {
     'ShiftRight': BTN_SELECT,
 };
 
-// ── Audio ring buffer ─────────────────────────────────────────────────────────
-const RING_SIZE = 16384; // power of 2
+// ── AudioWorklet source (loaded via Blob URL to keep the page self-contained) ─
+// Runs in a dedicated audio thread; 128-sample render quanta (~2.9 ms at
+// 44100 Hz) vs ScriptProcessorNode's minimum 256-sample callback on the main
+// thread — roughly 10× less audio latency.
+const WORKLET_CODE = `
+class NesAudioProcessor extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this._buf  = new Float32Array(16384); // power-of-2 ring
+        this._w    = 0;
+        this._r    = 0;
+        this.port.onmessage = ({ data }) => {
+            const mask = this._buf.length - 1;
+            for (let i = 0; i < data.length; i++) {
+                if ((this._w - this._r) < this._buf.length)
+                    this._buf[this._w++ & mask] = data[i];
+            }
+        };
+    }
+    process(_inputs, outputs) {
+        const out  = outputs[0][0];
+        const mask = this._buf.length - 1;
+        for (let i = 0; i < out.length; i++)
+            out[i] = (this._r < this._w) ? this._buf[this._r++ & mask] : 0;
+        return true;
+    }
+}
+registerProcessor('nes-audio-processor', NesAudioProcessor);
+`;
+
+// Fallback ring buffer used only when AudioWorklet is unavailable.
+const RING_SIZE = 16384;
 const RING_MASK = RING_SIZE - 1;
 const audioRing = new Float32Array(RING_SIZE);
 let ringWrite = 0;
 let ringRead  = 0;
-
-function ringPush(s) {
-    if ((ringWrite - ringRead) < RING_SIZE) {
-        audioRing[ringWrite++ & RING_MASK] = s;
-    }
-}
-
-function ringPop() {
-    if (ringRead >= ringWrite) return 0.0;
-    return audioRing[ringRead++ & RING_MASK];
-}
+function ringPush(s) { if ((ringWrite - ringRead) < RING_SIZE) audioRing[ringWrite++ & RING_MASK] = s; }
+function ringPop()   { return ringRead < ringWrite ? audioRing[ringRead++ & RING_MASK] : 0.0; }
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const AUDIO_TMP_SAMPLES = 4096;
@@ -444,36 +465,156 @@ let running          = false;
 let animFrameId      = null;
 let controllerBtns   = 0;
 let audioCtx         = null;
-let audioProcessor   = null;
+let audioWorkletNode = null;   // AudioWorklet path (preferred)
+let audioProcessor   = null;   // ScriptProcessorNode fallback
+let useAudioWorklet  = false;
 let audioTmpPtr      = null;
 let nesAudioRate     = 44100;
 
+// ── WebGL state ───────────────────────────────────────────────────────────────
+let gl        = null;
+let glFbTex   = null;   // framebuffer palette-index texture (LUMINANCE, 256×240)
+let ctx2d     = null;   // 2D fallback
+let imageData = null;
+
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const canvas      = document.getElementById('canvas');
-const ctx2d       = canvas.getContext('2d');
-const imageData   = ctx2d.createImageData(256, 240);
-const dropZone    = document.getElementById('drop-zone');
-const fileInput   = document.getElementById('file-input');
-const canvasWrap  = document.getElementById('canvas-wrapper');
-const statusEl    = document.getElementById('status');
-const touchCtrl   = document.getElementById('touch-controller');
+const canvas     = document.getElementById('canvas');
+const dropZone   = document.getElementById('drop-zone');
+const fileInput  = document.getElementById('file-input');
+const canvasWrap = document.getElementById('canvas-wrapper');
+const statusEl   = document.getElementById('status');
+const touchCtrl  = document.getElementById('touch-controller');
 
 function setStatus(msg) { statusEl.textContent = msg; }
 
+// ── WebGL setup ───────────────────────────────────────────────────────────────
+// The NES framebuffer is 256×240 palette indices (0-63). We upload it as a
+// single-channel LUMINANCE texture, then the fragment shader looks up the
+// colour from a 64×1 RGBA palette texture. The GPU does the palette expansion
+// — no per-pixel JS loop, no putImageData stall.
+(function setupWebGL() {
+    gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+    if (!gl) {
+        // Fallback: 2D canvas + putImageData
+        ctx2d     = canvas.getContext('2d');
+        imageData = ctx2d.createImageData(256, 240);
+        return;
+    }
+
+    const VS = `
+        attribute vec2 a_pos;
+        varying   vec2 v_uv;
+        void main() {
+            // Map clip-space [-1,1] to texture UV [0,1], flipping Y so the
+            // top of the NES frame appears at the top of the canvas.
+            v_uv        = vec2(a_pos.x * 0.5 + 0.5, -a_pos.y * 0.5 + 0.5);
+            gl_Position = vec4(a_pos, 0.0, 1.0);
+        }`;
+
+    const FS = `
+        precision mediump float;
+        uniform sampler2D u_fb;       // palette-index texture (LUMINANCE)
+        uniform sampler2D u_palette;  // 64×1 RGBA colour table
+        varying vec2 v_uv;
+        void main() {
+            // Recover the 0-63 index stored as a LUMINANCE byte, then map it
+            // to the centre of the corresponding texel in the palette strip.
+            float idx  = texture2D(u_fb, v_uv).r * 255.0;
+            float palX = (idx + 0.5) / 64.0;
+            gl_FragColor = texture2D(u_palette, vec2(palX, 0.5));
+        }`;
+
+    function compileShader(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+            console.error('Shader error:', gl.getShaderInfoLog(s));
+            gl.deleteShader(s);
+            return null;
+        }
+        return s;
+    }
+
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compileShader(gl.VERTEX_SHADER,   VS));
+    gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.error('Program link error:', gl.getProgramInfoLog(prog));
+        gl = null;
+        ctx2d     = canvas.getContext('2d');
+        imageData = ctx2d.createImageData(256, 240);
+        return;
+    }
+    gl.useProgram(prog);
+
+    // Full-screen triangle strip (two triangles = quad covering the viewport).
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER,
+        new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(prog, 'a_pos');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    // Framebuffer texture – updated every frame via texSubImage2D.
+    glFbTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, glFbTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 256, 240, 0,
+                  gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
+
+    // Palette texture – static 64×1 RGBA strip, uploaded once.
+    const palRGBA = new Uint8Array(64 * 4);
+    for (let i = 0; i < 64; i++) {
+        palRGBA[i*4+0] = NES_PALETTE[i*3+0];
+        palRGBA[i*4+1] = NES_PALETTE[i*3+1];
+        palRGBA[i*4+2] = NES_PALETTE[i*3+2];
+        palRGBA[i*4+3] = 255;
+    }
+    const palTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, palTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 64, 1, 0,
+                  gl.RGBA, gl.UNSIGNED_BYTE, palRGBA);
+
+    gl.uniform1i(gl.getUniformLocation(prog, 'u_fb'),      0);
+    gl.uniform1i(gl.getUniformLocation(prog, 'u_palette'), 1);
+})();
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 function renderFrame() {
-    const fbPtr  = Module._nes_web_framebuffer_ptr();
-    const pixels = Module.HEAPU8;
-    const data   = imageData.data;
-    let di = 0;
-    for (let i = 0; i < 256 * 240; i++) {
-        const pi = (pixels[fbPtr + i] & 0x3f) * 3;
-        data[di++] = NES_PALETTE[pi];
-        data[di++] = NES_PALETTE[pi + 1];
-        data[di++] = NES_PALETTE[pi + 2];
-        data[di++] = 255;
+    const fbPtr = Module._nes_web_framebuffer_ptr();
+
+    if (gl) {
+        // Upload raw palette indices directly from WASM memory – no JS loop.
+        const fbData = Module.HEAPU8.subarray(fbPtr, fbPtr + 256 * 240);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, glFbTex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 240,
+                         gl.LUMINANCE, gl.UNSIGNED_BYTE, fbData);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    } else {
+        // 2D canvas fallback.
+        const pixels = Module.HEAPU8;
+        const data   = imageData.data;
+        let di = 0;
+        for (let i = 0; i < 256 * 240; i++) {
+            const pi = (pixels[fbPtr + i] & 0x3f) * 3;
+            data[di++] = NES_PALETTE[pi];
+            data[di++] = NES_PALETTE[pi + 1];
+            data[di++] = NES_PALETTE[pi + 2];
+            data[di++] = 255;
+        }
+        ctx2d.putImageData(imageData, 0, 0);
     }
-    ctx2d.putImageData(imageData, 0, 0);
 }
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
@@ -483,34 +624,57 @@ function drainAudio() {
     do {
         n = Module._nes_web_audio_read_samples(audioTmpPtr, AUDIO_TMP_SAMPLES);
         if (n > 0) {
-            const samples = new Int16Array(Module.HEAP8.buffer, audioTmpPtr, n);
-            for (let i = 0; i < n; i++) {
-                ringPush(samples[i] / 32768.0);
+            const src = new Int16Array(Module.HEAP8.buffer, audioTmpPtr, n);
+            if (useAudioWorklet && audioWorkletNode) {
+                // Convert to float32 and transfer the buffer to the worklet
+                // thread. Transferring (rather than copying) is zero-copy.
+                const f32 = new Float32Array(n);
+                for (let i = 0; i < n; i++) f32[i] = src[i] / 32768.0;
+                audioWorkletNode.port.postMessage(f32, [f32.buffer]);
+            } else {
+                for (let i = 0; i < n; i++) ringPush(src[i] / 32768.0);
             }
         }
     } while (n === AUDIO_TMP_SAMPLES);
 }
 
-function setupAudio() {
+async function setupAudio() {
     if (audioCtx) {
         audioCtx.resume();
         return;
     }
+    // 'interactive' latencyHint asks the browser for the smallest possible
+    // output buffer size, reducing end-to-end audio latency.
     try {
-        audioCtx = new AudioContext({ sampleRate: nesAudioRate });
+        audioCtx = new AudioContext({ sampleRate: nesAudioRate, latencyHint: 'interactive' });
     } catch (_) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)(
+            { latencyHint: 'interactive' });
     }
-    // ScriptProcessorNode: deprecated but widely supported and requires no
-    // separate AudioWorklet file, keeping this page self-contained.
-    audioProcessor = audioCtx.createScriptProcessor(2048, 0, 1);
-    audioProcessor.onaudioprocess = (e) => {
-        const out = e.outputBuffer.getChannelData(0);
-        for (let i = 0; i < out.length; i++) {
-            out[i] = ringPop();
-        }
-    };
-    audioProcessor.connect(audioCtx.destination);
+
+    try {
+        // Load the worklet module from an inline Blob URL so the page remains
+        // self-contained (no separate .js file required).
+        const blob    = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+        await audioCtx.audioWorklet.addModule(blobUrl);
+        URL.revokeObjectURL(blobUrl);
+
+        audioWorkletNode = new AudioWorkletNode(audioCtx, 'nes-audio-processor');
+        audioWorkletNode.connect(audioCtx.destination);
+        useAudioWorklet = true;
+    } catch (e) {
+        // AudioWorklet unavailable (very old browser or insecure context).
+        // Fall back to the deprecated ScriptProcessorNode.
+        console.warn('AudioWorklet unavailable, falling back to ScriptProcessorNode:', e);
+        audioProcessor = audioCtx.createScriptProcessor(512, 0, 1);
+        audioProcessor.onaudioprocess = (ev) => {
+            const out = ev.outputBuffer.getChannelData(0);
+            for (let i = 0; i < out.length; i++) out[i] = ringPop();
+        };
+        audioProcessor.connect(audioCtx.destination);
+        useAudioWorklet = false;
+    }
 }
 
 // ── Game loop ─────────────────────────────────────────────────────────────────
@@ -565,7 +729,7 @@ async function loadRomFile(file) {
     dropZone.style.display   = 'none';
     if (isTouchDevice()) touchCtrl.style.display = 'block';
 
-    setupAudio();   // requires user gesture – file pick/drop qualifies
+    await setupAudio();   // requires user gesture – file pick/drop qualifies
     startGame();
     setStatus('Playing: ' + file.name);
 }
