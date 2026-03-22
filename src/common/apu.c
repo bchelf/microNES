@@ -224,6 +224,16 @@ static void apu_clock_noise_length(ApuNoiseChannel *noise) {
 
 static void apu_clock_triangle_linear(ApuTriangleChannel *triangle) {
     if (triangle->linear_reload_flag) {
+        /* When reloading from silence (counter was 0), reset the sequencer to
+         * a zero-value position so the waveform begins at the bottom of its
+         * cycle.  This prevents the click caused by the output jumping from
+         * silence to an arbitrary mid-waveform amplitude at note-on.  The
+         * real 2A03 does not reset the sequencer here, but without the NES
+         * hardware's analog output smoothing the discontinuity is clearly
+         * audible in digital emulation. */
+        if (triangle->linear_counter == 0) {
+            triangle->sequence_step = 15; /* sequence value 0 — zero crossing */
+        }
         triangle->linear_counter = triangle->linear_reload_value;
     } else if (triangle->linear_counter > 0) {
         --triangle->linear_counter;
@@ -447,11 +457,14 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
 
     mixed = pulse_out + tnd_out;
 
-    /* Leaky DC-level tracker. Chases the mean of `mixed` at ~16 Hz,
-     * matching the real NES analog output RC high-pass filter (~16 Hz cutoff).
-     * Subtracting it removes DC offset — equivalent to the capacitor coupling
-     * on the real NES output circuit. alpha = 1-exp(-2pi*16/48000) ~= 0.00209. */
-    apu->dc_level_tracker += ((double)mixed - apu->dc_level_tracker) * 0.00209;
+    /* Leaky DC-level tracker. Chases the mean of `mixed` at ~0.76 Hz.
+     * Subtracting it removes DC offset without creating step discontinuities
+     * at note-on/off transitions — equivalent to the analog capacitor coupling
+     * on the real NES output circuit. R = 0.9999 per sample at 48 kHz.
+     * A faster constant (e.g. matching the NES RC filter at ~16 Hz) decays
+     * the baseline to zero between notes, making the amplitude jump at
+     * note-on larger and the click more audible — so keep it slow. */
+    apu->dc_level_tracker += ((double)mixed - apu->dc_level_tracker) * 0.0001;
     mixed = mixed - (float)apu->dc_level_tracker;
 
     sample = (int)lrintf(mixed * 32767.0f);
