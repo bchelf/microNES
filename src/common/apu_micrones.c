@@ -78,7 +78,7 @@ static void apu_pcm_push(Apu *apu, int16_t sample) {
     }
 
     apu->pcm[apu->pcm_write_index] = sample;
-    apu->pcm_write_index = (apu->pcm_write_index + 1u) % APU_PCM_CAPACITY;
+    if (++apu->pcm_write_index >= APU_PCM_CAPACITY) apu->pcm_write_index = 0;
     ++apu->pcm_count;
     ++apu->sample_count;
 }
@@ -776,7 +776,7 @@ size_t apu_audio_read_samples(Apu *apu, int16_t *dst, size_t max_samples) {
 
     for (size_t i = 0; i < count; ++i) {
         dst[i] = apu->pcm[apu->pcm_read_index];
-        apu->pcm_read_index = (apu->pcm_read_index + 1u) % APU_PCM_CAPACITY;
+        if (++apu->pcm_read_index >= APU_PCM_CAPACITY) apu->pcm_read_index = 0;
     }
     apu->pcm_count -= (uint32_t)count;
     return count;

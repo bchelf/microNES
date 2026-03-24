@@ -86,6 +86,13 @@ bool touch_init(void)
         return false;
     }
 
+    /* The FT3168 NACKs I2C transactions when idle.  The application handles
+     * this gracefully (touch_read returns no data), but the ESP-IDF I2C
+     * driver logs ESP_LOGE for every NACK, cluttering the console and
+     * causing a brief UART serialisation stall in the emulation task.
+     * Suppress error-level output from the driver component. */
+    esp_log_level_set("i2c.master", ESP_LOG_WARN);
+
     ESP_LOGI(TAG, "FT3168 touch initialised");
     return true;
 }

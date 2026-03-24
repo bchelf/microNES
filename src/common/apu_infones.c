@@ -390,7 +390,7 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles)
         int16_t s = apu_render_sample(apu);
         if (apu->pcm_count < APU_PCM_CAPACITY) {
             apu->pcm[apu->pcm_write_index] = s;
-            apu->pcm_write_index = (apu->pcm_write_index + 1u) % APU_PCM_CAPACITY;
+            if (++apu->pcm_write_index >= APU_PCM_CAPACITY) apu->pcm_write_index = 0;
             ++apu->pcm_count;
             ++apu->sample_count;
         } else {
@@ -577,7 +577,7 @@ size_t apu_audio_read_samples(Apu *apu, int16_t *dst, size_t max_samples)
     if (n > max_samples) n = max_samples;
     for (size_t i = 0; i < n; ++i) {
         dst[i] = apu->pcm[apu->pcm_read_index];
-        apu->pcm_read_index = (apu->pcm_read_index + 1u) % APU_PCM_CAPACITY;
+        if (++apu->pcm_read_index >= APU_PCM_CAPACITY) apu->pcm_read_index = 0;
     }
     apu->pcm_count -= (uint32_t)n;
     return n;

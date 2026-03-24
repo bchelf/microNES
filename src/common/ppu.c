@@ -228,7 +228,7 @@ static void ppu_record_sprite0_status_clear(Ppu *ppu, bool expected) {
 #endif
 }
 
-static void ppu_latch_render_state(Ppu *ppu) {
+static void MICRONES_HOT_FUNC(ppu_latch_render_state)(Ppu *ppu) {
     uint16_t v = ppu->vram_addr;
     uint16_t coarse_x = v & 0x001fu;
     uint16_t coarse_y = (v >> 5) & 0x001fu;
@@ -241,7 +241,7 @@ static void ppu_latch_render_state(Ppu *ppu) {
     ppu->render_base_nametable = (uint8_t)((v >> 10) & 0x03u);
 }
 
-static bool ppu_rendering_enabled(const Ppu *ppu) {
+static inline bool ppu_rendering_enabled(const Ppu *ppu) {
     return (ppu->mask & (PPU_MASK_SHOW_BG | PPU_MASK_SHOW_SPRITES)) != 0;
 }
 
@@ -249,11 +249,11 @@ static bool ppu_visible_scanline_active(const Ppu *ppu) {
     return ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT && ppu->cycle > 0 && ppu->cycle <= 256;
 }
 
-static void ppu_copy_horizontal_bits_from_temp(Ppu *ppu) {
+static void MICRONES_HOT_FUNC(ppu_copy_horizontal_bits_from_temp)(Ppu *ppu) {
     ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x041fu) | (ppu->temp_addr & 0x041fu));
 }
 
-static void ppu_copy_vertical_bits_from_temp(Ppu *ppu) {
+static void MICRONES_HOT_FUNC(ppu_copy_vertical_bits_from_temp)(Ppu *ppu) {
     ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x7be0u) | (ppu->temp_addr & 0x7be0u));
 }
 
@@ -266,7 +266,7 @@ static void ppu_refresh_visible_scanline_render_state(Ppu *ppu) {
     ppu_latch_render_state(ppu);
 }
 
-static void ppu_increment_vertical_v(Ppu *ppu) {
+static void MICRONES_HOT_FUNC(ppu_increment_vertical_v)(Ppu *ppu) {
     if ((ppu->vram_addr & 0x7000u) != 0x7000u) {
         ppu->vram_addr += 0x1000u;
         return;
@@ -289,7 +289,7 @@ static void ppu_increment_vertical_v(Ppu *ppu) {
     }
 }
 
-static void ppu_finalize_frame(Ppu *ppu) {
+static void MICRONES_HOT_FUNC(ppu_finalize_frame)(Ppu *ppu) {
 #if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     uint32_t nonzero_pixels = 0;
     uint32_t sprite_pixels = 0;
@@ -916,6 +916,10 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
             uint16_t pattern_addr = (uint16_t)(bg_pattern_base + tile * 16u + bg_row);
             const uint8_t *row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
             uint8_t pal_base = (uint8_t)(palette_select << 2);
+            /* Cache the palette base pointer so the inner loops index it with
+             * a single load instead of recomputing ppu->palette + pal_base
+             * on every pixel. */
+            const uint8_t *pal_ptr = ppu->palette + pal_base;
 
             if (row_pixels != NULL) {
                 if (needs_sprite_comp) {
@@ -928,7 +932,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                             int screen_x = screen_start_x + px;
                             if (color_bits != 0) {
                                 bg_opaque[screen_x] = 1;
-                                dst[screen_x] = ppu->palette[pal_base | color_bits];
+                                dst[screen_x] = pal_ptr[color_bits];
                             } else {
                                 dst[screen_x] = universal_color;
                             }
@@ -944,7 +948,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                             uint8_t color_bits = row_pixels[px];
                             if (color_bits != 0) {
                                 bg_opaque[screen_x] = 1;
-                                dst[screen_x] = ppu->palette[pal_base | color_bits];
+                                dst[screen_x] = pal_ptr[color_bits];
                             } else {
                                 dst[screen_x] = universal_color;
                             }
@@ -957,7 +961,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                         for (int px = 0; px < 8; ++px) {
                             uint8_t color_bits = row_pixels[px];
                             dst[screen_start_x + px] = color_bits
-                                ? ppu->palette[pal_base | color_bits]
+                                ? pal_ptr[color_bits]
                                 : universal_color;
                         }
                     } else {
@@ -970,7 +974,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                             }
                             uint8_t color_bits = row_pixels[px];
                             dst[screen_x] = color_bits
-                                ? ppu->palette[pal_base | color_bits]
+                                ? pal_ptr[color_bits]
                                 : universal_color;
                         }
                     }
@@ -997,7 +1001,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                         uint8_t color_bits = decoded[px];
                         if (color_bits != 0) {
                             bg_opaque[screen_x] = 1;
-                            dst[screen_x] = ppu->palette[pal_base | color_bits];
+                            dst[screen_x] = pal_ptr[color_bits];
                         } else {
                             dst[screen_x] = universal_color;
                         }
@@ -1011,9 +1015,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                             continue;
                         }
                         uint8_t color_bits = decoded[px];
-                        dst[screen_x] = color_bits
-                            ? ppu->palette[pal_base | color_bits]
-                            : universal_color;
+                        dst[screen_x] = color_bits ? pal_ptr[color_bits] : universal_color;
                     }
                 }
             }
