@@ -129,14 +129,16 @@ static void display_task(void *arg)
 }
 
 static void print_diag(uint64_t period_us, uint32_t frames,
-                       uint32_t audio_pushed, uint32_t audio_dropped)
+                       uint32_t audio_pushed, uint32_t audio_skipped, uint32_t audio_overflow)
 {
     double fps       = (frames * 1000000.0) / (double)period_us;
     double frame_ms  = (double)period_us / (frames * 1000.0);
     ESP_LOGI(TAG,
-        "frames=%lu fps=%.1f frame_ms=%.2f audio_pushed=%lu audio_dropped=%lu audio_free=%u",
+        "frames=%lu fps=%.1f frame_ms=%.2f audio_pushed=%lu audio_skipped=%lu audio_overflow=%lu audio_free=%u",
         (unsigned long)frames, fps, frame_ms,
-        (unsigned long)audio_pushed, (unsigned long)audio_dropped,
+        (unsigned long)audio_pushed,
+        (unsigned long)audio_skipped,
+        (unsigned long)audio_overflow,
         (unsigned)audio_free_slots());
 }
 
@@ -175,7 +177,7 @@ static void emulator_task(void *arg)
     }
 
     ESP_LOGI(TAG, "audio_init...");
-    audio_init(48000);
+    audio_init(24000);
     ESP_LOGI(TAG, "audio_init OK");
 
     // ── Draw static UI overlay ───────────────────────────────
@@ -260,8 +262,7 @@ static void emulator_task(void *arg)
     {
         uint64_t report_start_us = esp_timer_get_time();
         uint32_t report_frames   = 0;
-        uint32_t report_pushed   = 0;
-        uint32_t report_dropped  = 0;
+        AudioStats prev_audio_stats = audio_stats_snapshot();
         uint32_t next_display_buffer = 0;
 
         while (true) {
@@ -301,9 +302,7 @@ static void emulator_task(void *arg)
                 size_t n;
                 while ((n = nes_audio_read_samples(&s_nes, pcm_tmp,
                             sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
-                    size_t pushed = audio_push_samples(pcm_tmp, n);
-                    report_pushed  += (uint32_t)n;
-                    report_dropped += (uint32_t)(n - pushed);
+                    (void)audio_push_samples(pcm_tmp, n);
                 }
             }
 
@@ -312,11 +311,14 @@ static void emulator_task(void *arg)
             // 5. Diagnostics every 60 frames
             if (report_frames >= 60u) {
                 uint64_t now_us = esp_timer_get_time();
-                print_diag(now_us - report_start_us, report_frames, report_pushed, report_dropped);
+                AudioStats audio_stats = audio_stats_snapshot();
+                print_diag(now_us - report_start_us, report_frames,
+                           (uint32_t)(audio_stats.pushed_samples - prev_audio_stats.pushed_samples),
+                           (uint32_t)(audio_stats.skipped_samples - prev_audio_stats.skipped_samples),
+                           (uint32_t)(audio_stats.overflow_samples - prev_audio_stats.overflow_samples));
                 report_start_us  = now_us;
                 report_frames    = 0;
-                report_pushed    = 0;
-                report_dropped   = 0;
+                prev_audio_stats = audio_stats;
             }
 
             // 6. Frame pacing: spin-wait to maintain ~60 fps

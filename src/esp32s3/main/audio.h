@@ -3,6 +3,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct {
+    uint64_t pushed_samples;
+    uint64_t skipped_samples;
+    uint64_t overflow_samples;
+} AudioStats;
+
 // Initialise LEDC PWM output for audio on BOARD_AUDIO_PIN.
 // sample_rate: target sample rate in Hz (typically 48000).
 void audio_init(uint32_t sample_rate);
@@ -13,3 +19,6 @@ size_t audio_push_samples(const int16_t *samples, size_t n_samples);
 
 // Number of free slots in the audio ring buffer.
 size_t audio_free_slots(void);
+
+// Cumulative audio frontend stats since boot.
+AudioStats audio_stats_snapshot(void);
