@@ -1,5 +1,5 @@
-#ifndef MICRONES_APU_LEGACY_H
-#define MICRONES_APU_LEGACY_H
+#ifndef MICRONES_APU_MICRONES_H
+#define MICRONES_APU_MICRONES_H
 
 #include "runtime_config.h"
 

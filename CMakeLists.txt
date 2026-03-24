@@ -5,8 +5,8 @@ set_property(CACHE MICRONES_PLATFORM PROPERTY STRINGS host pico web)
 set(MICRONES_PICO_VIDEO_MODE "test_pattern" CACHE STRING "Pico video mode: test_pattern or emulator")
 set_property(CACHE MICRONES_PICO_VIDEO_MODE PROPERTY STRINGS test_pattern emulator)
 set(MICRONES_PICO_ROM_PATH "" CACHE FILEPATH "Path to an iNES ROM image to embed for Pico emulator video mode")
-set(MICRONES_APU_ENGINE "infones" CACHE STRING "APU engine: infones (InfoNES DDS) or legacy (cycle-accurate)")
-set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS infones legacy)
+set(MICRONES_APU_ENGINE "infones" CACHE STRING "APU engine: infones (InfoNES DDS) or micrones (cycle-accurate)")
+set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS infones micrones)
 
 if (MICRONES_PLATFORM STREQUAL "pico")
     set(PICO_BOARD pico2 CACHE STRING "Target board")
@@ -19,12 +19,12 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if (MICRONES_APU_ENGINE STREQUAL "legacy")
-    set(MICRONES_APU_SOURCE src/common/apu_legacy.c)
-    set(MICRONES_APU_ENGINE_LEGACY_FLAG 1)
+if (MICRONES_APU_ENGINE STREQUAL "micrones")
+    set(MICRONES_APU_SOURCE src/common/apu_micrones.c)
+    set(MICRONES_APU_ENGINE_MICRONES_FLAG 1)
 else ()
     set(MICRONES_APU_SOURCE src/common/apu_infones.c)
-    set(MICRONES_APU_ENGINE_LEGACY_FLAG 0)
+    set(MICRONES_APU_ENGINE_MICRONES_FLAG 0)
 endif ()
 
 set(MICRONES_COMMON_SOURCES
@@ -48,10 +48,10 @@ target_include_directories(micrones_core PUBLIC
 )
 
 target_compile_definitions(micrones_core PUBLIC
-    MICRONES_APU_ENGINE_LEGACY=${MICRONES_APU_ENGINE_LEGACY_FLAG}
+    MICRONES_APU_ENGINE_MICRONES=${MICRONES_APU_ENGINE_MICRONES_FLAG}
 )
 
-if (MICRONES_APU_ENGINE STREQUAL "legacy")
+if (MICRONES_APU_ENGINE STREQUAL "micrones")
     target_link_libraries(micrones_core PUBLIC m)
 endif ()
 

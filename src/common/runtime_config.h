@@ -15,9 +15,9 @@
 #endif
 #endif
 
-/* APU engine selection: 0 = InfoNES DDS (default), 1 = cycle-accurate legacy */
-#ifndef MICRONES_APU_ENGINE_LEGACY
-#define MICRONES_APU_ENGINE_LEGACY 0
+/* APU engine selection: 0 = InfoNES DDS (default), 1 = cycle-accurate microNES APU */
+#ifndef MICRONES_APU_ENGINE_MICRONES
+#define MICRONES_APU_ENGINE_MICRONES 0
 #endif
 
 #ifndef MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
