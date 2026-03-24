@@ -39,6 +39,7 @@ idf_component_register(
         "${MICRONES_COMMON_DIR}/cpu6502_opcode.c"
         "${MICRONES_COMMON_DIR}/frame_pacer.c"
         "${MICRONES_COMMON_DIR}/input.c"
+        "${MICRONES_COMMON_DIR}/mmc1.c"
         "${MICRONES_COMMON_DIR}/nes.c"
         "${MICRONES_COMMON_DIR}/nrom.c"
         "${MICRONES_COMMON_DIR}/ppu.c"
