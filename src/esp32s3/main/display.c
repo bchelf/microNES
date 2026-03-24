@@ -46,11 +46,13 @@ static const char *TAG = "display";
 #define QSPI_INST_WRITE_SINGLE  0x02
 #define QSPI_INST_WRITE_QUAD    0x32
 
-// DMA-capable scratch buffer in internal SRAM (used by display_fill and
-// display_write_region for chunked transfers when the source may not be
-// DMA-accessible).  Sized for one full NES scanline (256 px × 2 bytes).
+// DMA-capable scratch buffer in internal SRAM.
+// Sized to match BLIT_CHUNK_PIXELS so that display_blit_region can copy one
+// full chunk from PSRAM (where s_frame_rgb now lives) without extra memcpy
+// round-trips.  Also used by display_fill and display_write_region in
+// ROW_BUF_PIXELS (256 px) sub-chunks.
 #define ROW_BUF_PIXELS  256
-static DMA_ATTR uint8_t s_row_buf[ROW_BUF_PIXELS * 2];
+static DMA_ATTR uint8_t s_dma_buf[BLIT_CHUNK_PIXELS * 2]; // 8192 bytes
 
 // display_blit_region sends pixels directly from the caller's DMA-accessible
 // buffer (s_frame_rgb in main.c is DMA_ATTR) in chunks of BLIT_CHUNK_PIXELS
@@ -256,8 +258,8 @@ void display_fill(uint16_t rgb565_be)
 {
     // Fill row buffer with the given colour
     for (int i = 0; i < ROW_BUF_PIXELS; i++) {
-        s_row_buf[i * 2]     = rgb565_be >> 8;
-        s_row_buf[i * 2 + 1] = rgb565_be & 0xFF;
+        s_dma_buf[i * 2]     = rgb565_be >> 8;
+        s_dma_buf[i * 2 + 1] = rgb565_be & 0xFF;
     }
 
     lcd_set_window(0, 0, DISPLAY_W - 1, DISPLAY_H - 1);
@@ -270,7 +272,7 @@ void display_fill(uint16_t rgb565_be)
         uint32_t chunk = total_pixels - sent;
         if (chunk > ROW_BUF_PIXELS) chunk = ROW_BUF_PIXELS;
         bool last = (sent + chunk >= total_pixels);
-        lcd_pixel_chunk(s_row_buf, chunk * 2, !last);
+        lcd_pixel_chunk(s_dma_buf, chunk * 2, !last);
         sent += chunk;
     }
 }
@@ -290,9 +292,9 @@ void display_write_region(uint16_t x, uint16_t y,
         uint32_t chunk = total_pixels - sent;
         if (chunk > ROW_BUF_PIXELS) chunk = ROW_BUF_PIXELS;
         // Copy into DMA-safe buffer (also handles PSRAM source)
-        memcpy(s_row_buf, src + sent * 2, chunk * 2);
+        memcpy(s_dma_buf, src + sent * 2, chunk * 2);
         bool last = (sent + chunk >= total_pixels);
-        lcd_pixel_chunk(s_row_buf, chunk * 2, !last);
+        lcd_pixel_chunk(s_dma_buf, chunk * 2, !last);
         sent += chunk;
     }
 }
@@ -303,11 +305,11 @@ void display_write_row(uint16_t x, uint16_t row_y, uint16_t w,
     display_write_region(x, row_y, w, 1, row);
 }
 
-// Blit a pre-rendered buffer to the display.
-// buf must be in internal SRAM with DMA_ATTR (guaranteed for s_frame_rgb in
-// main.c).  Pixels are sent directly without copying through s_row_buf, in
-// chunks of up to BLIT_CHUNK_PIXELS.  For a 256×240 NES frame this is one
-// SPI transaction instead of 240, eliminating most per-transaction overhead.
+// Blit a pre-rendered RGB565 buffer to the display.
+// buf may reside in PSRAM or internal SRAM.  Each chunk is copied into the
+// internal-SRAM DMA buffer s_dma_buf before transmission, so no DMA-capability
+// requirement is placed on the caller.
+// For a 256×240 NES frame: 15 transactions of 4096 px (8192 B) each.
 void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                          const uint16_t *buf)
 {
@@ -322,7 +324,8 @@ void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
         uint32_t chunk = total_pixels - sent;
         if (chunk > BLIT_CHUNK_PIXELS) chunk = BLIT_CHUNK_PIXELS;
         bool last = (sent + chunk >= total_pixels);
-        lcd_pixel_chunk(src + sent * 2, chunk * 2, !last);
+        memcpy(s_dma_buf, src + sent * 2, chunk * 2);
+        lcd_pixel_chunk(s_dma_buf, chunk * 2, !last);
         sent += chunk;
     }
 }
@@ -348,10 +351,10 @@ void display_stream_row(const uint16_t *row, uint16_t w)
     // row width should equal s_stream_w, but we trust the caller
     uint32_t remaining = s_stream_total_px - s_stream_sent_px;
     uint32_t pixels = (w < remaining) ? w : remaining;
-    memcpy(s_row_buf, row, pixels * 2);
+    memcpy(s_dma_buf, row, pixels * 2);
     s_stream_sent_px += pixels;
     bool last = (s_stream_sent_px >= s_stream_total_px);
-    lcd_pixel_chunk(s_row_buf, pixels * 2, !last);
+    lcd_pixel_chunk(s_dma_buf, pixels * 2, !last);
     if (last) s_streaming = false;
 }
 
@@ -367,7 +370,7 @@ void display_stream_end(void)
                         | SPI_TRANS_MODE_QIO,
                 .cmd    = 0,
                 .addr   = 0,
-                .tx_buffer = s_row_buf,  // must be non-NULL for DMA path
+                .tx_buffer = s_dma_buf,  // must be non-NULL for DMA path
                 .length    = 8,          // 1 dummy byte – enough to deassert CS
             },
             .command_bits = 0,

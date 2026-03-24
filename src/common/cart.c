@@ -62,7 +62,15 @@ static bool cart_build_chr_row_cache(NesCartridge *cartridge, char *error, size_
 
     row_count = (cartridge->chr_size / 16u) * 8u;
     total_bytes = row_count * 8u;
-    cartridge->chr_row_pixels = (uint8_t *)malloc(total_bytes);
+    /* Prefer internal SRAM: chr_row_pixels is read on every PPU tile render
+     * (33 tiles × 240 scanlines = 7920 reads per frame).  PSRAM reads go
+     * through DCache and can cause miss pressure.  CART_MALLOC_INTERNAL uses
+     * heap_caps_malloc(MALLOC_CAP_INTERNAL) on ESP32 so the allocator doesn't
+     * fall back to PSRAM; on other platforms it returns NULL → plain malloc. */
+    cartridge->chr_row_pixels = (uint8_t *)CART_MALLOC_INTERNAL(total_bytes);
+    if (cartridge->chr_row_pixels == NULL) {
+        cartridge->chr_row_pixels = (uint8_t *)malloc(total_bytes);
+    }
     if (cartridge->chr_row_pixels == NULL) {
         cart_set_error(error, error_size, "failed to allocate CHR row cache");
         return false;

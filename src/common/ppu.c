@@ -860,7 +860,7 @@ static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
 }
 
 static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartridge, int y) {
-#if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS && !MICRONES_ENABLE_FRAMEBUFFER
+#if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     uint8_t *dst = ppu->scanline_buffer.pixels;
     uint8_t bg_opaque[NES_FRAME_WIDTH];
     uint8_t sprite_prio[NES_FRAME_WIDTH]; /* 1 = pixel claimed by a sprite */
@@ -1023,12 +1023,19 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
         }
     }
 
+    /* Copy rendered scanline into the persistent framebuffer when enabled.
+     * The fast path writes to scanline_buffer.pixels (256 bytes in IRAM-local
+     * stack), then a single memcpy propagates it to the full frame buffer.
+     * This is cheaper than writing to both destinations per-pixel in the loop. */
+#if MICRONES_ENABLE_FRAMEBUFFER
+    memcpy(nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y), dst, NES_FRAME_WIDTH);
+#endif
     ppu->scanline_buffer.y = (uint16_t)y;
     ppu->scanline_buffer.frame_index = ppu->frame_count;
     ppu->scanline_buffer.ready = true;
     ppu->scanline_ready = true;
     return;
-#else
+#else /* MICRONES_ENABLE_RUNTIME_DIAGNOSTICS */
     uint8_t *dst =
 #if MICRONES_ENABLE_FRAMEBUFFER
         nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);

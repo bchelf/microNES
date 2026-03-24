@@ -39,9 +39,13 @@ extern const uint8_t    _binary_smb1_nes_end[];
 // ─────────────────────────────────────────────────────────────
 static Nes s_nes;
 
-// Full-frame RGB565 buffer (256×240 × 2 bytes = 120 KB) in internal SRAM.
-// DMA_ATTR ensures 4-byte alignment so the SPI DMA engine can read it directly.
-static DMA_ATTR uint16_t s_frame_rgb[NES_FRAME_WIDTH * NES_FRAME_HEIGHT];
+// Full-frame RGB565 buffer (256×240 × 2 bytes ≈ 120 KB).
+// Allocated at runtime from PSRAM so that the ~120 KB of internal SRAM it
+// would have consumed as a static DMA_ATTR array becomes available as heap
+// for PRG ROM and chr_row_pixels copies (both need internal SRAM for speed).
+// display_blit_region copies chunks through a small internal-SRAM DMA buffer,
+// so the PSRAM location does not require DMA-capable memory here.
+static uint16_t *s_frame_rgb;
 
 // ─────────────────────────────────────────────────────────────
 //  Frame timing
@@ -91,6 +95,28 @@ static void emulator_task(void *arg)
     // start printing.  Without this, early log messages are lost because the
     // host hasn't opened the port yet after a firmware reset.
     vTaskDelay(pdMS_TO_TICKS(1500));
+
+    // ── Allocate frame RGB buffer from PSRAM ──────────────────
+    // Prefer PSRAM so the ~120 KB stays out of internal SRAM, leaving room
+    // for the PRG ROM and chr_row_pixels copies in fast internal SRAM.
+    // display_blit_region copies through an internal DMA buffer, so this
+    // allocation does not need to be DMA-accessible.
+    s_frame_rgb = (uint16_t *)heap_caps_malloc(
+        NES_FRAME_WIDTH * NES_FRAME_HEIGHT * sizeof(uint16_t),
+        MALLOC_CAP_SPIRAM);
+    if (s_frame_rgb == NULL) {
+        // No PSRAM (non-SPIRAM builds or init failure) – fall back to any heap.
+        s_frame_rgb = (uint16_t *)malloc(
+            NES_FRAME_WIDTH * NES_FRAME_HEIGHT * sizeof(uint16_t));
+    }
+    if (s_frame_rgb == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate frame RGB buffer – halting");
+        goto idle;
+    }
+    ESP_LOGI(TAG, "frame_rgb @ %p (%s), free internal heap: %lu bytes",
+             (void *)s_frame_rgb,
+             ((uintptr_t)s_frame_rgb >= 0x3FC00000u) ? "internal SRAM" : "PSRAM/ext",
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     // ── Initialise hardware ──────────────────────────────────
     ESP_LOGI(TAG, "display_init...");
@@ -149,10 +175,26 @@ static void emulator_task(void *arg)
         } else {
             prg_location = "FLASH – slow, expect lower fps";
         }
-        ESP_LOGI(TAG, "PRG ROM @ %p (%s, %u bytes), free heap: %lu bytes",
+        ESP_LOGI(TAG, "PRG ROM @ %p (%s, %u bytes)",
                  (void *)prg, prg_location,
-                 (unsigned)s_nes.cartridge.prg_rom_size,
-                 (unsigned long)esp_get_free_heap_size());
+                 (unsigned)s_nes.cartridge.prg_rom_size);
+
+        /* Log chr_row_pixels placement – hot in ppu_render_scanline (33×/scanline). */
+        const uint8_t *chr = s_nes.cartridge.chr_row_pixels;
+        const char *chr_location;
+        if (chr == NULL) {
+            chr_location = "NULL (CHR RAM, unused)";
+        } else if ((uintptr_t)chr >= 0x3FC00000u) {
+            chr_location = "internal SRAM – fast";
+        } else if (heap_caps_check_integrity_addr((intptr_t)chr, false)) {
+            chr_location = "PSRAM heap – medium";
+        } else {
+            chr_location = "FLASH – slow";
+        }
+        ESP_LOGI(TAG, "chr_row_pixels @ %p (%s, %u bytes), free internal: %lu bytes",
+                 (void *)chr, chr_location,
+                 (unsigned)(s_nes.cartridge.chr_row_count * 8u),
+                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     }
     ESP_LOGI(TAG, "Emulator running");
 #else
