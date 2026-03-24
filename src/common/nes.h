@@ -7,6 +7,7 @@
 #include "cpu6502_opcode.h"
 #include "framebuffer.h"
 #include "input.h"
+#include "mmc1.h"
 #include "nrom.h"
 #include "ppu.h"
 #include "runtime_config.h"
@@ -65,6 +66,7 @@ typedef struct Nes {
     NesCartridge cartridge;
     NesController controllers[2];
     uint8_t cpu_ram[2048];
+    uint8_t wram[8192];   /* $6000-$7FFF battery-backed PRG-RAM (MMC1) */
     NesExecutionStats stats;
     NesStopInfo stop_info;
     Cpu6502TraceEntry trace[NES_TRACE_CAPACITY];
@@ -119,10 +121,17 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
 #if MICRONES_ENABLE_STEP_PROFILING
     ++nes->step_profile.bus_read_count;
 #endif
-    // PRG ROM is checked first: for SMB1/NROM the majority of reads are
-    // instruction fetches and data from the $8000-$FFFF range.
+    // PRG ROM is checked first: the majority of reads are instruction fetches
+    // and data from the $8000-$FFFF range.
+    // prg_bank_lo/$8000-$BFFF and prg_bank_hi/$C000-$FFFF are precomputed
+    // pointers updated on every bank switch; this keeps the hot path to a
+    // single subtraction + compare + indexed load regardless of mapper.
     if (addr >= 0x8000u) {
-        return nes_nrom_prg_read_fast(nes, addr);
+        uint32_t off = (uint32_t)(addr - 0x8000u);
+        if (off < 0x4000u) {
+            return nes->cartridge.prg_bank_lo[off];
+        }
+        return nes->cartridge.prg_bank_hi[off - 0x4000u];
     }
     if (addr < 0x2000u) {
         return nes->cpu_ram[addr & 0x07ffu];
@@ -138,6 +147,9 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
     }
     if (addr >= 0x4000u && addr <= 0x4017u) {
         return apu_cpu_read(&nes->apu, addr);
+    }
+    if (addr >= 0x6000u && addr < 0x8000u) {
+        return nes->wram[addr - 0x6000u];
     }
     return 0;
 }
@@ -175,8 +187,16 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
         apu_cpu_write(&nes->apu, addr, value);
         return;
     }
+    if (addr >= 0x6000u && addr < 0x8000u) {
+        nes->wram[addr - 0x6000u] = value;
+        return;
+    }
     if (addr >= 0x8000u) {
-        nrom_cpu_write(&nes->cartridge, addr, value);
+        if (nes->cartridge.mapper == 1) {
+            mmc1_cpu_write(&nes->cartridge, addr, value);
+        }
+        /* mapper 0 / NROM: writes to cartridge space are ignored */
+        return;
     }
 }
 

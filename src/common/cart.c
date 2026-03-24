@@ -1,4 +1,5 @@
 #include "cart.h"
+#include "mmc1.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,8 +122,8 @@ static bool cart_parse_ines_image(
     }
 
     cartridge->mapper = (uint8_t)((flags6 >> 4) | (flags7 & 0xf0u));
-    if (cartridge->mapper != 0) {
-        cart_set_error(error, error_size, "only mapper 0 / NROM is supported");
+    if (cartridge->mapper != 0 && cartridge->mapper != 1) {
+        cart_set_error(error, error_size, "only mapper 0 (NROM) and mapper 1 (MMC1) are supported");
         return false;
     }
 
@@ -135,9 +136,11 @@ static bool cart_parse_ines_image(
     cartridge->chr_banks = rom_image[5];
     cartridge->mirror_mode = (flags6 & 0x01u) ? NES_MIRROR_VERTICAL : NES_MIRROR_HORIZONTAL;
 
-    if (cartridge->prg_banks != 1 && cartridge->prg_banks != 2) {
-        cart_set_error(error, error_size, "NROM expects 16 KiB or 32 KiB of PRG ROM");
-        return false;
+    if (cartridge->mapper == 0) {
+        if (cartridge->prg_banks != 1 && cartridge->prg_banks != 2) {
+            cart_set_error(error, error_size, "NROM expects 16 KiB or 32 KiB of PRG ROM");
+            return false;
+        }
     }
 
     offset = INES_HEADER_SIZE;
@@ -179,6 +182,17 @@ static bool cart_parse_ines_image(
 
     cartridge->prg_rom_mask = (uint32_t)(cartridge->prg_rom_size - 1u);
     cartridge->chr_mask = (uint32_t)(cartridge->chr_size - 1u);
+
+    /* Initialize PRG bank window pointers used by the hot CPU read path */
+    if (cartridge->mapper == 0) {
+        cartridge->prg_bank_lo = cartridge->prg_rom;
+        cartridge->prg_bank_hi = (cartridge->prg_rom_size == 0x4000u)
+            ? cartridge->prg_rom                        /* 16 KiB: mirror */
+            : cartridge->prg_rom + 0x4000u;             /* 32 KiB: second half */
+    } else {
+        /* mapper 1 / MMC1: mmc1_cart_init sets shift register and bank pointers */
+        mmc1_cart_init(cartridge);
+    }
 
     if (!cart_build_chr_row_cache(cartridge, error, error_size)) {
         cart_unload(cartridge);
@@ -328,9 +342,20 @@ bool cart_load_ines_const_memory(
         prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
     }
     if (prg_dram != NULL) {
-        memcpy(prg_dram, cartridge->prg_rom, cartridge->prg_rom_size);
-        cartridge->prg_rom   = prg_dram;
-        cartridge->rom_image = prg_dram;   // cart_unload will free this
+        const uint8_t *old_prg = cartridge->prg_rom;
+        memcpy(prg_dram, old_prg, cartridge->prg_rom_size);
+        cartridge->prg_rom     = prg_dram;
+        /* Rebase precomputed bank pointers into the new DRAM allocation */
+        cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);
+        cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);
+        cartridge->rom_image   = prg_dram;   // cart_unload will free this
+    } else {
+        // Not enough heap for PRG copy – run from flash (slower but correct).
+        cart_set_error(error, error_size,
+            "PRG ROM DRAM copy failed; running from flash (expect lower fps)");
+        cartridge->rom_image = NULL;       // do not free flash pointer
+        // Clear error so caller doesn't treat this as a fatal failure.
+        cart_set_error(error, error_size, "");
     }
     // If all mallocs fail, prg_rom stays pointing into flash – slower but correct.
     // rom_image stays NULL so cart_unload never tries to free the flash buffer.

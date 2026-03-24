@@ -264,6 +264,65 @@ static inline uint8_t cpu_ror_value(Cpu6502 *cpu, uint8_t value) {
     return value;
 }
 
+/* --- Illegal (composite) opcodes required by Zelda and similar games --- */
+
+/* DCP: M -= 1, then CMP(A, M).  Flags set as CMP; does not update A. */
+static inline void cpu_dcp(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
+    uint8_t m = (uint8_t)(cpu_read(cpu, nes, addr) - 1u);
+    cpu_write(cpu, nes, addr, m);
+    cpu_cmp(cpu, cpu->a, m);
+}
+
+/* ISB (also called ISC): M += 1, then SBC(A, M). */
+static inline void cpu_isb(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
+    uint8_t m = (uint8_t)(cpu_read(cpu, nes, addr) + 1u);
+    cpu_write(cpu, nes, addr, m);
+    cpu_sbc(cpu, m);
+}
+
+/* LAX: A = X = M.  Sets N,Z flags. */
+static inline void cpu_lax(Cpu6502 *cpu, uint8_t value) {
+    cpu->a = value;
+    cpu->x = value;
+    cpu_set_zn(cpu, value);
+}
+
+/* SAX: store A & X.  No flag effects. */
+static inline void cpu_sax(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
+    cpu_write(cpu, nes, addr, (uint8_t)(cpu->a & cpu->x));
+}
+
+/* SLO: M = ASL(M), then A |= M.  C flag from ASL; N,Z from ORA result. */
+static inline void cpu_slo(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
+    uint8_t m = cpu_asl_value(cpu, cpu_read(cpu, nes, addr));
+    cpu_write(cpu, nes, addr, m);
+    cpu->a |= m;
+    cpu_set_zn(cpu, cpu->a);
+}
+
+/* RLA: M = ROL(M), then A &= M. */
+static inline void cpu_rla(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
+    uint8_t m = cpu_rol_value(cpu, cpu_read(cpu, nes, addr));
+    cpu_write(cpu, nes, addr, m);
+    cpu->a &= m;
+    cpu_set_zn(cpu, cpu->a);
+}
+
+/* SRE: M = LSR(M), then A ^= M. */
+static inline void cpu_sre(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
+    uint8_t m = cpu_lsr_value(cpu, cpu_read(cpu, nes, addr));
+    cpu_write(cpu, nes, addr, m);
+    cpu->a ^= m;
+    cpu_set_zn(cpu, cpu->a);
+}
+
+/* RRA: M = ROR(M), then ADC(A, M). */
+static inline void cpu_rra(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
+    uint8_t m = cpu_ror_value(cpu, cpu_read(cpu, nes, addr));
+    cpu_write(cpu, nes, addr, m);
+    cpu_adc(cpu, m);
+}
+
 static void cpu_service_interrupt(Cpu6502 *cpu, Nes *nes, uint16_t vector, bool set_break_flag) {
 #if MICRONES_ENABLE_STEP_PROFILING
     uint64_t cpu_started_us = nes_profile_now_us(nes);
@@ -1129,6 +1188,109 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
         cpu_set_zn(cpu, value);
         cycles = 7;
         break;
+
+    /* ------------------------------------------------------------------ */
+    /* Illegal opcodes used by The Legend of Zelda and similar games       */
+    /* ------------------------------------------------------------------ */
+
+    /* NOP variants: implied (1 byte, 2 cycles) */
+    case 0x1a: case 0x3a: case 0x5a: case 0x7a: case 0xda: case 0xfa:
+        cycles = 2;
+        break;
+    /* NOP immediate (2 bytes, 2 cycles) */
+    case 0x80: case 0x82: case 0x89: case 0xc2: case 0xe2:
+        cpu_fetch8(cpu, nes);
+        cycles = 2;
+        break;
+    /* NOP zero page (2 bytes, 3 cycles) */
+    case 0x04: case 0x44: case 0x64:
+        cpu_fetch8(cpu, nes);
+        cycles = 3;
+        break;
+    /* NOP zero page,X (2 bytes, 4 cycles) */
+    case 0x14: case 0x34: case 0x54: case 0x74: case 0xd4: case 0xf4:
+        cpu_fetch8(cpu, nes);
+        cycles = 4;
+        break;
+    /* NOP absolute (3 bytes, 4 cycles) */
+    case 0x0c:
+        cpu_fetch16(cpu, nes);
+        cycles = 4;
+        break;
+    /* NOP absolute,X (3 bytes, 4+1 cycles) */
+    case 0x1c: case 0x3c: case 0x5c: case 0x7c: case 0xdc: case 0xfc:
+        cpu_addr_absx(cpu, nes, &page_crossed);
+        cycles = page_crossed ? 5 : 4;
+        break;
+
+    /* SLO: ASL mem, ORA A */
+    case 0x03: cpu_slo(cpu, nes, cpu_addr_indx(cpu, nes));           cycles = 8; break;
+    case 0x07: cpu_slo(cpu, nes, cpu_addr_zp(cpu, nes));             cycles = 5; break;
+    case 0x0f: cpu_slo(cpu, nes, cpu_addr_abs(cpu, nes));            cycles = 6; break;
+    case 0x13: cpu_slo(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed)); cycles = 8; break;
+    case 0x17: cpu_slo(cpu, nes, cpu_addr_zpx(cpu, nes));            cycles = 6; break;
+    case 0x1b: cpu_slo(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed)); cycles = 7; break;
+    case 0x1f: cpu_slo(cpu, nes, cpu_addr_absx(cpu, nes, &page_crossed)); cycles = 7; break;
+
+    /* RLA: ROL mem, AND A */
+    case 0x23: cpu_rla(cpu, nes, cpu_addr_indx(cpu, nes));           cycles = 8; break;
+    case 0x27: cpu_rla(cpu, nes, cpu_addr_zp(cpu, nes));             cycles = 5; break;
+    case 0x2f: cpu_rla(cpu, nes, cpu_addr_abs(cpu, nes));            cycles = 6; break;
+    case 0x33: cpu_rla(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed)); cycles = 8; break;
+    case 0x37: cpu_rla(cpu, nes, cpu_addr_zpx(cpu, nes));            cycles = 6; break;
+    case 0x3b: cpu_rla(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed)); cycles = 7; break;
+    case 0x3f: cpu_rla(cpu, nes, cpu_addr_absx(cpu, nes, &page_crossed)); cycles = 7; break;
+
+    /* SRE: LSR mem, EOR A */
+    case 0x43: cpu_sre(cpu, nes, cpu_addr_indx(cpu, nes));           cycles = 8; break;
+    case 0x47: cpu_sre(cpu, nes, cpu_addr_zp(cpu, nes));             cycles = 5; break;
+    case 0x4f: cpu_sre(cpu, nes, cpu_addr_abs(cpu, nes));            cycles = 6; break;
+    case 0x53: cpu_sre(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed)); cycles = 8; break;
+    case 0x57: cpu_sre(cpu, nes, cpu_addr_zpx(cpu, nes));            cycles = 6; break;
+    case 0x5b: cpu_sre(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed)); cycles = 7; break;
+    case 0x5f: cpu_sre(cpu, nes, cpu_addr_absx(cpu, nes, &page_crossed)); cycles = 7; break;
+
+    /* RRA: ROR mem, ADC A */
+    case 0x63: cpu_rra(cpu, nes, cpu_addr_indx(cpu, nes));           cycles = 8; break;
+    case 0x67: cpu_rra(cpu, nes, cpu_addr_zp(cpu, nes));             cycles = 5; break;
+    case 0x6f: cpu_rra(cpu, nes, cpu_addr_abs(cpu, nes));            cycles = 6; break;
+    case 0x73: cpu_rra(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed)); cycles = 8; break;
+    case 0x77: cpu_rra(cpu, nes, cpu_addr_zpx(cpu, nes));            cycles = 6; break;
+    case 0x7b: cpu_rra(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed)); cycles = 7; break;
+    case 0x7f: cpu_rra(cpu, nes, cpu_addr_absx(cpu, nes, &page_crossed)); cycles = 7; break;
+
+    /* SAX: store A & X (no flags) */
+    case 0x83: cpu_sax(cpu, nes, cpu_addr_indx(cpu, nes)); cycles = 6; break;
+    case 0x87: cpu_sax(cpu, nes, cpu_addr_zp(cpu, nes));   cycles = 3; break;
+    case 0x8f: cpu_sax(cpu, nes, cpu_addr_abs(cpu, nes));  cycles = 4; break;
+    case 0x97: cpu_sax(cpu, nes, cpu_addr_zpy(cpu, nes));  cycles = 4; break;
+
+    /* LAX: A = X = M */
+    case 0xa3: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_indx(cpu, nes)));           cycles = 6; break;
+    case 0xa7: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_zp(cpu, nes)));             cycles = 3; break;
+    case 0xaf: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_abs(cpu, nes)));            cycles = 4; break;
+    case 0xb3: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed))); cycles = page_crossed ? 6 : 5; break;
+    case 0xb7: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_zpy(cpu, nes)));            cycles = 4; break;
+    case 0xbf: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed))); cycles = page_crossed ? 5 : 4; break;
+
+    /* DCP: DEC mem, CMP A */
+    case 0xc3: cpu_dcp(cpu, nes, cpu_addr_indx(cpu, nes));           cycles = 8; break;
+    case 0xc7: cpu_dcp(cpu, nes, cpu_addr_zp(cpu, nes));             cycles = 5; break;
+    case 0xcf: cpu_dcp(cpu, nes, cpu_addr_abs(cpu, nes));            cycles = 6; break;
+    case 0xd3: cpu_dcp(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed)); cycles = 8; break;
+    case 0xd7: cpu_dcp(cpu, nes, cpu_addr_zpx(cpu, nes));            cycles = 6; break;
+    case 0xdb: cpu_dcp(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed)); cycles = 7; break;
+    case 0xdf: cpu_dcp(cpu, nes, cpu_addr_absx(cpu, nes, &page_crossed)); cycles = 7; break;
+
+    /* ISB: INC mem, SBC A */
+    case 0xe3: cpu_isb(cpu, nes, cpu_addr_indx(cpu, nes));           cycles = 8; break;
+    case 0xe7: cpu_isb(cpu, nes, cpu_addr_zp(cpu, nes));             cycles = 5; break;
+    case 0xef: cpu_isb(cpu, nes, cpu_addr_abs(cpu, nes));            cycles = 6; break;
+    case 0xf3: cpu_isb(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed)); cycles = 8; break;
+    case 0xf7: cpu_isb(cpu, nes, cpu_addr_zpx(cpu, nes));            cycles = 6; break;
+    case 0xfb: cpu_isb(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed)); cycles = 7; break;
+    case 0xff: cpu_isb(cpu, nes, cpu_addr_absx(cpu, nes, &page_crossed)); cycles = 7; break;
+
     default: {
         const Cpu6502OpcodeInfo *opcode_info = cpu6502_opcode_info(cpu->last_opcode);
         if (nes->stop_info.reason == NES_STOP_NONE) {
