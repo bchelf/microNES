@@ -46,6 +46,11 @@ static const char *TAG = "display";
 #define QSPI_INST_WRITE_SINGLE  0x02
 #define QSPI_INST_WRITE_QUAD    0x32
 
+// display_blit_region sends a full frame in chunks of BLIT_CHUNK_PIXELS pixels
+// (4096 px = 8192 bytes) to reduce per-transaction SPI overhead.  15 transactions
+// for a 256×240 frame instead of 240, a 16× reduction.
+#define BLIT_CHUNK_PIXELS  4096
+
 // DMA-capable scratch buffer in internal SRAM.
 // Sized to match BLIT_CHUNK_PIXELS so that display_blit_region can copy one
 // full chunk from PSRAM (where s_frame_rgb now lives) without extra memcpy
@@ -53,14 +58,6 @@ static const char *TAG = "display";
 // ROW_BUF_PIXELS (256 px) sub-chunks.
 #define ROW_BUF_PIXELS  256
 static DMA_ATTR uint8_t s_dma_buf[BLIT_CHUNK_PIXELS * 2]; // 8192 bytes
-
-// display_blit_region sends pixels directly from the caller's DMA-accessible
-// buffer (s_frame_rgb in main.c is DMA_ATTR) in chunks of BLIT_CHUNK_PIXELS
-// to reduce per-transaction SPI overhead.  4096 px = 8192 bytes/chunk gives
-// 15 transactions for a 256×240 frame instead of 240, a 16× reduction.
-// Kept safely below the ESP32-S3 GDMA per-descriptor limit (~4095 B) by
-// chaining two descriptors, and well within max_transfer_sz below.
-#define BLIT_CHUNK_PIXELS  4096
 
 static spi_device_handle_t s_spi = NULL;
 static bool s_streaming = false;
