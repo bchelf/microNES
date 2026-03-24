@@ -104,6 +104,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
     set(MICRONES_PICO_SOURCES
         src/pico/audio_pwm.c
         src/pico/main.c
+        src/pico/nes_hw_controller.c
         src/pico/pico_input.c
         src/pico/pico_time.c
         src/pico/video_ntsc.c
@@ -144,9 +145,11 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
     target_link_libraries(micrones PRIVATE
         hardware_clocks
         hardware_dma
+        hardware_gpio
         hardware_irq
         hardware_pio
         hardware_pwm
+        hardware_timer
         hardware_vreg
         m
         pico_multicore

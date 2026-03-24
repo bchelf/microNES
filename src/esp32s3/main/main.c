@@ -1,6 +1,7 @@
 #include "audio.h"
 #include "board.h"
 #include "display.h"
+#include "nes_hw_controller.h"
 #include "nes_input.h"
 #include "touch.h"
 #include "ui.h"
@@ -179,6 +180,10 @@ static void emulator_task(void *arg)
     audio_init(24000);
     ESP_LOGI(TAG, "audio_init OK");
 
+    ESP_LOGI(TAG, "nes_hw_controller_init...");
+    nes_hw_controller_init();
+    ESP_LOGI(TAG, "nes_hw_controller_init OK");
+
     // ── Draw static UI overlay ───────────────────────────────
     ESP_LOGI(TAG, "drawing UI overlay...");
     ui_draw_overlay();
@@ -267,11 +272,13 @@ static void emulator_task(void *arg)
         while (true) {
             uint64_t frame_start_us = esp_timer_get_time();
 
-            // 1. Read touch → NES controller
+            // 1. Read inputs → NES controller (touch and hardware controller ORed)
             {
                 TouchData td;
                 touch_read(&td);
                 NesControllerState state = nes_input_from_touch(&td);
+                NesControllerState hw    = nes_hw_controller_read();
+                state.buttons |= hw.buttons;
                 nes_set_controller_state(&s_nes, 0, state);
             }
 

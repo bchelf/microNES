@@ -46,6 +46,7 @@ idf_component_register(
         "display.c"
         "touch.c"
         "audio.c"
+        "nes_hw_controller.c"
         "nes_input.c"
         "nes_video.c"
         "ui.c"

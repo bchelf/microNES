@@ -38,6 +38,18 @@
 #define BOARD_AUDIO_LEDC_CHANNEL   LEDC_CHANNEL_0
 #define BOARD_AUDIO_LEDC_SPEED     LEDC_LOW_SPEED_MODE
 
+// --- NES hardware controller (original 4021 PISO shift register) ---
+// Connect the 7-pin NES controller cable as follows:
+//   NES pin 1 (VCC)   → 3.3 V
+//   NES pin 2 (CLOCK) → GPIO 11 (output from ESP32-S3)
+//   NES pin 3 (LATCH) → GPIO 12 (output from ESP32-S3)
+//   NES pin 4 (DATA)  → GPIO 13 (input to ESP32-S3; pull-up enabled in firmware)
+//   NES pin 7 (GND)   → GND
+// Pins 5 and 6 are not connected on a standard NES controller.
+#define BOARD_NES_CTL_CLOCK  11
+#define BOARD_NES_CTL_LATCH  12
+#define BOARD_NES_CTL_DATA   13
+
 // --- Power / battery ADC ---
 #define BOARD_BAT_ADC_CHANNEL  ADC_CHANNEL_0   // GPIO1
 
