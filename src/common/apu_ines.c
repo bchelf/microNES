@@ -7,7 +7,7 @@
  * Output: 48 000 Hz mono int16 PCM via the existing ring-buffer API.
  */
 
-#include "apu_infones.h"
+#include "apu_ines.h"
 
 #include <string.h>
 
