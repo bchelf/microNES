@@ -504,7 +504,11 @@ void apu_init(Apu *apu) {
 }
 
 void apu_reset(Apu *apu) {
+    /* Preserve the DC-level tracker across reset so the first post-reset
+     * sample isn't subtracted against 0 (which would cause an audible pop). */
+    double dc = apu->dc_level_tracker;
     memset(apu, 0, sizeof(*apu));
+    apu->dc_level_tracker = dc;
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
     apu_reset_debug_defaults(apu);
