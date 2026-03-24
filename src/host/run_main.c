@@ -582,12 +582,10 @@ int main(int argc, char **argv) {
             running = false;
             break;
         }
-        if (!host_sdl_window_present(window)) {
-            fprintf(stderr, "Render failed: %s\n", host_sdl_window_last_error());
-            running = false;
-            break;
-        }
 
+        /* Submit audio before presenting so SDL has fresh samples to play
+         * during the vsync wait, rather than drawing down an already-low
+         * buffer and risking an underrun on any OS scheduling jitter. */
         while (nes_audio_available_samples(&nes) > 0) {
             size_t sample_count = nes_audio_read_samples(&nes, audio_samples, sizeof(audio_samples) / sizeof(audio_samples[0]));
             size_t remaining;
@@ -609,6 +607,12 @@ int main(int argc, char **argv) {
             }
         }
         if (!running) {
+            break;
+        }
+
+        if (!host_sdl_window_present(window)) {
+            fprintf(stderr, "Render failed: %s\n", host_sdl_window_last_error());
+            running = false;
             break;
         }
 
@@ -652,9 +656,31 @@ int main(int argc, char **argv) {
             break;
         }
 
-        if (micrones_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
-            host_wait_until_ns(pacer.wait_until_ns);
-            micrones_frame_pacer_note_wait_complete(&pacer, host_now_ns());
+        {
+            uint64_t wait_until = pacer.wait_until_ns;
+
+            /* Extend the sleep if the audio buffer is above its halfway
+             * mark.  This drains the excess back toward the target level
+             * before the next frame is emulated, preventing the slow
+             * accumulation (e.g. a 60.000 Hz display driving a 59.94 Hz
+             * NES) that would eventually force a whole-batch sample drop. */
+            if (host_audio_sdl_is_enabled(audio)) {
+                uint32_t queued = host_audio_sdl_queued_bytes(audio);
+                uint32_t target = host_audio_sdl_max_queued_bytes(audio) / 2;
+                if (queued > target) {
+                    uint32_t excess_samples = (queued - target) / (uint32_t)sizeof(int16_t);
+                    uint64_t drain_ns = (uint64_t)excess_samples * 1000000000ull / (uint64_t)nes_audio_sample_rate(&nes);
+                    uint64_t audio_wait = now_ns + drain_ns;
+                    if (audio_wait > wait_until) {
+                        wait_until = audio_wait;
+                    }
+                }
+            }
+
+            if (now_ns < wait_until) {
+                host_wait_until_ns(wait_until);
+                micrones_frame_pacer_note_wait_complete(&pacer, host_now_ns());
+            }
         }
     }
 

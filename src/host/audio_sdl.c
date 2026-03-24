@@ -140,6 +140,10 @@ uint32_t host_audio_sdl_queued_bytes(const HostAudioSdl *audio) {
     return (uint32_t)SDL_GetAudioStreamQueued(audio->stream);
 }
 
+uint32_t host_audio_sdl_max_queued_bytes(const HostAudioSdl *audio) {
+    return audio != NULL ? audio->max_queued_bytes : 0;
+}
+
 uint64_t host_audio_sdl_submitted_samples(const HostAudioSdl *audio) {
     return audio != NULL ? audio->submitted_samples : 0;
 }
