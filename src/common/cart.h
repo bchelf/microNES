@@ -36,6 +36,15 @@ bool cart_load_ines_memory(
     char *error,
     size_t error_size
 );
+// Zero-copy variant: prg_rom/chr_data point directly into the caller's buffer.
+// Use for flash-mapped embedded ROMs to avoid a heap allocation.
+bool cart_load_ines_const_memory(
+    NesCartridge *cartridge,
+    const uint8_t *rom_image,
+    size_t rom_image_size,
+    char *error,
+    size_t error_size
+);
 void cart_unload(NesCartridge *cartridge);
 bool cart_is_loaded(const NesCartridge *cartridge);
 

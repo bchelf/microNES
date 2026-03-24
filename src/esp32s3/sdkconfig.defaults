@@ -1,0 +1,39 @@
+# ESP32-S3 CPU & memory configuration
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
+
+# PSRAM disabled – using zero-copy ROM load instead of copying to heap.
+CONFIG_SPIRAM=n
+
+# Flash (16MB)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Use the ESP32-S3 hardware USB Serial/JTAG peripheral for the console.
+# This is built into silicon – it works from the first ROM boot message,
+# requires no firmware initialisation, and does not fight with macOS over
+# CDC control signals (which caused boot:0x2 / download-mode loops).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Logging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# FreeRTOS tick rate (1kHz for sub-ms timing)
+CONFIG_FREERTOS_HZ=1000
+
+# Increase main task stack (NES struct is large)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Watchdog – disable task watchdog to avoid false triggers during frame step
+CONFIG_ESP_TASK_WDT_EN=n
+
+# SPI DMA buffer alignment
+CONFIG_SPI_MASTER_IN_IRAM=y
+
+# Compiler optimizations for performance
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y

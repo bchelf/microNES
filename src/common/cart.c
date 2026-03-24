@@ -258,3 +258,47 @@ bool cart_load_ines_memory(
 
     return true;
 }
+
+bool cart_load_ines_const_memory(
+    NesCartridge *cartridge,
+    const uint8_t *rom_image,
+    size_t rom_image_size,
+    char *error,
+    size_t error_size
+) {
+    cart_unload(cartridge);
+
+    if (rom_image == NULL || rom_image_size == 0) {
+        cart_set_error(error, error_size, "ROM image is empty");
+        return false;
+    }
+
+    // Parse directly from the caller's buffer (e.g. flash-mapped embedded ROM).
+    // cart_parse_ines_image only reads from the image; it sets prg_rom and
+    // chr_data as pointers into it and allocates the CHR row-pixel cache.
+    if (!cart_parse_ines_image(cartridge, (uint8_t *)rom_image, rom_image_size,
+                               error, error_size)) {
+        return false;
+    }
+
+    // PRG ROM is on the hot path (every 6502 instruction fetch).  Flash-mapped
+    // DROM goes through DCache which is shared with the NES state and stack,
+    // causing significant miss pressure.  Copy PRG into heap DRAM so reads are
+    // zero-wait-state.  chr_data stays in flash: its only hot user is the
+    // chr_row_pixels cache (already in DRAM) so flash latency is acceptable.
+    uint8_t *prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
+    if (prg_dram != NULL) {
+        memcpy(prg_dram, cartridge->prg_rom, cartridge->prg_rom_size);
+        cartridge->prg_rom  = prg_dram;
+        cartridge->rom_image = prg_dram;   // cart_unload will free this
+    } else {
+        // Not enough heap for PRG copy – run from flash (slower but correct).
+        cart_set_error(error, error_size,
+            "PRG ROM DRAM copy failed; running from flash (expect lower fps)");
+        cartridge->rom_image = NULL;       // do not free flash pointer
+        // Clear error so caller doesn't treat this as a fatal failure.
+        cart_set_error(error, error_size, "");
+    }
+
+    return true;
+}
