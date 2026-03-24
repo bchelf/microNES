@@ -1,5 +1,5 @@
-#ifndef MICRONES_APU_INES_H
-#define MICRONES_APU_INES_H
+#ifndef MICRONES_APU_INFONES_H
+#define MICRONES_APU_INFONES_H
 
 /*
  * apu.h — InfoNES-based APU reimplementation
@@ -287,4 +287,4 @@ void             apu_debug_get_report(const Apu *apu, ApuDebugReport *report);
 const char      *apu_debug_channel_name(ApuDebugChannel channel);
 const char      *apu_debug_test_tone_name(ApuDebugTestTone mode);
 
-#endif /* MICRONES_APU_INES_H */
+#endif /* MICRONES_APU_INFONES_H */
