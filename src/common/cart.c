@@ -258,3 +258,29 @@ bool cart_load_ines_memory(
 
     return true;
 }
+
+bool cart_load_ines_const_memory(
+    NesCartridge *cartridge,
+    const uint8_t *rom_image,
+    size_t rom_image_size,
+    char *error,
+    size_t error_size
+) {
+    cart_unload(cartridge);
+
+    if (rom_image == NULL || rom_image_size == 0) {
+        cart_set_error(error, error_size, "ROM image is empty");
+        return false;
+    }
+
+    // Parse directly from the caller's buffer (e.g. flash-mapped embedded ROM).
+    // cart_parse_ines_image only reads from the image; it stores prg_rom and
+    // chr_data as pointers into it.  We then clear rom_image so cart_unload
+    // won't attempt to free a flash address (free(NULL) is a no-op).
+    if (!cart_parse_ines_image(cartridge, (uint8_t *)rom_image, rom_image_size,
+                               error, error_size)) {
+        return false;
+    }
+    cartridge->rom_image = NULL;  // not heap-owned; do not free
+    return true;
+}

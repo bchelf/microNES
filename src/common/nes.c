@@ -74,6 +74,19 @@ bool nes_load_cartridge_memory(Nes *nes, const uint8_t *rom_image, size_t rom_im
     return true;
 }
 
+bool nes_load_cartridge_const_memory(Nes *nes, const uint8_t *rom_image, size_t rom_image_size) {
+    char error[160];
+
+    if (!cart_load_ines_const_memory(&nes->cartridge, rom_image, rom_image_size, error, sizeof(error))) {
+        nes_set_error(nes, "%s", error);
+        return false;
+    }
+
+    nes_clear_runtime_state(nes);
+    nes_set_error(nes, "");
+    return true;
+}
+
 void nes_reset(Nes *nes) {
     memset(nes->cpu_ram, 0, sizeof(nes->cpu_ram));
     ppu_reset(&nes->ppu);

@@ -120,7 +120,7 @@ static void emulator_task(void *arg)
 
 #if MICRONES_HAS_ROM
     ESP_LOGI(TAG, "Loading embedded ROM (%u bytes)", (unsigned)ROM_SIZE);
-    if (!nes_load_cartridge_memory(&s_nes, ROM_START, ROM_SIZE)) {
+    if (!nes_load_cartridge_const_memory(&s_nes, ROM_START, ROM_SIZE)) {
         ESP_LOGE(TAG, "ROM load failed: %s", nes_last_error(&s_nes));
         // Fall through to idle loop
         goto idle;

@@ -73,6 +73,7 @@ void nes_init(Nes *nes);
 void nes_destroy(Nes *nes);
 bool nes_load_cartridge_file(Nes *nes, const char *path);
 bool nes_load_cartridge_memory(Nes *nes, const uint8_t *rom_image, size_t rom_image_size);
+bool nes_load_cartridge_const_memory(Nes *nes, const uint8_t *rom_image, size_t rom_image_size);
 void nes_reset(Nes *nes);
 void nes_set_profile_clock(Nes *nes, micrones_profile_now_us_fn now_us, void *user);
 void nes_set_controller_state(Nes *nes, unsigned controller_index, NesControllerState state);
