@@ -6,12 +6,15 @@ Raspberry Pi Pico 2 (RP2350) running SMB1 with monochrome NTSC composite video o
 
 ## GPIO Pin Assignments
 
-| GPIO | Function       | Direction |
-|------|----------------|-----------|
-| GP0  | Video sync/bias | Output   |
-| GP1  | Video luma      | Output   |
-| GP2  | START button    | Input     |
-| GP5  | Audio PWM       | Output   |
+| GPIO | Function        | Direction |
+|------|-----------------|-----------|
+| GP0  | Video sync/bias | Output    |
+| GP1  | Video luma      | Output    |
+| GP2  | Spare button    | Input     |
+| GP3  | NES CLOCK       | Output    |
+| GP4  | NES LATCH       | Output    |
+| GP5  | Audio PWM       | Output    |
+| GP6  | NES DATA        | Input     |
 
 ---
 
@@ -61,21 +64,39 @@ The RC filter is recommended but optional for initial bring-up. Without it you w
 
 ---
 
-## START Button
+## NES Controller (Pico 2 / RP2350)
 
-Momentary pushbutton between GP2 and GND. The Pico's internal pull-up holds GP2 high when the button is not pressed.
+Original NES controller connected via its 7-pin cable.  The controller
+contains a 4021 PISO (parallel-in, serial-out) shift register.
+
+```
+NES controller cable
+  pin 1  VCC  ─── 3.3 V
+  pin 2  CLOCK ── GP3
+  pin 3  LATCH ── GP4
+  pin 4  DATA  ── GP6   (active-low output from controller)
+  pin 5  N/C
+  pin 6  N/C
+  pin 7  GND  ─── GND
+```
+
+- DATA is active-low: the controller pulls it low for each pressed button.
+- The Pico's internal pull-up on GP6 keeps the line high (no buttons pressed)
+  when no controller is connected.
+- No external resistors are needed on CLOCK, LATCH, or DATA.
+
+---
+
+## Spare Button (GP2)
+
+GP2 is no longer used for START (the NES controller provides it).
+It remains available as a spare input, e.g. for a reset button.
 
 ```
 3.3V (internal pull-up via GP2)
   │
-GP2 ──────────── one side of button
-                 other side of button ── GND
+GP2 ──── one side of button ──── GND
 ```
-
-- Not pressed: GP2 = HIGH → START not asserted
-- Pressed: GP2 = LOW → START asserted
-
-No external resistor is needed. Do not connect a pull-down — the internal pull-up handles it.
 
 ---
 
@@ -83,17 +104,21 @@ No external resistor is needed. Do not connect a pull-down — the internal pull
 
 ```
 Pico 2 (RP2350)
-┌─────────────────────┐
-│ GP0 ──[ 1kΩ ]──┐    │
-│ GP1 ──[ 470Ω]──┴── RCA center
-│                     │    RCA shell ── GND
-│ GP2 ──────────── [BTN] ── GND
-│                     │
-│ GP5 ──[ 1kΩ ]──┬── audio jack tip
-│              [10nF]  │
-│                 │    │
-│ GND ───────────┴────┘
-└─────────────────────┘
+┌──────────────────────────────────┐
+│ GP0 ──[ 1kΩ ]──┐                 │
+│ GP1 ──[ 470Ω]──┴── RCA center    │    RCA shell ── GND
+│                                  │
+│ GP3 ────────────────── NES CLOCK │
+│ GP4 ────────────────── NES LATCH │
+│ GP6 ────────────────── NES DATA  │
+│                                  │
+│ GP5 ──[ 1kΩ ]──┬── audio jack tip│
+│              [10nF]              │
+│                 │                │
+│ GND ────────────┴────────────────┘
+│  │                               │
+│  └── NES GND, RCA shell, jack GND│
+└──────────────────────────────────┘
 ```
 
 ---
@@ -102,5 +127,6 @@ Pico 2 (RP2350)
 
 - Power the Pico via USB (5V). No additional power supply is needed.
 - The Pico runs overclocked at 252 MHz with VREG at 1.20V — this is within the RP2350 spec at this voltage.
-- All signal ground connections (RCA shell, button, audio jack sleeve) must share a common GND with the Pico.
+- All signal ground connections (RCA shell, NES controller, audio jack sleeve) must share a common GND with the Pico.
 - The composite output is monochrome only. Color is not supported.
+- The NES controller is also supported on the ESP32-S3 target; see board.h for those pin assignments (GPIO 8/9/10).
