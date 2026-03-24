@@ -129,4 +129,4 @@ Pico 2 (RP2350)
 - The Pico runs overclocked at 252 MHz with VREG at 1.20V — this is within the RP2350 spec at this voltage.
 - All signal ground connections (RCA shell, NES controller, audio jack sleeve) must share a common GND with the Pico.
 - The composite output is monochrome only. Color is not supported.
-- The NES controller is also supported on the ESP32-S3 target; see board.h for those pin assignments (GPIO 8/9/10).
+- The NES controller is also supported on the ESP32-S3 target; see board.h for those pin assignments (GPIO 11/12/13).

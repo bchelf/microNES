@@ -31,9 +31,9 @@
 // ── Pin assignments ──────────────────────────────────────────────────────
 //
 //  ESP32-S3 (Waveshare ESP32-S3-Touch-AMOLED-1.91) – defined in board.h:
-//    GPIO 8  → CLOCK
-//    GPIO 9  → LATCH
-//    GPIO 10 → DATA
+//    GPIO 11 → CLOCK
+//    GPIO 12 → LATCH
+//    GPIO 13 → DATA
 //
 //  RP2350 / Pico 2 – defined in pico_input.h:
 //    GP3 → CLOCK
