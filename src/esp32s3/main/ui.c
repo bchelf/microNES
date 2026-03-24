@@ -19,7 +19,6 @@
 //  Palette (all pre-swapped for SPI)
 // ─────────────────────────────────────────────────────────────
 static const uint16_t kBG         = BE(RGB( 18,  18,  22));  // near-black bg
-static const uint16_t kPanel      = BE(RGB( 52,  48,  60));  // controller body
 static const uint16_t kDpadBase   = BE(RGB( 30,  28,  36));  // D-pad cross fill
 static const uint16_t kDpadHiL   = BE(RGB( 80,  76,  92));  // top/left bevel
 static const uint16_t kDpadShdw  = BE(RGB( 12,  11,  16));  // bot/right bevel
