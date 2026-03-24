@@ -15,6 +15,10 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 # Allow large heap allocations (PRG/CHR copies) to use PSRAM, keeping
 # critical internal SRAM free for DMA buffers and hot data.
 # Allocations < 8 KB stay in internal SRAM (stacks, small structs, etc.).
+# Reserve only 8 KB of internal SRAM for DMA (down from the default 32 KB).
+# This frees ~24 KB so the 32 KB PRG ROM copy can land in internal SRAM
+# for zero-wait-state 6502 instruction fetches.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=8192
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
 # Do not relocate code or rodata to PSRAM – they stay in flash/IRAM.

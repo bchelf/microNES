@@ -11,6 +11,7 @@
 #include "framebuffer.h"
 
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -127,14 +128,29 @@ static void emulator_task(void *arg)
     }
     nes_reset(&s_nes);
     {
-        /* Diagnose whether PRG ROM was copied to DRAM or is running from flash.
-         * On ESP32-S3: internal DRAM ≥ 0x3FC00000, flash DROM < 0x3C000000.
-         * A DRAM copy avoids DCache contention on every 6502 instruction fetch. */
+        /* Diagnose whether PRG ROM landed in internal SRAM, PSRAM, or flash.
+         *
+         * Address ranges on ESP32-S3:
+         *   0x3FC00000–0x3FFFFFFF  Internal DRAM  (fastest – zero wait states)
+         *   0x3C000000–0x3FBFFFFF  External (PSRAM or flash DROM via DCache)
+         *
+         * With PSRAM enabled both PSRAM and flash map into the 0x3C… window,
+         * so we cannot distinguish them by address alone.  Use heap_caps to
+         * ask whether the pointer belongs to the internal-RAM heap instead. */
         const uint8_t *prg = s_nes.cartridge.prg_rom;
-        bool prg_in_dram = ((uintptr_t)prg >= 0x3FC00000u);
+        const char *prg_location;
+        if ((uintptr_t)prg >= 0x3FC00000u) {
+            prg_location = "internal SRAM – fast";
+        } else if (heap_caps_check_integrity_addr((intptr_t)prg, false)) {
+            /* heap_caps_check_integrity_addr returns true if the address is
+             * inside a registered heap region – i.e. it was malloc'd (PSRAM
+             * or internal), not a raw flash pointer. */
+            prg_location = "PSRAM heap – medium";
+        } else {
+            prg_location = "FLASH – slow, expect lower fps";
+        }
         ESP_LOGI(TAG, "PRG ROM @ %p (%s, %u bytes), free heap: %lu bytes",
-                 (void *)prg,
-                 prg_in_dram ? "DRAM – fast" : "FLASH – slow, expect lower fps",
+                 (void *)prg, prg_location,
                  (unsigned)s_nes.cartridge.prg_rom_size,
                  (unsigned long)esp_get_free_heap_size());
     }

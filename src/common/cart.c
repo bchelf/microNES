@@ -4,6 +4,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+// heap_caps_malloc is available on ESP32 (esp-idf) for MALLOC_CAP_INTERNAL.
+// On other platforms it is not available; use a no-op shim so cart.c stays
+// portable.
+#ifdef ESP_PLATFORM
+#  include "esp_heap_caps.h"
+#  define CART_MALLOC_INTERNAL(sz) \
+       heap_caps_malloc((sz), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#else
+#  define CART_MALLOC_INTERNAL(sz) NULL  // fall through to plain malloc below
+#endif
+
 enum {
     INES_HEADER_SIZE = 16,
     INES_TRAINER_SIZE = 512,
@@ -293,16 +304,27 @@ bool cart_load_ines_const_memory(
 
     // PRG ROM is on the 6502 instruction-fetch hot path.  Flash-mapped DROM
     // goes through DCache (shared with NES state and stack), causing miss
-    // pressure.  Copy PRG into heap DRAM for zero-wait-state fetches.
+    // pressure.  Copy PRG into internal SRAM for zero-wait-state fetches.
+    //
+    // Strategy (in priority order):
+    //  1. Internal SRAM  – fastest; use heap_caps_malloc(MALLOC_CAP_INTERNAL)
+    //     when PSRAM is active so the allocator doesn't fall back to PSRAM.
+    //  2. Any heap (PSRAM) – still 3-4× faster than flash DCache thrash.
+    //  3. Flash           – slowest; accepted if all else fails.
+    //
     // chr_data stays in flash: its only hot user is the chr_row_pixels cache
     // (already in DRAM), so flash latency there is acceptable.
-    uint8_t *prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
+    uint8_t *prg_dram = (uint8_t *)CART_MALLOC_INTERNAL(cartridge->prg_rom_size);
+    if (prg_dram == NULL) {
+        // Internal SRAM full (or non-ESP platform) – fall back to any heap.
+        prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
+    }
     if (prg_dram != NULL) {
         memcpy(prg_dram, cartridge->prg_rom, cartridge->prg_rom_size);
         cartridge->prg_rom   = prg_dram;
         cartridge->rom_image = prg_dram;   // cart_unload will free this
     }
-    // If malloc fails, prg_rom stays pointing into flash – slower but correct.
+    // If all mallocs fail, prg_rom stays pointing into flash – slower but correct.
     // rom_image stays NULL so cart_unload never tries to free the flash buffer.
 
     return true;
