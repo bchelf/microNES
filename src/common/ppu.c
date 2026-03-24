@@ -923,22 +923,23 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
              * a single load instead of recomputing ppu->palette + pal_base
              * on every pixel. */
             const uint8_t *pal_ptr = ppu->palette + pal_base;
+            /* Branchless 4-entry palette: slot 0 holds universal_color so the
+             * inner loops can write dst[x] = pal4[row_pixels[px]] with a
+             * single table lookup rather than a per-pixel branch on zero. */
+            const uint8_t pal4[4] = {
+                universal_color, pal_ptr[1], pal_ptr[2], pal_ptr[3]
+            };
 
             if (row_pixels != NULL) {
                 if (needs_sprite_comp) {
                     if ((uint32_t)(tile_group - 2) <= 29u) {
-                        /* Fast path: all 8 pixels are on-screen; write
-                         * universal_color for transparent pixels so the
-                         * pre-fill memset is not needed. */
+                        /* Fast path: all 8 pixels are on-screen; branchless
+                         * bg_opaque write and palette lookup. */
                         for (int px = 0; px < 8; ++px) {
                             uint8_t color_bits = row_pixels[px];
                             int screen_x = screen_start_x + px;
-                            if (color_bits != 0) {
-                                bg_opaque[screen_x] = 1;
-                                dst[screen_x] = pal_ptr[color_bits];
-                            } else {
-                                dst[screen_x] = universal_color;
-                            }
+                            bg_opaque[screen_x] = (uint8_t)(color_bits != 0);
+                            dst[screen_x] = pal4[color_bits];
                         }
                     } else {
                         for (int px = 0; px < 8; ++px) {
@@ -949,23 +950,15 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                                 continue;
                             }
                             uint8_t color_bits = row_pixels[px];
-                            if (color_bits != 0) {
-                                bg_opaque[screen_x] = 1;
-                                dst[screen_x] = pal_ptr[color_bits];
-                            } else {
-                                dst[screen_x] = universal_color;
-                            }
+                            bg_opaque[screen_x] = (uint8_t)(color_bits != 0);
+                            dst[screen_x] = pal4[color_bits];
                         }
                     }
                 } else {
                     if ((uint32_t)(tile_group - 2) <= 29u) {
-                        /* Fast path: unconditional write eliminates branch and
-                         * the need for a pre-fill memset. */
+                        /* Fast path: single branchless lookup per pixel. */
                         for (int px = 0; px < 8; ++px) {
-                            uint8_t color_bits = row_pixels[px];
-                            dst[screen_start_x + px] = color_bits
-                                ? pal_ptr[color_bits]
-                                : universal_color;
+                            dst[screen_start_x + px] = pal4[row_pixels[px]];
                         }
                     } else {
                         for (int px = 0; px < 8; ++px) {
@@ -975,10 +968,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                                 dst[screen_x] = universal_color;
                                 continue;
                             }
-                            uint8_t color_bits = row_pixels[px];
-                            dst[screen_x] = color_bits
-                                ? pal_ptr[color_bits]
-                                : universal_color;
+                            dst[screen_x] = pal4[row_pixels[px]];
                         }
                     }
                 }
@@ -1002,12 +992,8 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                             continue;
                         }
                         uint8_t color_bits = decoded[px];
-                        if (color_bits != 0) {
-                            bg_opaque[screen_x] = 1;
-                            dst[screen_x] = pal_ptr[color_bits];
-                        } else {
-                            dst[screen_x] = universal_color;
-                        }
+                        bg_opaque[screen_x] = (uint8_t)(color_bits != 0);
+                        dst[screen_x] = pal4[color_bits];
                     }
                 } else {
                     for (int px = 0; px < 8; ++px) {
@@ -1017,8 +1003,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                             dst[screen_x] = universal_color;
                             continue;
                         }
-                        uint8_t color_bits = decoded[px];
-                        dst[screen_x] = color_bits ? pal_ptr[color_bits] : universal_color;
+                        dst[screen_x] = pal4[decoded[px]];
                     }
                 }
             }

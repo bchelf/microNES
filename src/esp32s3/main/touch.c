@@ -91,7 +91,7 @@ bool touch_init(void)
      * driver logs ESP_LOGE for every NACK, cluttering the console and
      * causing a brief UART serialisation stall in the emulation task.
      * Suppress error-level output from the driver component. */
-    esp_log_level_set("i2c.master", ESP_LOG_WARN);
+    esp_log_level_set("i2c.master", ESP_LOG_NONE);
 
     ESP_LOGI(TAG, "FT3168 touch initialised");
     return true;
