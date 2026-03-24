@@ -11,6 +11,7 @@
 #include "framebuffer.h"
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -69,19 +70,28 @@ static void emulator_task(void *arg)
     (void)arg;
 
     // ── Initialise hardware ──────────────────────────────────
+    ESP_LOGI(TAG, "display_init...");
     if (!display_init()) {
         ESP_LOGE(TAG, "display_init failed – halting");
         vTaskSuspend(NULL);
     }
+    ESP_LOGI(TAG, "display_init OK");
 
+    ESP_LOGI(TAG, "touch_init...");
     if (!touch_init()) {
         ESP_LOGW(TAG, "touch_init failed – touch input disabled");
+    } else {
+        ESP_LOGI(TAG, "touch_init OK");
     }
 
+    ESP_LOGI(TAG, "audio_init...");
     audio_init(48000);
+    ESP_LOGI(TAG, "audio_init OK");
 
     // ── Draw static UI overlay ───────────────────────────────
+    ESP_LOGI(TAG, "drawing UI overlay...");
     ui_draw_overlay();
+    ESP_LOGI(TAG, "UI overlay done");
 
     // ── Load ROM ─────────────────────────────────────────────
     nes_init(&s_nes);
@@ -192,10 +202,14 @@ idle:
 // ─────────────────────────────────────────────────────────────
 void app_main(void)
 {
-    ESP_LOGI(TAG, "microNES ESP32-S3 AMOLED starting");
+    // USB CDC needs ~2-3 s to enumerate after a hard reset before the host
+    // serial monitor is ready.  Without this delay any early log output and
+    // crash traces are lost.
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
-    // Create emulator task on Core 1, with a generous stack (NES struct is ~60 KB
-    // but most is in .bss; we need stack for nested calls + scanline buffers).
+    ESP_LOGI(TAG, "microNES ESP32-S3 AMOLED starting");
+    ESP_LOGI(TAG, "free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
+
     xTaskCreatePinnedToCore(
         emulator_task,
         "emulator",
