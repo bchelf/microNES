@@ -68,10 +68,14 @@ static bool cart_build_chr_row_cache(NesCartridge *cartridge, char *error, size_
     return true;
 }
 
+// transfer_ownership: if true, cartridge->rom_image is set to rom_image and
+// cart_unload() will free it.  Pass false when rom_image points into flash or
+// another non-heap buffer – cart_unload's free(NULL) is then a safe no-op.
 static bool cart_parse_ines_image(
     NesCartridge *cartridge,
     uint8_t *rom_image,
     size_t rom_image_size,
+    bool transfer_ownership,
     char *error,
     size_t error_size
 ) {
@@ -130,8 +134,13 @@ static bool cart_parse_ines_image(
         return false;
     }
 
-    cartridge->rom_image = rom_image;
-    cartridge->rom_image_size = rom_image_size;
+    // Only take ownership when the caller allocated rom_image on the heap.
+    // When transfer_ownership is false (e.g. flash-mapped const buffer),
+    // cartridge->rom_image stays NULL so cart_unload's free() is a no-op.
+    if (transfer_ownership) {
+        cartridge->rom_image = rom_image;
+        cartridge->rom_image_size = rom_image_size;
+    }
     cartridge->prg_rom = rom_image + offset;
     offset += cartridge->prg_rom_size;
 
@@ -221,7 +230,7 @@ bool cart_load_ines_file(NesCartridge *cartridge, const char *path, char *error,
     }
     fclose(file);
 
-    if (!cart_parse_ines_image(cartridge, rom_image, (size_t)file_size, error, error_size)) {
+    if (!cart_parse_ines_image(cartridge, rom_image, (size_t)file_size, true, error, error_size)) {
         free(rom_image);
         return false;
     }
@@ -251,7 +260,7 @@ bool cart_load_ines_memory(
     }
 
     memcpy(owned_copy, rom_image, rom_image_size);
-    if (!cart_parse_ines_image(cartridge, owned_copy, rom_image_size, error, error_size)) {
+    if (!cart_parse_ines_image(cartridge, owned_copy, rom_image_size, true, error, error_size)) {
         free(owned_copy);
         return false;
     }
@@ -273,43 +282,28 @@ bool cart_load_ines_const_memory(
         return false;
     }
 
-    // PRG ROM is on the hot path (every 6502 instruction fetch).  Flash-mapped
-    // DROM goes through DCache which is shared with the NES state and stack,
-    // causing significant miss pressure.  We want to copy PRG into DRAM.
-    //
-    // Allocate the PRG buffer *before* cart_parse_ines_image, which builds the
-    // 32 KB CHR row-pixel cache.  Allocating PRG first guarantees a contiguous
-    // 32 KB block; if CHR were allocated first its placement can fragment the
-    // heap so no 32 KB run remains for PRG even when total free exceeds 64 KB.
-    //
-    // Peek at prg_banks directly from the raw header (validated below by
-    // cart_parse_ines_image; if the image is invalid, free is called cleanly).
-    uint8_t *prg_dram = NULL;
-    if (rom_image_size >= INES_HEADER_SIZE &&
-        memcmp(rom_image, "NES\x1a", 4) == 0) {
-        size_t prg_banks = rom_image[4];
-        if (prg_banks > 0 && prg_banks <= 2) {   // NROM: 1 or 2 banks
-            prg_dram = (uint8_t *)malloc(prg_banks * INES_PRG_BANK_SIZE);
-        }
-    }
-
-    // Parse directly from the caller's buffer (e.g. flash-mapped embedded ROM).
-    // cart_parse_ines_image sets prg_rom/chr_data as pointers into the image
-    // and allocates the CHR row-pixel cache.
+    // Parse directly from the flash-mapped buffer.
+    // transfer_ownership=false keeps cartridge->rom_image NULL, so any
+    // internal cart_unload error path calls free(NULL) – a harmless no-op
+    // instead of the crash caused by trying to free a flash address.
     if (!cart_parse_ines_image(cartridge, (uint8_t *)rom_image, rom_image_size,
-                               error, error_size)) {
-        free(prg_dram);
+                               false, error, error_size)) {
         return false;
     }
 
+    // PRG ROM is on the 6502 instruction-fetch hot path.  Flash-mapped DROM
+    // goes through DCache (shared with NES state and stack), causing miss
+    // pressure.  Copy PRG into heap DRAM for zero-wait-state fetches.
+    // chr_data stays in flash: its only hot user is the chr_row_pixels cache
+    // (already in DRAM), so flash latency there is acceptable.
+    uint8_t *prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
     if (prg_dram != NULL) {
         memcpy(prg_dram, cartridge->prg_rom, cartridge->prg_rom_size);
         cartridge->prg_rom   = prg_dram;
         cartridge->rom_image = prg_dram;   // cart_unload will free this
-    } else {
-        // Not enough heap for PRG copy – run from flash (slower but correct).
-        cartridge->rom_image = NULL;       // do not free flash pointer
     }
+    // If malloc fails, prg_rom stays pointing into flash – slower but correct.
+    // rom_image stays NULL so cart_unload never tries to free the flash buffer.
 
     return true;
 }
