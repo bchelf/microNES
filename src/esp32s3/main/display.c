@@ -50,6 +50,10 @@ static const char *TAG = "display";
 #define ROW_BUF_PIXELS  512
 static DMA_ATTR uint8_t s_row_buf[ROW_BUF_PIXELS * 2];
 
+// Chunk size for display_blit_region (direct DRAM→DMA path, no copy).
+// 4096 pixels = 8192 bytes is well within ESP32-S3 GDMA limits.
+#define BLIT_CHUNK_PIXELS  4096
+
 static spi_device_handle_t s_spi = NULL;
 static bool s_streaming = false;
 
@@ -206,8 +210,7 @@ bool display_init(void)
         .data5_io_num    = -1,
         .data6_io_num    = -1,
         .data7_io_num    = -1,
-        // Allow transfers up to one full NES frame (256×240 × 2 bytes) plus overhead
-        .max_transfer_sz = (256 * 240 * 2) + 64,
+        .max_transfer_sz = BLIT_CHUNK_PIXELS * 2 + 64,  // 8256 bytes
         .flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_QUAD,
     };
 
@@ -295,45 +298,25 @@ void display_write_row(uint16_t x, uint16_t row_y, uint16_t w,
     display_write_region(x, row_y, w, 1, row);
 }
 
-// Send a pre-rendered, DMA-accessible buffer directly – no intermediate copy.
-// buf must reside in internal SRAM (always the case when PSRAM is disabled).
-// This is the fast path for full-frame NES blits (one SPI transaction).
+// Send a pre-rendered buffer that resides in internal SRAM directly to the
+// display without going through s_row_buf (no memcpy).  Sent in BLIT_CHUNK_PIXELS
+// chunks so each DMA transfer stays within the hardware-proven size limit.
 void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                          const uint16_t *buf)
 {
     lcd_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
-    ESP_ERROR_CHECK(spi_device_acquire_bus(s_spi, portMAX_DELAY));
+    lcd_pixel_begin();
 
-    // RAMWR header in quad mode, CS stays active
-    spi_transaction_ext_t hdr = {
-        .base = {
-            .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
-                    | SPI_TRANS_MODE_QIO | SPI_TRANS_CS_KEEP_ACTIVE,
-            .cmd    = QSPI_INST_WRITE_QUAD,
-            .addr   = (uint32_t)SH8601_RAMWR << 16,
-            .tx_buffer = NULL,
-            .length    = 0,
-        },
-        .command_bits = 8,
-        .address_bits = 24,
-    };
-    ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, (spi_transaction_t *)&hdr));
-
-    // Pixel data – single large DMA transaction, CS deasserts at end
-    spi_transaction_ext_t px = {
-        .base = {
-            .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
-                    | SPI_TRANS_MODE_QIO,
-            .cmd    = 0,
-            .addr   = 0,
-            .tx_buffer = buf,
-            .length    = (uint32_t)w * h * 16,  // bits
-        },
-        .command_bits = 0,
-        .address_bits = 0,
-    };
-    ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, (spi_transaction_t *)&px));
-    spi_device_release_bus(s_spi);
+    uint32_t total = (uint32_t)w * h;
+    uint32_t sent  = 0;
+    while (sent < total) {
+        uint32_t chunk = total - sent;
+        if (chunk > BLIT_CHUNK_PIXELS) chunk = BLIT_CHUNK_PIXELS;
+        bool last = (sent + chunk >= total);
+        // Pass pointer directly into buf – no copy needed; buf is in DRAM.
+        lcd_pixel_chunk((const uint8_t *)buf + sent * 2, chunk * 2, !last);
+        sent += chunk;
+    }
 }
 
 // ── Streaming API ──────────────────────────────────────────────

@@ -6,14 +6,15 @@
 // ============================================================
 
 // --- QSPI Display (SH8601 AMOLED) ---
-#define BOARD_LCD_QSPI_CS    10   // Chip select
-#define BOARD_LCD_QSPI_SCLK  12   // Clock
-#define BOARD_LCD_QSPI_D0    11   // SIO0 / MOSI
-#define BOARD_LCD_QSPI_D1    13   // SIO1 / MISO
-#define BOARD_LCD_QSPI_D2     7   // SIO2 / WP
-#define BOARD_LCD_QSPI_D3    14   // SIO3 / HOLD
-#define BOARD_LCD_RST         9   // Hardware reset (active low)
-#define BOARD_LCD_TE          6   // Tearing-effect pin (optional)
+// Pin assignments from official Waveshare schematic
+#define BOARD_LCD_QSPI_CS     6   // QSPI chip select
+#define BOARD_LCD_QSPI_SCLK  47   // QSPI clock
+#define BOARD_LCD_QSPI_D0    18   // QSPI D0
+#define BOARD_LCD_QSPI_D1     7   // QSPI D1
+#define BOARD_LCD_QSPI_D2    48   // QSPI D2
+#define BOARD_LCD_QSPI_D3     5   // QSPI D3
+#define BOARD_LCD_RST        17   // AMOLED reset (active low)
+#define BOARD_LCD_TE         16   // Tearing-effect pin (NC by default)
 
 // --- I2C bus (shared by Touch + IMU) ---
 #define BOARD_I2C_PORT        0   // I2C peripheral number
@@ -23,8 +24,8 @@
 
 // --- Touch controller (FT3168) ---
 #define BOARD_TP_I2C_ADDR  0x38   // 7-bit I2C address
-#define BOARD_TP_RST          2
-#define BOARD_TP_INT          3
+#define BOARD_TP_RST         17   // Shared with AMOLED reset (GPIO17)
+#define BOARD_TP_INT         41   // TP interrupt pin
 
 // --- IMU (QMI8658) – same I2C bus, not used by emulator ---
 #define BOARD_IMU_I2C_ADDR 0x6B   // AD0 pulled high; use 0x6A if AD0 low
