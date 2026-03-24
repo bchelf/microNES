@@ -301,6 +301,10 @@ static bool host_safe_code_peek(const Nes *nes, uint16_t addr, uint8_t *value_ou
         *value_out = nes->cpu_ram[addr & 0x07ffu];
         return true;
     }
+    if (addr >= 0x6000u && addr < 0x8000u) {
+        *value_out = nes->wram[addr - 0x6000u];
+        return true;
+    }
     if (addr >= 0x8000u) {
         *value_out = nrom_cpu_read(&nes->cartridge, addr);
         return true;

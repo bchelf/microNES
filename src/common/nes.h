@@ -58,6 +58,7 @@ typedef struct Nes {
     NesCartridge cartridge;
     NesController controllers[2];
     uint8_t cpu_ram[2048];
+    uint8_t wram[8192];   /* $6000-$7FFF battery-backed PRG-RAM (MMC1) */
     NesExecutionStats stats;
     NesStopInfo stop_info;
     Cpu6502TraceEntry trace[NES_TRACE_CAPACITY];
@@ -139,6 +140,9 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
     if (addr >= 0x4000u && addr <= 0x4017u) {
         return apu_cpu_read(&nes->apu, addr);
     }
+    if (addr >= 0x6000u && addr < 0x8000u) {
+        return nes->wram[addr - 0x6000u];
+    }
     return 0;
 }
 
@@ -173,6 +177,10 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
     }
     if (addr >= 0x4000u && addr <= 0x4017u) {
         apu_cpu_write(&nes->apu, addr, value);
+        return;
+    }
+    if (addr >= 0x6000u && addr < 0x8000u) {
+        nes->wram[addr - 0x6000u] = value;
         return;
     }
     if (addr >= 0x8000u) {

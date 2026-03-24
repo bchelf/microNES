@@ -89,6 +89,7 @@ bool nes_load_cartridge_const_memory(Nes *nes, const uint8_t *rom_image, size_t 
 
 void nes_reset(Nes *nes) {
     memset(nes->cpu_ram, 0, sizeof(nes->cpu_ram));
+    memset(nes->wram, 0, sizeof(nes->wram));
     ppu_reset(&nes->ppu);
     apu_reset(&nes->apu);
     input_controller_reset(&nes->controllers[0]);
