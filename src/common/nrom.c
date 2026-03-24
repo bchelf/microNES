@@ -1,4 +1,5 @@
 #include "nrom.h"
+#include "runtime_config.h"
 
 
 uint8_t nrom_cpu_read(const NesCartridge *cartridge, uint16_t addr) {
@@ -23,7 +24,7 @@ void nrom_cpu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
     (void)value;
 }
 
-uint8_t nrom_ppu_read(const NesCartridge *cartridge, uint16_t addr) {
+uint8_t MICRONES_HOT_FUNC(nrom_ppu_read)(const NesCartridge *cartridge, uint16_t addr) {
     if (cartridge->chr_size == 0) {
         return 0;
     }
@@ -38,7 +39,7 @@ void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
         return;
     }
 
-    masked = addr % cartridge->chr_size;
+    masked = addr & cartridge->chr_mask;
     cartridge->chr_data[masked] = value;
 
     if (cartridge->chr_row_pixels == NULL) {
@@ -49,8 +50,8 @@ void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
     {
         size_t row_index = ((low_addr >> 4) * 8u) + (low_addr & 0x07u);
         uint8_t *dst = &cartridge->chr_row_pixels[row_index * 8u];
-        uint8_t low = cartridge->chr_data[low_addr % cartridge->chr_size];
-        uint8_t high = cartridge->chr_data[(low_addr + 8u) % cartridge->chr_size];
+        uint8_t low = cartridge->chr_data[low_addr & cartridge->chr_mask];
+        uint8_t high = cartridge->chr_data[(low_addr + 8u) & cartridge->chr_mask];
 
         for (int x = 0; x < 8; ++x) {
             uint8_t bit = (uint8_t)(7 - x);

@@ -373,9 +373,9 @@ static uint16_t ppu_palette_index(uint16_t addr) {
     return index;
 }
 
-static uint16_t ppu_nametable_index(const NesCartridge *cartridge, uint16_t addr) {
+static uint16_t MICRONES_HOT_FUNC(ppu_nametable_index)(const NesCartridge *cartridge, uint16_t addr) {
     uint16_t offset = (uint16_t)(addr - 0x2000u) & 0x0fffu;
-    uint16_t table = offset / 0x0400u;
+    uint16_t table = offset >> 10;
     uint16_t inner = offset & 0x03ffu;
     uint16_t physical;
 
@@ -582,7 +582,7 @@ static void ppu_detect_render_artifact(
 #endif
 }
 
-static int ppu_sprite_height(const Ppu *ppu) {
+static int MICRONES_HOT_FUNC(ppu_sprite_height)(const Ppu *ppu) {
     return (ppu->ctrl & 0x20u) ? 16 : 8;
 }
 
@@ -591,7 +591,7 @@ static bool ppu_sprite_intersects_scanline(const PpuScanlineSprite *sprite, int 
     return y >= sprite_top && y < sprite_top + sprite_height;
 }
 
-static uint8_t ppu_collect_scanline_sprites(const Ppu *ppu, int y, PpuScanlineSprite *sprites) {
+static uint8_t MICRONES_HOT_FUNC(ppu_collect_scanline_sprites)(const Ppu *ppu, int y, PpuScanlineSprite *sprites) {
     uint8_t count = 0;
     int sprite_height = ppu_sprite_height(ppu);
 
@@ -866,8 +866,8 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
 #else
     uint8_t *dst = ppu->scanline_buffer.pixels;
 #endif
-    uint8_t bg_opaque[NES_FRAME_WIDTH];
-    uint8_t sprite_prio[NES_FRAME_WIDTH]; /* 1 = pixel claimed by a sprite */
+    uint8_t *bg_opaque = ppu->render_bg_opaque;
+    uint8_t *sprite_prio = ppu->render_sprite_prio;
     PpuScanlineSprite sprites[PPU_MAX_SCANLINE_SPRITES];
     bool show_bg = (ppu->mask & PPU_MASK_SHOW_BG) != 0;
     bool show_bg_left = (ppu->mask & PPU_MASK_SHOW_BG_LEFT) != 0;
@@ -884,11 +884,18 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
     uint16_t bg_pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
 
     if (needs_sprite_comp) {
-        memset(bg_opaque, 0, sizeof(bg_opaque));
-        memset(sprite_prio, 0, sizeof(sprite_prio));
+        memset(bg_opaque, 0, NES_FRAME_WIDTH);
+        memset(sprite_prio, 0, NES_FRAME_WIDTH);
     }
 
-    memset(dst, universal_color, NES_FRAME_WIDTH);
+    /* When show_bg is false the pixel buffer must be pre-filled with
+     * universal_color so sprites composite correctly against the backdrop.
+     * When show_bg is true every pixel is written by the tile loop below
+     * (transparent tiles write universal_color inline), so the memset is
+     * unnecessary and we skip it to save ~60 KB of writes per frame. */
+    if (!show_bg) {
+        memset(dst, universal_color, NES_FRAME_WIDTH);
+    }
 
     if (show_bg) {
         for (int tile_group = 0; tile_group < 33; ++tile_group) {
@@ -913,71 +920,100 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
             if (row_pixels != NULL) {
                 if (needs_sprite_comp) {
                     if ((uint32_t)(tile_group - 2) <= 29u) {
+                        /* Fast path: all 8 pixels are on-screen; write
+                         * universal_color for transparent pixels so the
+                         * pre-fill memset is not needed. */
                         for (int px = 0; px < 8; ++px) {
                             uint8_t color_bits = row_pixels[px];
+                            int screen_x = screen_start_x + px;
                             if (color_bits != 0) {
-                                int screen_x = screen_start_x + px;
                                 bg_opaque[screen_x] = 1;
                                 dst[screen_x] = ppu->palette[pal_base | color_bits];
+                            } else {
+                                dst[screen_x] = universal_color;
                             }
                         }
                     } else {
                         for (int px = 0; px < 8; ++px) {
                             int screen_x = screen_start_x + px;
                             if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
-                            if (screen_x < 8 && !show_bg_left) continue;
+                            if (screen_x < 8 && !show_bg_left) {
+                                dst[screen_x] = universal_color;
+                                continue;
+                            }
                             uint8_t color_bits = row_pixels[px];
                             if (color_bits != 0) {
                                 bg_opaque[screen_x] = 1;
                                 dst[screen_x] = ppu->palette[pal_base | color_bits];
+                            } else {
+                                dst[screen_x] = universal_color;
                             }
                         }
                     }
                 } else {
                     if ((uint32_t)(tile_group - 2) <= 29u) {
+                        /* Fast path: unconditional write eliminates branch and
+                         * the need for a pre-fill memset. */
                         for (int px = 0; px < 8; ++px) {
                             uint8_t color_bits = row_pixels[px];
-                            if (color_bits != 0) {
-                                dst[screen_start_x + px] = ppu->palette[pal_base | color_bits];
-                            }
+                            dst[screen_start_x + px] = color_bits
+                                ? ppu->palette[pal_base | color_bits]
+                                : universal_color;
                         }
                     } else {
                         for (int px = 0; px < 8; ++px) {
                             int screen_x = screen_start_x + px;
                             if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
-                            if (screen_x < 8 && !show_bg_left) continue;
-                            uint8_t color_bits = row_pixels[px];
-                            if (color_bits != 0) {
-                                dst[screen_x] = ppu->palette[pal_base | color_bits];
+                            if (screen_x < 8 && !show_bg_left) {
+                                dst[screen_x] = universal_color;
+                                continue;
                             }
+                            uint8_t color_bits = row_pixels[px];
+                            dst[screen_x] = color_bits
+                                ? ppu->palette[pal_base | color_bits]
+                                : universal_color;
                         }
                     }
                 }
             } else {
+                /* row_pixels == NULL: decode both CHR planes into a local
+                 * 8-element array first (item 4), then render with the same
+                 * logic as the row_pixels paths above. */
                 uint8_t low = nrom_ppu_read(cartridge, pattern_addr);
                 uint8_t high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
+                uint8_t decoded[8];
+                for (int px = 0; px < 8; ++px) {
+                    uint8_t bit = (uint8_t)(7 - px);
+                    decoded[px] = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+                }
                 if (needs_sprite_comp) {
                     for (int px = 0; px < 8; ++px) {
                         int screen_x = screen_start_x + px;
                         if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
-                        if (screen_x < 8 && !show_bg_left) continue;
-                        uint8_t bit = (uint8_t)(7 - px);
-                        uint8_t color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
+                        if (screen_x < 8 && !show_bg_left) {
+                            dst[screen_x] = universal_color;
+                            continue;
+                        }
+                        uint8_t color_bits = decoded[px];
                         if (color_bits != 0) {
                             bg_opaque[screen_x] = 1;
                             dst[screen_x] = ppu->palette[pal_base | color_bits];
+                        } else {
+                            dst[screen_x] = universal_color;
                         }
                     }
                 } else {
                     for (int px = 0; px < 8; ++px) {
                         int screen_x = screen_start_x + px;
                         if (screen_x < 0 || screen_x >= NES_FRAME_WIDTH) continue;
-                        if (screen_x < 8 && !show_bg_left) continue;
-                        uint8_t bit = (uint8_t)(7 - px);
-                        uint8_t color_bits = (uint8_t)((((high >> bit) & 0x01u) << 1) | ((low >> bit) & 0x01u));
-                        if (color_bits != 0) {
-                            dst[screen_x] = ppu->palette[pal_base | color_bits];
+                        if (screen_x < 8 && !show_bg_left) {
+                            dst[screen_x] = universal_color;
+                            continue;
                         }
+                        uint8_t color_bits = decoded[px];
+                        dst[screen_x] = color_bits
+                            ? ppu->palette[pal_base | color_bits]
+                            : universal_color;
                     }
                 }
             }

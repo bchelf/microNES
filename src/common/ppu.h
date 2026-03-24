@@ -231,6 +231,10 @@ typedef struct {
     PpuStepProfile step_profile;
     NesFrameBuffer frame_buffer;
     NesScanline scanline_buffer;
+    /* Scratch buffers reused every scanline; kept in the struct so they are
+     * part of the already-hot Ppu cache footprint rather than cold stack. */
+    uint8_t render_bg_opaque[NES_FRAME_WIDTH];
+    uint8_t render_sprite_prio[NES_FRAME_WIDTH];
 } Ppu;
 
 void ppu_init(Ppu *ppu);
