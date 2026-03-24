@@ -101,38 +101,30 @@ void host_audio_sdl_destroy(HostAudioSdl *audio) {
 bool host_audio_sdl_submit_samples(HostAudioSdl *audio, const int16_t *samples, size_t sample_count) {
     uint32_t queued_bytes;
     uint32_t bytes_to_submit;
-    size_t samples_to_submit;
 
     if (audio == NULL || !audio->enabled || samples == NULL || sample_count == 0) {
         return true;
     }
 
     queued_bytes = (uint32_t)SDL_GetAudioStreamQueued(audio->stream);
-    if (queued_bytes >= audio->max_queued_bytes) {
-        audio->dropped_samples += sample_count;
-        return true;
-    }
-
     bytes_to_submit = (uint32_t)(sample_count * HOST_AUDIO_BYTES_PER_SAMPLE);
-    if (queued_bytes + bytes_to_submit > audio->max_queued_bytes) {
-        bytes_to_submit = audio->max_queued_bytes - queued_bytes;
-    }
 
-    samples_to_submit = bytes_to_submit / HOST_AUDIO_BYTES_PER_SAMPLE;
-    if (samples_to_submit == 0) {
+    /* Drop the entire batch if it would exceed the cap. Partial submission
+     * (trimming the batch to fill the remaining space) would create a
+     * mid-batch discontinuity: SDL plays samples 0..N, then the next frame
+     * picks up from N+dropped onward, producing an audible click. All-or-
+     * nothing drops only at batch boundaries and is far less likely to pop. */
+    if (queued_bytes + bytes_to_submit > audio->max_queued_bytes) {
         audio->dropped_samples += sample_count;
         return true;
     }
 
-    if (!SDL_PutAudioStreamData(audio->stream, samples, (int)(samples_to_submit * HOST_AUDIO_BYTES_PER_SAMPLE))) {
+    if (!SDL_PutAudioStreamData(audio->stream, samples, (int)bytes_to_submit)) {
         host_audio_set_sdl_error("SDL_PutAudioStreamData failed");
         return false;
     }
 
-    audio->submitted_samples += samples_to_submit;
-    if (samples_to_submit < sample_count) {
-        audio->dropped_samples += sample_count - samples_to_submit;
-    }
+    audio->submitted_samples += sample_count;
     return true;
 }
 
