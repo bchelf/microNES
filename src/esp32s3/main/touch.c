@@ -1,7 +1,6 @@
 #include "touch.h"
 #include "board.h"
 
-#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -35,20 +34,11 @@ static bool i2c_read_reg(uint8_t reg, uint8_t *buf, size_t len)
 
 bool touch_init(void)
 {
-    // Reset the touch controller
-    gpio_config_t io_cfg = {
-        .pin_bit_mask = (1ULL << BOARD_TP_RST),
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&io_cfg));
-
-    gpio_set_level(BOARD_TP_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level(BOARD_TP_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(300));  // FT3168 needs ~200 ms after reset before I2C is ready
+    // Note: BOARD_TP_RST (GPIO17) is the shared AMOLED/panel reset line.
+    // The display driver already toggled it during display_init(); doing it
+    // again here would reset the display.  The FT3168 starts up automatically
+    // after the shared reset, so we just wait for it to be I2C-ready.
+    vTaskDelay(pdMS_TO_TICKS(10));
 
     // Initialise I2C master bus
     i2c_master_bus_config_t bus_cfg = {

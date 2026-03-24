@@ -12,35 +12,36 @@
 static const char *TAG = "display";
 
 // ─────────────────────────────────────────────────────────────
-//  SH8601 QSPI command definitions (MIPI DCS subset)
+//  RM67162 QSPI command definitions (MIPI DCS subset)
+//  This is the AMOLED driver chip on the Waveshare 1.91" board.
 // ─────────────────────────────────────────────────────────────
-#define SH8601_SWRESET  0x01
-#define SH8601_SLPOUT   0x11
-#define SH8601_NORON    0x13
-#define SH8601_INVON    0x21   // inversion needed for AMOLED correct brightness
-#define SH8601_DISPON   0x29
-#define SH8601_CASET    0x2A   // column address set
-#define SH8601_RASET    0x2B   // row address set
-#define SH8601_RAMWR    0x2C   // memory write
-#define SH8601_MADCTL   0x36   // memory access control (rotation)
-#define SH8601_COLMOD   0x3A   // colour mode
+#define LCD_SLPOUT   0x11   // Sleep out
+#define LCD_DISPON   0x29   // Display on
+#define LCD_CASET    0x2A   // Column address set
+#define LCD_RASET    0x2B   // Row address set
+#define LCD_RAMWR    0x2C   // Memory write
+#define LCD_MADCTL   0x36   // Memory access control (rotation)
+#define LCD_COLMOD   0x3A   // Colour mode
+#define LCD_WRDISBV  0x51   // Write display brightness
 
-// MADCTL bits
-#define MADCTL_MY   0x80
+// MADCTL bits – 90° CW landscape: MX=1, MV=1 → 0x60
 #define MADCTL_MX   0x40
 #define MADCTL_MV   0x20
-#define MADCTL_ML   0x10
-#define MADCTL_BGR  0x08
-// 90° CW rotation: MX=1, MV=1 → 0x60
 #define MADCTL_LANDSCAPE  (MADCTL_MX | MADCTL_MV)
 
 // Colour mode: 16-bit RGB565
 #define COLMOD_RGB565   0x55
 
 // ─────────────────────────────────────────────────────────────
-//  SPI QSPI instruction bytes (SH8601 protocol)
-//  Instruction 0x02: write, cmd+addr 1-bit, data 1-bit
-//  Instruction 0x32: write, cmd+addr 1-bit, data 4-bit (quad)
+//  RM67162 QSPI instruction bytes
+//  0x02: write command/data in 1-bit SPI mode (cmd+addr 1-bit, data 1-bit)
+//  0x32: write pixel data in quad mode  (cmd+addr 1-bit, data 4-bit)
+//
+//  Address field layout (24-bit, MSB first):
+//    byte[0] = 0x00
+//    byte[1] = DCS command (e.g. 0x2C for RAMWR)
+//    byte[2] = 0x00
+//  → addr = cmd << 8   (e.g. 0x2C << 8 = 0x002C00)
 // ─────────────────────────────────────────────────────────────
 #define QSPI_INST_WRITE_SINGLE  0x02
 #define QSPI_INST_WRITE_QUAD    0x32
@@ -66,15 +67,15 @@ static bool s_streaming = false;
 static void lcd_cmd(uint8_t cmd, const uint8_t *params, size_t n_params)
 {
     // Pack command into the 24-bit SPI address field.
-    // SH8601 expects the DCS command byte in addr[23:16] (MSB first):
-    //   addr[23:16] = cmd
-    //   addr[15:8]  = 0x00
-    //   addr[7:0]   = 0x00
+    // RM67162 QSPI protocol: byte[1] of the 3-byte address carries the DCS command:
+    //   byte[0] = 0x00  (addr[23:16])
+    //   byte[1] = cmd   (addr[15:8])   ← cmd << 8
+    //   byte[2] = 0x00  (addr[7:0])
     spi_transaction_ext_t t = {
         .base = {
             .flags = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR,
             .cmd   = QSPI_INST_WRITE_SINGLE,
-            .addr  = (uint32_t)cmd << 16,
+            .addr  = (uint32_t)cmd << 8,
             .tx_buffer = (n_params > 0) ? params : NULL,
             .length    = n_params * 8,
         },
@@ -98,7 +99,7 @@ static void lcd_pixel_begin(void)
             .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
                     | SPI_TRANS_MODE_QIO | SPI_TRANS_CS_KEEP_ACTIVE,
             .cmd    = QSPI_INST_WRITE_QUAD,
-            .addr   = (uint32_t)SH8601_RAMWR << 16,
+            .addr   = (uint32_t)LCD_RAMWR << 8,   // 0x002C00
             .tx_buffer = NULL,
             .length    = 0,
         },
@@ -137,49 +138,45 @@ static void lcd_set_window(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
     uint8_t caset[4] = { x1 >> 8, x1 & 0xFF, x2 >> 8, x2 & 0xFF };
     uint8_t raset[4] = { y1 >> 8, y1 & 0xFF, y2 >> 8, y2 & 0xFF };
-    lcd_cmd(SH8601_CASET, caset, 4);
-    lcd_cmd(SH8601_RASET, raset, 4);
+    lcd_cmd(LCD_CASET, caset, 4);
+    lcd_cmd(LCD_RASET, raset, 4);
 }
 
 // ─────────────────────────────────────────────────────────────
-//  SH8601 initialisation sequence
+//  RM67162 QSPI initialisation sequence
+//  Matches the rm67162_qspi_init[] table from the LilyGo/Waveshare reference.
 // ─────────────────────────────────────────────────────────────
-static void sh8601_init_sequence(void)
+static void rm67162_init_sequence(void)
 {
-    // Hardware reset
+    // Hardware reset: pull low 20 ms, then release and let the panel stabilise
     gpio_set_level(BOARD_LCD_RST, 0);
     vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(BOARD_LCD_RST, 1);
     vTaskDelay(pdMS_TO_TICKS(120));
 
-    // Software reset
-    lcd_cmd(SH8601_SWRESET, NULL, 0);
+    // Sleep out – RM67162 needs 120 ms before any further commands
+    lcd_cmd(LCD_SLPOUT, NULL, 0);
     vTaskDelay(pdMS_TO_TICKS(120));
-
-    // Sleep out
-    lcd_cmd(SH8601_SLPOUT, NULL, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
 
     // 16-bit RGB565 colour mode
     uint8_t colmod = COLMOD_RGB565;
-    lcd_cmd(SH8601_COLMOD, &colmod, 1);
+    lcd_cmd(LCD_COLMOD, &colmod, 1);
 
-    // Landscape rotation: 90° CW
+    // Landscape rotation 90° CW: MADCTL MX | MV = 0x60
     uint8_t madctl = MADCTL_LANDSCAPE;
-    lcd_cmd(SH8601_MADCTL, &madctl, 1);
+    lcd_cmd(LCD_MADCTL, &madctl, 1);
 
-    // Enable display inversion (typical for AMOLED panels)
-    lcd_cmd(SH8601_INVON, NULL, 0);
+    // Brightness: initialise to 0 before display-on
+    uint8_t brt0 = 0x00;
+    lcd_cmd(LCD_WRDISBV, &brt0, 1);
 
-    // Normal display mode
-    lcd_cmd(SH8601_NORON, NULL, 0);
+    // Display on – wait 120 ms
+    lcd_cmd(LCD_DISPON, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(120));
 
-    // Set full-panel write window (landscape 536×240)
-    lcd_set_window(0, 0, DISPLAY_W - 1, DISPLAY_H - 1);
-
-    // Display on
-    lcd_cmd(SH8601_DISPON, NULL, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    // Brightness: ramp to full (0xD0)
+    uint8_t brt1 = 0xD0;
+    lcd_cmd(LCD_WRDISBV, &brt1, 1);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -242,8 +239,8 @@ bool display_init(void)
         return false;
     }
 
-    sh8601_init_sequence();
-    ESP_LOGI(TAG, "SH8601 AMOLED initialised (%dx%d landscape)", DISPLAY_W, DISPLAY_H);
+    rm67162_init_sequence();
+    ESP_LOGI(TAG, "RM67162 AMOLED initialised (%dx%d landscape)", DISPLAY_W, DISPLAY_H);
     return true;
 }
 
