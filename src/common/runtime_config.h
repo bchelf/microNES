@@ -47,12 +47,31 @@
 #define MICRONES_ENABLE_FRAMEBUFFER 1
 #endif
 
+#ifndef MICRONES_ENABLE_SCANLINE_BUFFER
+#define MICRONES_ENABLE_SCANLINE_BUFFER 1
+#endif
+
 #ifndef MICRONES_ENABLE_STEP_PROFILING
 #define MICRONES_ENABLE_STEP_PROFILING 0
 #endif
 
+#ifndef MICRONES_ENABLE_CYCLE_PROFILING
+#define MICRONES_ENABLE_CYCLE_PROFILING 0
+#endif
+
 #ifndef MICRONES_ENABLE_PICO_VIDEO_STATS
 #define MICRONES_ENABLE_PICO_VIDEO_STATS 1
+#endif
+
+#if MICRONES_ENABLE_CYCLE_PROFILING && defined(MICRONES_ESP32_PLATFORM)
+#include "esp_cpu.h"
+static inline uint32_t micrones_profile_now_cycles(void) {
+    return esp_cpu_get_cycle_count();
+}
+#else
+static inline uint32_t micrones_profile_now_cycles(void) {
+    return 0;
+}
 #endif
 
 typedef uint64_t (*micrones_profile_now_us_fn)(void *user);

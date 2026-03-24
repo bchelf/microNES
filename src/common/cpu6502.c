@@ -76,23 +76,47 @@ static inline void cpu_set_zn(Cpu6502 *cpu, uint8_t value) {
 }
 
 static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
-    return cpu_read(cpu, nes, cpu->pc++);
+    uint16_t pc = cpu->pc;
+
+    cpu->pc = (uint16_t)(pc + 1u);
+    if (pc >= 0x8000u) {
+        return nes_nrom_prg_read_fast(nes, pc);
+    }
+    return cpu_read(cpu, nes, pc);
+}
+
+static inline uint8_t cpu_read_ram_fast(const Nes *nes, uint16_t addr) {
+    return nes->cpu_ram[addr & 0x07ffu];
+}
+
+static inline void cpu_write_ram_fast(Nes *nes, uint16_t addr, uint8_t value) {
+    nes->cpu_ram[addr & 0x07ffu] = value;
 }
 
 static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
-    uint8_t lo = cpu_fetch8(cpu, nes);
-    uint8_t hi = cpu_fetch8(cpu, nes);
+    uint16_t pc = cpu->pc;
+    uint8_t lo;
+    uint8_t hi;
+
+    if (pc >= 0x8000u && (uint16_t)(pc + 1u) >= 0x8000u) {
+        lo = nes_nrom_prg_read_fast(nes, pc);
+        hi = nes_nrom_prg_read_fast(nes, (uint16_t)(pc + 1u));
+        cpu->pc = (uint16_t)(pc + 2u);
+    } else {
+        lo = cpu_fetch8(cpu, nes);
+        hi = cpu_fetch8(cpu, nes);
+    }
     return (uint16_t)(lo | ((uint16_t)hi << 8));
 }
 
 static inline void cpu_push(Cpu6502 *cpu, Nes *nes, uint8_t value) {
-    cpu_write(cpu, nes, (uint16_t)(0x0100u | cpu->sp), value);
+    cpu_write_ram_fast(nes, (uint16_t)(0x0100u | cpu->sp), value);
     --cpu->sp;
 }
 
 static inline uint8_t cpu_pop(Cpu6502 *cpu, Nes *nes) {
     ++cpu->sp;
-    return cpu_read(cpu, nes, (uint16_t)(0x0100u | cpu->sp));
+    return cpu_read_ram_fast(nes, (uint16_t)(0x0100u | cpu->sp));
 }
 
 static inline uint16_t cpu_addr_zp(Cpu6502 *cpu, Nes *nes) {
@@ -127,15 +151,15 @@ static inline uint16_t cpu_addr_absy(Cpu6502 *cpu, Nes *nes, bool *page_crossed)
 
 static inline uint16_t cpu_addr_indx(Cpu6502 *cpu, Nes *nes) {
     uint8_t zp = (uint8_t)(cpu_fetch8(cpu, nes) + cpu->x);
-    uint8_t lo = cpu_read(cpu, nes, zp);
-    uint8_t hi = cpu_read(cpu, nes, (uint8_t)(zp + 1u));
+    uint8_t lo = cpu_read_ram_fast(nes, zp);
+    uint8_t hi = cpu_read_ram_fast(nes, (uint8_t)(zp + 1u));
     return (uint16_t)(lo | ((uint16_t)hi << 8));
 }
 
 static inline uint16_t cpu_addr_indy(Cpu6502 *cpu, Nes *nes, bool *page_crossed) {
     uint8_t zp = cpu_fetch8(cpu, nes);
-    uint16_t base = (uint16_t)(cpu_read(cpu, nes, zp) |
-                     ((uint16_t)cpu_read(cpu, nes, (uint8_t)(zp + 1u)) << 8));
+    uint16_t base = (uint16_t)(cpu_read_ram_fast(nes, zp) |
+                     ((uint16_t)cpu_read_ram_fast(nes, (uint8_t)(zp + 1u)) << 8));
     uint16_t addr = (uint16_t)(base + cpu->y);
     *page_crossed = (base & 0xff00u) != (addr & 0xff00u);
     return addr;
@@ -303,6 +327,7 @@ static void cpu_service_interrupt(Cpu6502 *cpu, Nes *nes, uint16_t vector, bool 
 #if MICRONES_ENABLE_STEP_PROFILING
     uint64_t cpu_started_us = nes_profile_now_us(nes);
 #endif
+    uint32_t cpu_started_cycles = micrones_profile_now_cycles();
     uint8_t flags = (uint8_t)(cpu->p | CPU6502_FLAG_U);
     uint16_t pc = cpu->pc;
 
@@ -321,14 +346,23 @@ static void cpu_service_interrupt(Cpu6502 *cpu, Nes *nes, uint16_t vector, bool 
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
+    if (cpu_started_cycles != 0) {
+        nes->step_profile.cpu_exec_cycles_total +=
+            (uint32_t)(micrones_profile_now_cycles() - cpu_started_cycles);
+    }
     nes->pending_apu_cycles += 7;
 #if MICRONES_ENABLE_STEP_PROFILING
     cpu_started_us = nes_profile_now_us(nes);
 #endif
+    cpu_started_cycles = micrones_profile_now_cycles();
     ppu_step_cycles(&nes->ppu, &nes->cartridge, 21);
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.ppu_step_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
+    if (cpu_started_cycles != 0) {
+        nes->step_profile.ppu_step_cycles_total +=
+            (uint32_t)(micrones_profile_now_cycles() - cpu_started_cycles);
+    }
 }
 
 void cpu6502_init(Cpu6502 *cpu) {
@@ -365,6 +399,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
 #if MICRONES_ENABLE_STEP_PROFILING
     uint64_t cpu_started_us = 0;
 #endif
+    uint32_t cpu_started_cycles = 0;
 
     if (cpu->jammed) {
         if (nes->stop_info.reason == NES_STOP_NONE) {
@@ -391,6 +426,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
 #if MICRONES_ENABLE_STEP_PROFILING
     cpu_started_us = nes_profile_now_us(nes);
 #endif
+    cpu_started_cycles = micrones_profile_now_cycles();
     cpu->last_opcode = cpu_fetch8(cpu, nes);
     cpu_record_trace(nes, cpu, pc_before, cpu->last_opcode);
     cpu_note_opcode(nes, pc_before, cpu->last_opcode);
@@ -1293,13 +1329,22 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
+    if (cpu_started_cycles != 0) {
+        nes->step_profile.cpu_exec_cycles_total +=
+            (uint32_t)(micrones_profile_now_cycles() - cpu_started_cycles);
+    }
     nes->pending_apu_cycles += cycles;
 #if MICRONES_ENABLE_STEP_PROFILING
     cpu_started_us = nes_profile_now_us(nes);
 #endif
+    cpu_started_cycles = micrones_profile_now_cycles();
     ppu_step_cycles(&nes->ppu, &nes->cartridge, cycles * 3u);
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.ppu_step_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
+    if (cpu_started_cycles != 0) {
+        nes->step_profile.ppu_step_cycles_total +=
+            (uint32_t)(micrones_profile_now_cycles() - cpu_started_cycles);
+    }
     return true;
 }

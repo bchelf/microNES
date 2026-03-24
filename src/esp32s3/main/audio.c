@@ -11,10 +11,14 @@
 
 static const char *TAG = "audio";
 
+enum {
+    AUDIO_INPUT_RATE = 48000,
+};
+
 // ─────────────────────────────────────────────────────────────
 //  Ring buffer
 // ─────────────────────────────────────────────────────────────
-#define AUDIO_BUF_SIZE  1024   // Must be a power of two
+#define AUDIO_BUF_SIZE  4096   // Must be a power of two
 #define AUDIO_BUF_MASK  (AUDIO_BUF_SIZE - 1)
 
 static volatile uint8_t  s_buf[AUDIO_BUF_SIZE];  // 8-bit PWM duties
@@ -22,6 +26,9 @@ static volatile uint32_t s_head = 0;  // writer index
 static volatile uint32_t s_tail = 0;  // reader index (ISR)
 
 static uint8_t           s_last_duty = 128;  // silence level (mid-rail)
+static uint32_t          s_output_rate = 0;
+static uint32_t          s_resample_phase = 0;
+static AudioStats        s_stats = {0};
 
 // ─────────────────────────────────────────────────────────────
 //  LEDC configuration
@@ -76,6 +83,9 @@ static void audio_timer_cb(void *arg)
 void audio_init(uint32_t sample_rate)
 {
     ledc_setup();
+    s_output_rate = sample_rate;
+    s_resample_phase = 0;
+    memset(&s_stats, 0, sizeof(s_stats));
 
     // Period in microseconds: 1 000 000 / sample_rate
     uint64_t period_us = 1000000ULL / sample_rate;
@@ -98,8 +108,18 @@ size_t audio_push_samples(const int16_t *samples, size_t n_samples)
 {
     size_t pushed = 0;
     for (size_t i = 0; i < n_samples; i++) {
+        s_resample_phase += s_output_rate;
+        if (s_resample_phase < AUDIO_INPUT_RATE) {
+            ++s_stats.skipped_samples;
+            continue;
+        }
+        s_resample_phase -= AUDIO_INPUT_RATE;
+
         uint32_t next_head = (s_head + 1) & AUDIO_BUF_MASK;
-        if (next_head == s_tail) break;  // buffer full
+        if (next_head == s_tail) {
+            s_stats.overflow_samples += (n_samples - i);
+            break;  // buffer full
+        }
 
         // Convert signed 16-bit PCM → unsigned 8-bit duty cycle
         // Maps [-32768..32767] → [0..255]  with mid-point at 128
@@ -108,6 +128,7 @@ size_t audio_push_samples(const int16_t *samples, size_t n_samples)
         s_head = next_head;
         pushed++;
     }
+    s_stats.pushed_samples += pushed;
     return pushed;
 }
 
@@ -115,4 +136,9 @@ size_t audio_free_slots(void)
 {
     uint32_t used = (s_head - s_tail) & AUDIO_BUF_MASK;
     return AUDIO_BUF_SIZE - used - 1;
+}
+
+AudioStats audio_stats_snapshot(void)
+{
+    return s_stats;
 }

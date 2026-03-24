@@ -5,6 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+// heap_caps_malloc is available on ESP32 (esp-idf) for MALLOC_CAP_INTERNAL.
+// On other platforms it is not available; use a no-op shim so cart.c stays
+// portable.
+#ifdef ESP_PLATFORM
+#  include "esp_heap_caps.h"
+#  define CART_MALLOC_INTERNAL(sz) \
+       heap_caps_malloc((sz), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#else
+#  define CART_MALLOC_INTERNAL(sz) NULL  // fall through to plain malloc below
+#endif
+
 enum {
     INES_HEADER_SIZE = 16,
     INES_TRAINER_SIZE = 512,
@@ -52,7 +63,15 @@ static bool cart_build_chr_row_cache(NesCartridge *cartridge, char *error, size_
 
     row_count = (cartridge->chr_size / 16u) * 8u;
     total_bytes = row_count * 8u;
-    cartridge->chr_row_pixels = (uint8_t *)malloc(total_bytes);
+    /* Prefer internal SRAM: chr_row_pixels is read on every PPU tile render
+     * (33 tiles × 240 scanlines = 7920 reads per frame).  PSRAM reads go
+     * through DCache and can cause miss pressure.  CART_MALLOC_INTERNAL uses
+     * heap_caps_malloc(MALLOC_CAP_INTERNAL) on ESP32 so the allocator doesn't
+     * fall back to PSRAM; on other platforms it returns NULL → plain malloc. */
+    cartridge->chr_row_pixels = (uint8_t *)CART_MALLOC_INTERNAL(total_bytes);
+    if (cartridge->chr_row_pixels == NULL) {
+        cartridge->chr_row_pixels = (uint8_t *)malloc(total_bytes);
+    }
     if (cartridge->chr_row_pixels == NULL) {
         cart_set_error(error, error_size, "failed to allocate CHR row cache");
         return false;
@@ -69,10 +88,14 @@ static bool cart_build_chr_row_cache(NesCartridge *cartridge, char *error, size_
     return true;
 }
 
+// transfer_ownership: if true, cartridge->rom_image is set to rom_image and
+// cart_unload() will free it.  Pass false when rom_image points into flash or
+// another non-heap buffer – cart_unload's free(NULL) is then a safe no-op.
 static bool cart_parse_ines_image(
     NesCartridge *cartridge,
     uint8_t *rom_image,
     size_t rom_image_size,
+    bool transfer_ownership,
     char *error,
     size_t error_size
 ) {
@@ -133,8 +156,13 @@ static bool cart_parse_ines_image(
         return false;
     }
 
-    cartridge->rom_image = rom_image;
-    cartridge->rom_image_size = rom_image_size;
+    // Only take ownership when the caller allocated rom_image on the heap.
+    // When transfer_ownership is false (e.g. flash-mapped const buffer),
+    // cartridge->rom_image stays NULL so cart_unload's free() is a no-op.
+    if (transfer_ownership) {
+        cartridge->rom_image = rom_image;
+        cartridge->rom_image_size = rom_image_size;
+    }
     cartridge->prg_rom = rom_image + offset;
     offset += cartridge->prg_rom_size;
 
@@ -235,7 +263,7 @@ bool cart_load_ines_file(NesCartridge *cartridge, const char *path, char *error,
     }
     fclose(file);
 
-    if (!cart_parse_ines_image(cartridge, rom_image, (size_t)file_size, error, error_size)) {
+    if (!cart_parse_ines_image(cartridge, rom_image, (size_t)file_size, true, error, error_size)) {
         free(rom_image);
         return false;
     }
@@ -265,7 +293,7 @@ bool cart_load_ines_memory(
     }
 
     memcpy(owned_copy, rom_image, rom_image_size);
-    if (!cart_parse_ines_image(cartridge, owned_copy, rom_image_size, error, error_size)) {
+    if (!cart_parse_ines_image(cartridge, owned_copy, rom_image_size, true, error, error_size)) {
         free(owned_copy);
         return false;
     }
@@ -287,20 +315,32 @@ bool cart_load_ines_const_memory(
         return false;
     }
 
-    // Parse directly from the caller's buffer (e.g. flash-mapped embedded ROM).
-    // cart_parse_ines_image only reads from the image; it sets prg_rom and
-    // chr_data as pointers into it and allocates the CHR row-pixel cache.
+    // Parse directly from the flash-mapped buffer.
+    // transfer_ownership=false keeps cartridge->rom_image NULL, so any
+    // internal cart_unload error path calls free(NULL) – a harmless no-op
+    // instead of the crash caused by trying to free a flash address.
     if (!cart_parse_ines_image(cartridge, (uint8_t *)rom_image, rom_image_size,
-                               error, error_size)) {
+                               false, error, error_size)) {
         return false;
     }
 
-    // PRG ROM is on the hot path (every 6502 instruction fetch).  Flash-mapped
-    // DROM goes through DCache which is shared with the NES state and stack,
-    // causing significant miss pressure.  Copy PRG into heap DRAM so reads are
-    // zero-wait-state.  chr_data stays in flash: its only hot user is the
-    // chr_row_pixels cache (already in DRAM) so flash latency is acceptable.
-    uint8_t *prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
+    // PRG ROM is on the 6502 instruction-fetch hot path.  Flash-mapped DROM
+    // goes through DCache (shared with NES state and stack), causing miss
+    // pressure.  Copy PRG into internal SRAM for zero-wait-state fetches.
+    //
+    // Strategy (in priority order):
+    //  1. Internal SRAM  – fastest; use heap_caps_malloc(MALLOC_CAP_INTERNAL)
+    //     when PSRAM is active so the allocator doesn't fall back to PSRAM.
+    //  2. Any heap (PSRAM) – still 3-4× faster than flash DCache thrash.
+    //  3. Flash           – slowest; accepted if all else fails.
+    //
+    // chr_data stays in flash: its only hot user is the chr_row_pixels cache
+    // (already in DRAM), so flash latency there is acceptable.
+    uint8_t *prg_dram = (uint8_t *)CART_MALLOC_INTERNAL(cartridge->prg_rom_size);
+    if (prg_dram == NULL) {
+        // Internal SRAM full (or non-ESP platform) – fall back to any heap.
+        prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
+    }
     if (prg_dram != NULL) {
         const uint8_t *old_prg = cartridge->prg_rom;
         memcpy(prg_dram, old_prg, cartridge->prg_rom_size);
@@ -317,6 +357,8 @@ bool cart_load_ines_const_memory(
         // Clear error so caller doesn't treat this as a fatal failure.
         cart_set_error(error, error_size, "");
     }
+    // If all mallocs fail, prg_rom stays pointing into flash – slower but correct.
+    // rom_image stays NULL so cart_unload never tries to free the flash buffer.
 
     return true;
 }

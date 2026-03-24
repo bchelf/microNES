@@ -169,6 +169,7 @@ typedef struct {
     uint64_t cycles_requested;
     uint64_t event_us_total;
     uint64_t render_us_total;
+    uint64_t render_cycles_total;
     uint64_t scanline_render_count;
 } PpuStepProfile;
 

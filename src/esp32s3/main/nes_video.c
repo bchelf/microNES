@@ -39,10 +39,17 @@ static const uint16_t k_nes_palette_be[64] = {
 #undef C
 #undef CB
 
+void nes_video_convert_pixels(const uint8_t *palette_src,
+                              uint16_t *dst_rgb565_be,
+                              uint16_t count)
+{
+    for (uint16_t x = 0; x < count; ++x) {
+        dst_rgb565_be[x] = k_nes_palette_be[palette_src[x] & 0x3Fu];
+    }
+}
+
 void nes_video_convert_scanline(const uint8_t *palette_row,
                                 uint16_t *dst_rgb565_be)
 {
-    for (int x = 0; x < NES_FRAME_WIDTH; x++) {
-        dst_rgb565_be[x] = k_nes_palette_be[palette_row[x] & 0x3Fu];
-    }
+    nes_video_convert_pixels(palette_row, dst_rgb565_be, NES_FRAME_WIDTH);
 }

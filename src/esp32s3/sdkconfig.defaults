@@ -3,14 +3,45 @@ CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
 
-# PSRAM disabled – using zero-copy ROM load instead of copying to heap.
-CONFIG_SPIRAM=n
+# OPI PSRAM – ESP32-S3R8 has 8 MB Octal PSRAM built into the package.
+# Must use OCT mode (not QIO); 80 MHz for stability.
+# IGNORE_NOTFOUND=y: log a warning and continue if PSRAM init fails, so the
+# console output is visible even if the config is wrong.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+# Allow large heap allocations (PRG/CHR copies) to use PSRAM, keeping
+# critical internal SRAM free for DMA buffers and hot data.
+# Allocations < 8 KB stay in internal SRAM (stacks, small structs, etc.).
+# Reserve only 8 KB of internal SRAM for DMA (down from the default 32 KB).
+# This frees ~24 KB so the 32 KB PRG ROM copy can land in internal SRAM
+# for zero-wait-state 6502 instruction fetches.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=8192
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
+# Do not relocate code or rodata to PSRAM – they stay in flash/IRAM.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n
 
 # Flash (16MB)
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHMODE="qio"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Cache
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_SIZE=0x8000
+CONFIG_ESP32S3_INSTRUCTION_CACHE_8WAYS=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_LINE_32B=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_SIZE=0x10000
+CONFIG_ESP32S3_DATA_CACHE_8WAYS=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_32B=y
 
 # Use the ESP32-S3 hardware USB Serial/JTAG peripheral for the console.
 # This is built into silicon – it works from the first ROM boot message,
@@ -21,6 +52,9 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Disable unused radio stacks
+CONFIG_ESP_WIFI_ENABLED=n
 
 # FreeRTOS tick rate (1kHz for sub-ms timing)
 CONFIG_FREERTOS_HZ=1000

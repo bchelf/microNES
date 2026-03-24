@@ -2,7 +2,6 @@
 #include "board.h"
 #include "display.h"
 #include "nes_input.h"
-#include "nes_video.h"
 #include "touch.h"
 #include "ui.h"
 
@@ -10,13 +9,16 @@
 #include "nes.h"
 #include "framebuffer.h"
 
-#include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -38,44 +40,105 @@ extern const uint8_t    _binary_smb1_nes_end[];
 // ─────────────────────────────────────────────────────────────
 static Nes s_nes;
 
-// Full-frame RGB565 buffer (256×240 × 2 bytes = 120 KB) in internal SRAM.
-// DMA_ATTR ensures 4-byte alignment so the SPI DMA engine can read it directly.
-static DMA_ATTR uint16_t s_frame_rgb[NES_FRAME_WIDTH * NES_FRAME_HEIGHT];
+enum {
+    DISPLAY_FRAME_BUFFER_COUNT = 2,
+};
+
+static NesFrameBuffer *s_display_frames[DISPLAY_FRAME_BUFFER_COUNT];
+static SemaphoreHandle_t s_display_frame_free[DISPLAY_FRAME_BUFFER_COUNT];
+static QueueHandle_t s_display_frame_queue;
 
 // ─────────────────────────────────────────────────────────────
 //  Frame timing
 // ─────────────────────────────────────────────────────────────
 #define TARGET_FRAME_US  16667u   // ~60 fps
 
-// ─────────────────────────────────────────────────────────────
-//  Performance diagnostics (printed every 60 frames)
-// ─────────────────────────────────────────────────────────────
-typedef struct {
-    uint64_t nes_us;      // nes_step_frame
-    uint64_t conv_us;     // palette conversion loop
-    uint64_t blit_us;     // display_blit_region
-    uint64_t audio_us;    // audio drain
-    uint64_t touch_us;    // touch_read
-} FrameStageUs;
+static bool display_frames_init(void)
+{
+    for (unsigned i = 0; i < DISPLAY_FRAME_BUFFER_COUNT; ++i) {
+        s_display_frames[i] = (NesFrameBuffer *)heap_caps_malloc(sizeof(NesFrameBuffer),
+                                                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (s_display_frames[i] == NULL) {
+            s_display_frames[i] = (NesFrameBuffer *)malloc(sizeof(NesFrameBuffer));
+        }
+        if (s_display_frames[i] == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate display frame buffer %u", i);
+            return false;
+        }
+        memset(s_display_frames[i], 0, sizeof(NesFrameBuffer));
+
+        s_display_frame_free[i] = xSemaphoreCreateBinary();
+        if (s_display_frame_free[i] == NULL) {
+            ESP_LOGE(TAG, "Failed to create display semaphore %u", i);
+            return false;
+        }
+        xSemaphoreGive(s_display_frame_free[i]);
+    }
+
+    s_display_frame_queue = xQueueCreate(DISPLAY_FRAME_BUFFER_COUNT, sizeof(uint32_t));
+    if (s_display_frame_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create display frame queue");
+        return false;
+    }
+
+    ESP_LOGI(TAG, "display frame buffers: %u x %u bytes, free internal heap: %lu bytes",
+             (unsigned)DISPLAY_FRAME_BUFFER_COUNT,
+             (unsigned)sizeof(NesFrameBuffer),
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    return true;
+}
+
+static uint32_t display_acquire_frame_buffer(uint32_t preferred_index)
+{
+    uint32_t index = preferred_index % DISPLAY_FRAME_BUFFER_COUNT;
+
+    while (true) {
+        for (unsigned attempt = 0; attempt < DISPLAY_FRAME_BUFFER_COUNT; ++attempt) {
+            uint32_t candidate = (index + attempt) % DISPLAY_FRAME_BUFFER_COUNT;
+            if (xSemaphoreTake(s_display_frame_free[candidate], 0) == pdTRUE) {
+                return candidate;
+            }
+        }
+
+        xSemaphoreTake(s_display_frame_free[index], portMAX_DELAY);
+        return index;
+    }
+}
+
+static void display_task(void *arg)
+{
+    (void)arg;
+
+    while (true) {
+        uint32_t frame_index = 0;
+        if (xQueueReceive(s_display_frame_queue, &frame_index, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        const NesFrameBuffer *fb = s_display_frames[frame_index];
+        display_stream_begin(NES_DISPLAY_X, NES_DISPLAY_Y,
+                             NES_DISPLAY_W, NES_DISPLAY_H);
+        for (int y = 0; y < NES_FRAME_HEIGHT; ++y) {
+            const uint8_t *row = nes_framebuffer_scanline_const(fb, (uint16_t)y);
+            display_stream_indexed_row(row, NES_FRAME_WIDTH);
+        }
+        display_stream_end();
+
+        xSemaphoreGive(s_display_frame_free[frame_index]);
+    }
+}
 
 static void print_diag(uint64_t period_us, uint32_t frames,
-                       uint32_t audio_pushed, uint32_t audio_dropped,
-                       const FrameStageUs *stage_sum)
+                       uint32_t audio_pushed, uint32_t audio_skipped, uint32_t audio_overflow)
 {
     double fps       = (frames * 1000000.0) / (double)period_us;
     double frame_ms  = (double)period_us / (frames * 1000.0);
-    double div       = frames * 1000.0;
     ESP_LOGI(TAG,
-        "frames=%lu fps=%.1f frame_ms=%.2f "
-        "nes=%.2f conv=%.2f blit=%.2f audio=%.2f touch=%.2f "
-        "audio_pushed=%lu audio_dropped=%lu audio_free=%u",
+        "frames=%lu fps=%.1f frame_ms=%.2f audio_pushed=%lu audio_skipped=%lu audio_overflow=%lu audio_free=%u",
         (unsigned long)frames, fps, frame_ms,
-        (double)stage_sum->nes_us   / div,
-        (double)stage_sum->conv_us  / div,
-        (double)stage_sum->blit_us  / div,
-        (double)stage_sum->audio_us / div,
-        (double)stage_sum->touch_us / div,
-        (unsigned long)audio_pushed, (unsigned long)audio_dropped,
+        (unsigned long)audio_pushed,
+        (unsigned long)audio_skipped,
+        (unsigned long)audio_overflow,
         (unsigned)audio_free_slots());
 }
 
@@ -90,6 +153,13 @@ static void emulator_task(void *arg)
     // start printing.  Without this, early log messages are lost because the
     // host hasn't opened the port yet after a firmware reset.
     vTaskDelay(pdMS_TO_TICKS(1500));
+
+    ESP_LOGI(TAG, "free internal heap: %lu bytes",
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    if (!display_frames_init()) {
+        goto idle;
+    }
 
     // ── Initialise hardware ──────────────────────────────────
     ESP_LOGI(TAG, "display_init...");
@@ -107,13 +177,26 @@ static void emulator_task(void *arg)
     }
 
     ESP_LOGI(TAG, "audio_init...");
-    audio_init(48000);
+    audio_init(24000);
     ESP_LOGI(TAG, "audio_init OK");
 
     // ── Draw static UI overlay ───────────────────────────────
     ESP_LOGI(TAG, "drawing UI overlay...");
     ui_draw_overlay();
     ESP_LOGI(TAG, "UI overlay done");
+
+    if (xTaskCreatePinnedToCore(
+        display_task,
+        "display",
+        6 * 1024,
+        NULL,
+        4,
+        NULL,
+        0
+    ) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create display task");
+        goto idle;
+    }
 
     // ── Load ROM ─────────────────────────────────────────────
     nes_init(&s_nes);
@@ -126,6 +209,49 @@ static void emulator_task(void *arg)
         goto idle;
     }
     nes_reset(&s_nes);
+    {
+        /* Diagnose whether PRG ROM landed in internal SRAM, PSRAM, or flash.
+         *
+         * Address ranges on ESP32-S3:
+         *   0x3FC00000–0x3FFFFFFF  Internal DRAM  (fastest – zero wait states)
+         *   0x3C000000–0x3FBFFFFF  External (PSRAM or flash DROM via DCache)
+         *
+         * With PSRAM enabled both PSRAM and flash map into the 0x3C… window,
+         * so we cannot distinguish them by address alone.  Use heap_caps to
+         * ask whether the pointer belongs to the internal-RAM heap instead. */
+        const uint8_t *prg = s_nes.cartridge.prg_rom;
+        const char *prg_location;
+        if ((uintptr_t)prg >= 0x3FC00000u) {
+            prg_location = "internal SRAM – fast";
+        } else if (heap_caps_check_integrity_addr((intptr_t)prg, false)) {
+            /* heap_caps_check_integrity_addr returns true if the address is
+             * inside a registered heap region – i.e. it was malloc'd (PSRAM
+             * or internal), not a raw flash pointer. */
+            prg_location = "PSRAM heap – medium";
+        } else {
+            prg_location = "FLASH – slow, expect lower fps";
+        }
+        ESP_LOGI(TAG, "PRG ROM @ %p (%s, %u bytes)",
+                 (void *)prg, prg_location,
+                 (unsigned)s_nes.cartridge.prg_rom_size);
+
+        /* Log chr_row_pixels placement – hot in ppu_render_scanline (33×/scanline). */
+        const uint8_t *chr = s_nes.cartridge.chr_row_pixels;
+        const char *chr_location;
+        if (chr == NULL) {
+            chr_location = "NULL (CHR RAM, unused)";
+        } else if ((uintptr_t)chr >= 0x3FC00000u) {
+            chr_location = "internal SRAM – fast";
+        } else if (heap_caps_check_integrity_addr((intptr_t)chr, false)) {
+            chr_location = "PSRAM heap – medium";
+        } else {
+            chr_location = "FLASH – slow";
+        }
+        ESP_LOGI(TAG, "chr_row_pixels @ %p (%s, %u bytes), free internal: %lu bytes",
+                 (void *)chr, chr_location,
+                 (unsigned)(s_nes.cartridge.chr_row_count * 8u),
+                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    }
     ESP_LOGI(TAG, "Emulator running");
 #else
     ESP_LOGW(TAG, "No ROM embedded.  Place roms/smb1.nes in the repo root and rebuild.");
@@ -136,76 +262,63 @@ static void emulator_task(void *arg)
     {
         uint64_t report_start_us = esp_timer_get_time();
         uint32_t report_frames   = 0;
-        uint32_t report_pushed   = 0;
-        uint32_t report_dropped  = 0;
-        FrameStageUs stage_sum   = {0};
+        AudioStats prev_audio_stats = audio_stats_snapshot();
+        uint32_t next_display_buffer = 0;
 
         while (true) {
             uint64_t frame_start_us = esp_timer_get_time();
-            uint64_t t0, t1;
 
             // 1. Read touch → NES controller
-            t0 = esp_timer_get_time();
             {
                 TouchData td;
                 touch_read(&td);
                 NesControllerState state = nes_input_from_touch(&td);
                 nes_set_controller_state(&s_nes, 0, state);
             }
-            stage_sum.touch_us += esp_timer_get_time() - t0;
 
             // 2. Step one NES frame
-            t0 = esp_timer_get_time();
             if (!nes_step_frame(&s_nes)) {
                 ESP_LOGE(TAG, "NES halted: %s",
                          nes_stop_reason_name(s_nes.stop_info.reason));
                 break;
             }
-            stage_sum.nes_us += esp_timer_get_time() - t0;
 
-            // 3. Convert palette indices → RGB565 then blit to display
-            t0 = esp_timer_get_time();
+            // 3. Hand the completed indexed framebuffer to Core 0.
             {
                 const NesFrameBuffer *fb = nes_framebuffer(&s_nes);
-                for (int y = 0; y < NES_FRAME_HEIGHT; y++) {
-                    const uint8_t *row = nes_framebuffer_scanline_const(fb, (uint16_t)y);
-                    nes_video_convert_scanline(row, &s_frame_rgb[y * NES_FRAME_WIDTH]);
+                uint32_t display_buffer = display_acquire_frame_buffer(next_display_buffer);
+                memcpy(s_display_frames[display_buffer], fb, sizeof(NesFrameBuffer));
+                if (xQueueSend(s_display_frame_queue, &display_buffer, portMAX_DELAY) != pdTRUE) {
+                    ESP_LOGE(TAG, "Failed to queue display frame");
+                    xSemaphoreGive(s_display_frame_free[display_buffer]);
+                    break;
                 }
+                next_display_buffer = (display_buffer + 1u) % DISPLAY_FRAME_BUFFER_COUNT;
             }
-            t1 = esp_timer_get_time();
-            stage_sum.conv_us += t1 - t0;
-
-            display_blit_region(NES_DISPLAY_X, NES_DISPLAY_Y,
-                                NES_DISPLAY_W, NES_DISPLAY_H,
-                                s_frame_rgb);
-            stage_sum.blit_us += esp_timer_get_time() - t1;
 
             // 4. Drain APU samples into audio ring buffer
-            t0 = esp_timer_get_time();
             {
                 static int16_t pcm_tmp[256];
                 size_t n;
                 while ((n = nes_audio_read_samples(&s_nes, pcm_tmp,
                             sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
-                    size_t pushed = audio_push_samples(pcm_tmp, n);
-                    report_pushed  += (uint32_t)n;
-                    report_dropped += (uint32_t)(n - pushed);
+                    (void)audio_push_samples(pcm_tmp, n);
                 }
             }
-            stage_sum.audio_us += esp_timer_get_time() - t0;
 
             report_frames++;
 
             // 5. Diagnostics every 60 frames
             if (report_frames >= 60u) {
                 uint64_t now_us = esp_timer_get_time();
+                AudioStats audio_stats = audio_stats_snapshot();
                 print_diag(now_us - report_start_us, report_frames,
-                           report_pushed, report_dropped, &stage_sum);
+                           (uint32_t)(audio_stats.pushed_samples - prev_audio_stats.pushed_samples),
+                           (uint32_t)(audio_stats.skipped_samples - prev_audio_stats.skipped_samples),
+                           (uint32_t)(audio_stats.overflow_samples - prev_audio_stats.overflow_samples));
                 report_start_us  = now_us;
                 report_frames    = 0;
-                report_pushed    = 0;
-                report_dropped   = 0;
-                memset(&stage_sum, 0, sizeof(stage_sum));
+                prev_audio_stats = audio_stats;
             }
 
             // 6. Frame pacing: spin-wait to maintain ~60 fps

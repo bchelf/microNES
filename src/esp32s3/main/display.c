@@ -1,9 +1,11 @@
 #include "display.h"
 #include "board.h"
+#include "nes_video.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -46,14 +48,23 @@ static const char *TAG = "display";
 #define QSPI_INST_WRITE_SINGLE  0x02
 #define QSPI_INST_WRITE_QUAD    0x32
 
-// DMA-capable scratch buffer in internal SRAM (used by display_fill,
-// display_write_region and display_blit_region for chunked transfers).
-// Sized for one full NES scanline (256 px × 2 bytes = 512 bytes).
+// display_blit_region sends a full frame in chunks of BLIT_CHUNK_PIXELS pixels
+// (4096 px = 8192 bytes) to reduce per-transaction SPI overhead.  15 transactions
+// for a 256×240 frame instead of 240, a 16× reduction.
+#define BLIT_CHUNK_PIXELS  4096
+
+// DMA-capable scratch buffer in internal SRAM.
+// Sized to match BLIT_CHUNK_PIXELS so that display_blit_region can copy one
+// full chunk from a caller-provided RGB565 buffer without extra memcpy
+// round-trips. Also used by display_fill, display_write_region, and the
+// indexed-row streaming path in
+// ROW_BUF_PIXELS (256 px) sub-chunks.
 #define ROW_BUF_PIXELS  256
-static DMA_ATTR uint8_t s_row_buf[ROW_BUF_PIXELS * 2];
+static DMA_ATTR uint8_t s_dma_buf[BLIT_CHUNK_PIXELS * 2]; // 8192 bytes
 
 static spi_device_handle_t s_spi = NULL;
 static bool s_streaming = false;
+static DisplayProfile s_profile = {0};
 
 // ─────────────────────────────────────────────────────────────
 //  Low-level QSPI helpers
@@ -130,6 +141,12 @@ static void lcd_pixel_chunk(const void *buf, size_t len_bytes, bool keep_cs)
     }
 }
 
+static void display_profile_note_tx(size_t len_bytes)
+{
+    ++s_profile.blit_chunks;
+    s_profile.blit_bytes += (uint64_t)len_bytes;
+}
+
 // Set the CASET/RASET write window in landscape coordinates.
 static void lcd_set_window(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
@@ -204,8 +221,10 @@ bool display_init(void)
         .data5_io_num    = -1,
         .data6_io_num    = -1,
         .data7_io_num    = -1,
-        // Must hold one scanline (ROW_BUF_PIXELS × 2 bytes) plus overhead.
-        .max_transfer_sz = ROW_BUF_PIXELS * 2 + 64,
+        // Must hold one BLIT_CHUNK_PIXELS chunk (4096 px × 2 bytes = 8192 bytes)
+        // plus alignment headroom.  Keeping this small avoids large DMA
+        // descriptor allocations that fragment the heap before ROM load.
+        .max_transfer_sz = BLIT_CHUNK_PIXELS * 2 + 64,
         .flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_QUAD,
     };
 
@@ -246,8 +265,8 @@ void display_fill(uint16_t rgb565_be)
 {
     // Fill row buffer with the given colour
     for (int i = 0; i < ROW_BUF_PIXELS; i++) {
-        s_row_buf[i * 2]     = rgb565_be >> 8;
-        s_row_buf[i * 2 + 1] = rgb565_be & 0xFF;
+        s_dma_buf[i * 2]     = rgb565_be >> 8;
+        s_dma_buf[i * 2 + 1] = rgb565_be & 0xFF;
     }
 
     lcd_set_window(0, 0, DISPLAY_W - 1, DISPLAY_H - 1);
@@ -260,7 +279,7 @@ void display_fill(uint16_t rgb565_be)
         uint32_t chunk = total_pixels - sent;
         if (chunk > ROW_BUF_PIXELS) chunk = ROW_BUF_PIXELS;
         bool last = (sent + chunk >= total_pixels);
-        lcd_pixel_chunk(s_row_buf, chunk * 2, !last);
+        lcd_pixel_chunk(s_dma_buf, chunk * 2, !last);
         sent += chunk;
     }
 }
@@ -280,9 +299,9 @@ void display_write_region(uint16_t x, uint16_t y,
         uint32_t chunk = total_pixels - sent;
         if (chunk > ROW_BUF_PIXELS) chunk = ROW_BUF_PIXELS;
         // Copy into DMA-safe buffer (also handles PSRAM source)
-        memcpy(s_row_buf, src + sent * 2, chunk * 2);
+        memcpy(s_dma_buf, src + sent * 2, chunk * 2);
         bool last = (sent + chunk >= total_pixels);
-        lcd_pixel_chunk(s_row_buf, chunk * 2, !last);
+        lcd_pixel_chunk(s_dma_buf, chunk * 2, !last);
         sent += chunk;
     }
 }
@@ -293,31 +312,69 @@ void display_write_row(uint16_t x, uint16_t row_y, uint16_t w,
     display_write_region(x, row_y, w, 1, row);
 }
 
-// Blit a pre-rendered buffer to the display one scanline at a time.
-// Uses the same streaming path as the UI overlay (proven working) so each
-// SPI transaction is exactly ROW_BUF_PIXELS × 2 bytes – well within any
-// hardware limit.  memcpy into s_row_buf also guarantees DMA-safe source.
+// Blit a pre-rendered RGB565 buffer to the display.
+// buf may reside in PSRAM or internal SRAM.  Each chunk is copied into the
+// internal-SRAM DMA buffer s_dma_buf before transmission, so no DMA-capability
+// requirement is placed on the caller.
+// For a 256×240 NES frame: 15 transactions of 4096 px (8192 B) each.
 void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                          const uint16_t *buf)
 {
-    display_stream_begin(x, y, w, h);
-    for (uint16_t row = 0; row < h; row++) {
-        display_stream_row(buf + (uint32_t)row * w, w);
+    lcd_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    lcd_pixel_begin();
+
+    uint32_t total_pixels = (uint32_t)w * h;
+    uint32_t sent = 0;
+    const uint8_t *src = (const uint8_t *)buf;
+
+    while (sent < total_pixels) {
+        uint32_t chunk = total_pixels - sent;
+        if (chunk > BLIT_CHUNK_PIXELS) chunk = BLIT_CHUNK_PIXELS;
+        bool last = (sent + chunk >= total_pixels);
+        uint64_t t0 = (uint64_t)esp_timer_get_time();
+        memcpy(s_dma_buf, src + sent * 2, chunk * 2);
+        s_profile.blit_copy_us += (uint64_t)esp_timer_get_time() - t0;
+        t0 = (uint64_t)esp_timer_get_time();
+        lcd_pixel_chunk(s_dma_buf, chunk * 2, !last);
+        s_profile.blit_tx_us += (uint64_t)esp_timer_get_time() - t0;
+        display_profile_note_tx(chunk * 2u);
+        sent += chunk;
     }
-    display_stream_end();
+    ++s_profile.blit_calls;
 }
 
 // ── Streaming API ──────────────────────────────────────────────
 static uint32_t s_stream_total_px;
 static uint32_t s_stream_sent_px;
 static uint16_t s_stream_w;
+static uint32_t s_stream_buf_px;
+
+static void display_stream_flush(bool force_last)
+{
+    if (!s_streaming || s_stream_buf_px == 0) {
+        return;
+    }
+
+    bool last = force_last && (s_stream_sent_px >= s_stream_total_px);
+    uint64_t t0 = (uint64_t)esp_timer_get_time();
+    lcd_pixel_chunk(s_dma_buf, s_stream_buf_px * 2u, !last);
+    s_profile.blit_tx_us += (uint64_t)esp_timer_get_time() - t0;
+    display_profile_note_tx(s_stream_buf_px * 2u);
+    s_stream_buf_px = 0;
+
+    if (last) {
+        s_streaming = false;
+    }
+}
 
 void display_stream_begin(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
     s_stream_total_px = (uint32_t)w * h;
     s_stream_sent_px  = 0;
     s_stream_w        = w;
+    s_stream_buf_px   = 0;
     s_streaming       = true;
+    ++s_profile.blit_calls;
     lcd_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
     lcd_pixel_begin();
 }
@@ -325,19 +382,70 @@ void display_stream_begin(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 void display_stream_row(const uint16_t *row, uint16_t w)
 {
     if (!s_streaming) return;
-    // row width should equal s_stream_w, but we trust the caller
     uint32_t remaining = s_stream_total_px - s_stream_sent_px;
-    uint32_t pixels = (w < remaining) ? w : remaining;
-    memcpy(s_row_buf, row, pixels * 2);
-    s_stream_sent_px += pixels;
-    bool last = (s_stream_sent_px >= s_stream_total_px);
-    lcd_pixel_chunk(s_row_buf, pixels * 2, !last);
-    if (last) s_streaming = false;
+    uint32_t row_pixels = (w < remaining) ? w : remaining;
+    uint32_t sent = 0;
+
+    while (sent < row_pixels) {
+        uint32_t chunk = row_pixels - sent;
+        uint32_t space = BLIT_CHUNK_PIXELS - s_stream_buf_px;
+        if (chunk > space) chunk = space;
+
+        memcpy(((uint16_t *)s_dma_buf) + s_stream_buf_px, row + sent, chunk * 2u);
+        s_stream_buf_px += chunk;
+        s_stream_sent_px += chunk;
+        sent += chunk;
+
+        if (s_stream_buf_px == BLIT_CHUNK_PIXELS) {
+            display_stream_flush(false);
+        }
+    }
+
+    if (s_stream_sent_px >= s_stream_total_px) {
+        display_stream_flush(true);
+    }
+}
+
+void display_stream_indexed_row(const uint8_t *palette_row, uint16_t w)
+{
+    if (!s_streaming) return;
+
+    uint32_t remaining = s_stream_total_px - s_stream_sent_px;
+    uint32_t row_pixels = (w < remaining) ? w : remaining;
+    uint32_t sent = 0;
+
+    while (sent < row_pixels) {
+        uint32_t chunk = row_pixels - sent;
+        uint32_t space = BLIT_CHUNK_PIXELS - s_stream_buf_px;
+        if (chunk > space) chunk = space;
+
+        uint64_t t0 = (uint64_t)esp_timer_get_time();
+        nes_video_convert_pixels(palette_row + sent,
+                                 ((uint16_t *)s_dma_buf) + s_stream_buf_px,
+                                 (uint16_t)chunk);
+        s_profile.blit_copy_us += (uint64_t)esp_timer_get_time() - t0;
+
+        s_stream_buf_px += chunk;
+        s_stream_sent_px += chunk;
+        sent += chunk;
+
+        if (s_stream_buf_px == BLIT_CHUNK_PIXELS) {
+            display_stream_flush(false);
+        }
+    }
+
+    if (s_stream_sent_px >= s_stream_total_px) {
+        display_stream_flush(true);
+    }
 }
 
 void display_stream_end(void)
 {
     // Called before all rows were pushed: deassert CS and release the bus.
+    if (s_streaming) {
+        display_stream_flush(true);
+    }
+
     if (s_streaming) {
         // A transaction without CS_KEEP_ACTIVE deasserts CS cleanly.
         // bus is still acquired so the transaction goes through fine.
@@ -347,7 +455,7 @@ void display_stream_end(void)
                         | SPI_TRANS_MODE_QIO,
                 .cmd    = 0,
                 .addr   = 0,
-                .tx_buffer = s_row_buf,  // must be non-NULL for DMA path
+                .tx_buffer = s_dma_buf,  // must be non-NULL for DMA path
                 .length    = 8,          // 1 dummy byte – enough to deassert CS
             },
             .command_bits = 0,
@@ -357,4 +465,9 @@ void display_stream_end(void)
         spi_device_release_bus(s_spi);
         s_streaming = false;
     }
+}
+
+DisplayProfile display_profile_snapshot(void)
+{
+    return s_profile;
 }

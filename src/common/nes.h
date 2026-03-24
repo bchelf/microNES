@@ -47,8 +47,16 @@ typedef struct {
 typedef struct {
     uint64_t cpu_exec_us_total;
     uint64_t ppu_step_us_total;
+    uint64_t scanline_step_us_total;
+    uint64_t apu_step_us_total;
+    uint64_t cpu_exec_cycles_total;
+    uint64_t ppu_step_cycles_total;
+    uint64_t scanline_step_cycles_total;
+    uint64_t apu_step_cycles_total;
     uint64_t bus_read_count;
     uint64_t bus_write_count;
+    uint64_t scanline_count;
+    uint64_t apu_step_count;
 } NesStepProfile;
 
 typedef struct Nes {
