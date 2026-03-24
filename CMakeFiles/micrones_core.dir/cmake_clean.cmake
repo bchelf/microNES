@@ -11,6 +11,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/input.c.o"
   "CMakeFiles/micrones_core.dir/src/common/input.c.o.d"
+  "CMakeFiles/micrones_core.dir/src/common/mmc1.c.o"
+  "CMakeFiles/micrones_core.dir/src/common/mmc1.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/nes.c.o"
   "CMakeFiles/micrones_core.dir/src/common/nes.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/nrom.c.o"
