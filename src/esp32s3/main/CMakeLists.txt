@@ -72,8 +72,17 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
 # ESP-IDF sdkconfig.defaults sets CONFIG_COMPILER_OPTIMIZATION_PERF=y (-O2)
 # globally.  The per-target override here raises only this component to -O3,
 # which noticeably tightens the cpu6502/PPU inner loops.
+#
+# -mtext-section-literals (Xtensa-specific, CRITICAL for IRAM correctness):
+#   On Xtensa LX7, L32R loads a 32-bit literal from a pool that must be within
+#   ±256 KB of the instruction.  Without this flag the literal pools go to a
+#   separate .literal section which the default linker script maps to flash
+#   (~0x42000000), while IRAM-tagged functions live at ~0x40374000 – a 28 MB
+#   gap that causes silent L32R range faults.  This flag moves every literal
+#   pool inline inside the owning function's text section, so when a function
+#   is placed in .iram1.text its constants follow it there automatically.
 target_compile_options(${COMPONENT_LIB} PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-O3>
+    $<$<COMPILE_LANGUAGE:C>:-O3 -mtext-section-literals>
 )
 
 # Link math library (required by micrones APU)

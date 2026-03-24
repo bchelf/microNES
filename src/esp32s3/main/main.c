@@ -86,6 +86,11 @@ static void emulator_task(void *arg)
 {
     (void)arg;
 
+    // Allow the USB-JTAG serial CDC to enumerate on the host side before we
+    // start printing.  Without this, early log messages are lost because the
+    // host hasn't opened the port yet after a firmware reset.
+    vTaskDelay(pdMS_TO_TICKS(1500));
+
     // ── Initialise hardware ──────────────────────────────────
     ESP_LOGI(TAG, "display_init...");
     if (!display_init()) {
