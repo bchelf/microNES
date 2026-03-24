@@ -3,6 +3,9 @@
 static const Cpu6502OpcodeInfo cpu6502_opcode_table[256] = {
 #define OP(code, mnemonic_text, mode_text) \
     [code] = { mnemonic_text, mode_text, true, true }
+/* Illegal but implemented: official=false, supported=true */
+#define IL(code, mnemonic_text, mode_text) \
+    [code] = { mnemonic_text, mode_text, false, true }
     OP(0x00, "BRK", "impl"),
     OP(0x01, "ORA", "(ind,X)"),
     OP(0x05, "ORA", "zp"),
@@ -154,6 +157,40 @@ static const Cpu6502OpcodeInfo cpu6502_opcode_table[256] = {
     OP(0xf9, "SBC", "abs,Y"),
     OP(0xfd, "SBC", "abs,X"),
     OP(0xfe, "INC", "abs,X"),
+    /* Illegal opcodes */
+    IL(0x1a, "NOP", "impl"),  IL(0x3a, "NOP", "impl"),  IL(0x5a, "NOP", "impl"),
+    IL(0x7a, "NOP", "impl"),  IL(0xda, "NOP", "impl"),  IL(0xfa, "NOP", "impl"),
+    IL(0x80, "NOP", "#imm"),  IL(0x82, "NOP", "#imm"),  IL(0x89, "NOP", "#imm"),
+    IL(0xc2, "NOP", "#imm"),  IL(0xe2, "NOP", "#imm"),
+    IL(0x04, "NOP", "zp"),    IL(0x44, "NOP", "zp"),    IL(0x64, "NOP", "zp"),
+    IL(0x14, "NOP", "zp,X"),  IL(0x34, "NOP", "zp,X"),  IL(0x54, "NOP", "zp,X"),
+    IL(0x74, "NOP", "zp,X"),  IL(0xd4, "NOP", "zp,X"),  IL(0xf4, "NOP", "zp,X"),
+    IL(0x0c, "NOP", "abs"),
+    IL(0x1c, "NOP", "abs,X"), IL(0x3c, "NOP", "abs,X"), IL(0x5c, "NOP", "abs,X"),
+    IL(0x7c, "NOP", "abs,X"), IL(0xdc, "NOP", "abs,X"), IL(0xfc, "NOP", "abs,X"),
+    IL(0x03, "SLO", "(ind,X)"), IL(0x07, "SLO", "zp"),   IL(0x0f, "SLO", "abs"),
+    IL(0x13, "SLO", "(ind),Y"), IL(0x17, "SLO", "zp,X"), IL(0x1b, "SLO", "abs,Y"),
+    IL(0x1f, "SLO", "abs,X"),
+    IL(0x23, "RLA", "(ind,X)"), IL(0x27, "RLA", "zp"),   IL(0x2f, "RLA", "abs"),
+    IL(0x33, "RLA", "(ind),Y"), IL(0x37, "RLA", "zp,X"), IL(0x3b, "RLA", "abs,Y"),
+    IL(0x3f, "RLA", "abs,X"),
+    IL(0x43, "SRE", "(ind,X)"), IL(0x47, "SRE", "zp"),   IL(0x4f, "SRE", "abs"),
+    IL(0x53, "SRE", "(ind),Y"), IL(0x57, "SRE", "zp,X"), IL(0x5b, "SRE", "abs,Y"),
+    IL(0x5f, "SRE", "abs,X"),
+    IL(0x63, "RRA", "(ind,X)"), IL(0x67, "RRA", "zp"),   IL(0x6f, "RRA", "abs"),
+    IL(0x73, "RRA", "(ind),Y"), IL(0x77, "RRA", "zp,X"), IL(0x7b, "RRA", "abs,Y"),
+    IL(0x7f, "RRA", "abs,X"),
+    IL(0x83, "SAX", "(ind,X)"), IL(0x87, "SAX", "zp"),   IL(0x8f, "SAX", "abs"),
+    IL(0x97, "SAX", "zp,Y"),
+    IL(0xa3, "LAX", "(ind,X)"), IL(0xa7, "LAX", "zp"),   IL(0xaf, "LAX", "abs"),
+    IL(0xb3, "LAX", "(ind),Y"), IL(0xb7, "LAX", "zp,Y"), IL(0xbf, "LAX", "abs,Y"),
+    IL(0xc3, "DCP", "(ind,X)"), IL(0xc7, "DCP", "zp"),   IL(0xcf, "DCP", "abs"),
+    IL(0xd3, "DCP", "(ind),Y"), IL(0xd7, "DCP", "zp,X"), IL(0xdb, "DCP", "abs,Y"),
+    IL(0xdf, "DCP", "abs,X"),
+    IL(0xe3, "ISB", "(ind,X)"), IL(0xe7, "ISB", "zp"),   IL(0xef, "ISB", "abs"),
+    IL(0xf3, "ISB", "(ind),Y"), IL(0xf7, "ISB", "zp,X"), IL(0xfb, "ISB", "abs,Y"),
+    IL(0xff, "ISB", "abs,X"),
+#undef IL
 #undef OP
 };
 
