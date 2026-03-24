@@ -245,7 +245,7 @@ static inline bool ppu_rendering_enabled(const Ppu *ppu) {
     return (ppu->mask & (PPU_MASK_SHOW_BG | PPU_MASK_SHOW_SPRITES)) != 0;
 }
 
-static bool ppu_visible_scanline_active(const Ppu *ppu) {
+static inline bool ppu_visible_scanline_active(const Ppu *ppu) {
     return ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT && ppu->cycle > 0 && ppu->cycle <= 256;
 }
 
@@ -257,7 +257,7 @@ static void MICRONES_HOT_FUNC(ppu_copy_vertical_bits_from_temp)(Ppu *ppu) {
     ppu->vram_addr = (uint16_t)((ppu->vram_addr & (uint16_t)~0x7be0u) | (ppu->temp_addr & 0x7be0u));
 }
 
-static void ppu_refresh_visible_scanline_render_state(Ppu *ppu) {
+static void MICRONES_HOT_FUNC(ppu_refresh_visible_scanline_render_state)(Ppu *ppu) {
     if (!ppu_rendering_enabled(ppu) || !ppu_visible_scanline_active(ppu)) {
         return;
     }
@@ -373,7 +373,10 @@ static uint16_t ppu_palette_index(uint16_t addr) {
     return index;
 }
 
-static uint16_t MICRONES_HOT_FUNC(ppu_nametable_index)(const NesCartridge *cartridge, uint16_t addr) {
+/* Inline: called 2× per bg tile × 33 tiles × 240 scanlines = 15 840×/frame
+ * from inside ppu_render_scanline (IRAM).  Inlining avoids call+return
+ * overhead and keeps the body co-located with the caller in IRAM. */
+static inline uint16_t ppu_nametable_index(const NesCartridge *cartridge, uint16_t addr) {
     uint16_t offset = (uint16_t)(addr - 0x2000u) & 0x0fffu;
     uint16_t table = offset >> 10;
     uint16_t inner = offset & 0x03ffu;
@@ -1523,7 +1526,7 @@ void MICRONES_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint3
     }
 }
 
-uint8_t ppu_cpu_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr) {
+uint8_t MICRONES_HOT_FUNC(ppu_cpu_read)(Ppu *ppu, NesCartridge *cartridge, uint16_t addr) {
     uint8_t reg = (uint8_t)(addr & 0x07u);
 
     switch (reg) {
@@ -1556,7 +1559,7 @@ uint8_t ppu_cpu_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr) {
     }
 }
 
-void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t value) {
+void MICRONES_HOT_FUNC(ppu_cpu_write)(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t value) {
     uint8_t reg = (uint8_t)(addr & 0x07u);
 
     switch (reg) {

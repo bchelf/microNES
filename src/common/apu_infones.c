@@ -413,7 +413,7 @@ uint8_t apu_cpu_read(Apu *apu, uint16_t addr)
     return s;
 }
 
-void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value)
+void MICRONES_HOT_FUNC(apu_cpu_write)(Apu *apu, uint16_t addr, uint8_t value)
 {
     if (addr >= 0x4000u && addr <= 0x4017u) {
         apu->registers[addr - 0x4000u] = value;

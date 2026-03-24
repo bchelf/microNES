@@ -4,7 +4,7 @@
 
 #include <stdio.h>
 
-static void cpu_record_trace(Nes *nes, const Cpu6502 *cpu, uint16_t pc, uint8_t opcode) {
+static inline void cpu_record_trace(Nes *nes, const Cpu6502 *cpu, uint16_t pc, uint8_t opcode) {
 #if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     Cpu6502TraceEntry *entry = &nes->trace[nes->trace_head];
 
@@ -30,7 +30,7 @@ static void cpu_record_trace(Nes *nes, const Cpu6502 *cpu, uint16_t pc, uint8_t 
 #endif
 }
 
-static void cpu_note_opcode(Nes *nes, uint16_t pc, uint8_t opcode) {
+static inline void cpu_note_opcode(Nes *nes, uint16_t pc, uint8_t opcode) {
 #if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
     const Cpu6502OpcodeInfo *info = cpu6502_opcode_info(opcode);
 
