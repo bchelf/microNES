@@ -3,13 +3,20 @@
 
 #include <stdint.h>
 
-// MICRONES_HOT_FUNC(name): place the function in SRAM on Pico builds to avoid
-// flash XIP latency on the hottest emulator paths. Falls back to a no-op on
-// host builds.
+// MICRONES_HOT_FUNC(name): place the function in SRAM to avoid flash XIP /
+// ICache latency on the hottest emulator paths.
+//   Pico:   __not_in_flash_func  (XIP SRAM)
+//   ESP32:  .iram1.text section  (IRAM – no ICache, direct CPU access)
+//   Other:  no-op
 #ifndef MICRONES_HOT_FUNC
 #ifdef MICRONES_PICO_PLATFORM
 #include "pico.h"
 #define MICRONES_HOT_FUNC(name) __not_in_flash_func(name)
+#elif defined(MICRONES_ESP32_PLATFORM)
+// Place in IRAM so the 6502/PPU/APU hot-loops never stall on ICache misses.
+// Equivalent to ESP-IDF's IRAM_ATTR without requiring esp_attr.h here.
+#define MICRONES_HOT_FUNC(name) \
+    __attribute__((section(".iram1.text"))) name
 #else
 #define MICRONES_HOT_FUNC(name) name
 #endif

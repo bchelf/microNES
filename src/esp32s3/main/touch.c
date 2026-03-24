@@ -1,6 +1,7 @@
 #include "touch.h"
 #include "board.h"
 
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -40,6 +41,20 @@ bool touch_init(void)
     // after the shared reset, so we just wait for it to be I2C-ready.
     vTaskDelay(pdMS_TO_TICKS(10));
 
+    // Configure the FT3168 interrupt pin as input with internal pull-up.
+    // The FT3168 drives INT low while a touch event is pending and floats it
+    // (open-drain) otherwise.  We check this pin before every I2C read to
+    // avoid redundant transactions – and to prevent NACKs that occur when the
+    // controller is in its low-power idle state (INT is high / not asserted).
+    gpio_config_t int_cfg = {
+        .pin_bit_mask     = (1ULL << BOARD_TP_INT),
+        .mode             = GPIO_MODE_INPUT,
+        .pull_up_en       = GPIO_PULLUP_ENABLE,
+        .pull_down_en     = GPIO_PULLDOWN_DISABLE,
+        .intr_type        = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&int_cfg));
+
     // Initialise I2C master bus
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port      = BOARD_I2C_PORT,
@@ -74,6 +89,12 @@ bool touch_init(void)
 void touch_read(TouchData *out)
 {
     memset(out, 0, sizeof(*out));
+
+    // Fast path: FT3168 keeps INT low while at least one finger is on-screen.
+    // When INT is high the controller is idle – skip the I2C transaction
+    // entirely.  This avoids ~0.3 ms of bus overhead every frame and prevents
+    // the NACK errors that occur when the FT3168 is in low-power idle mode.
+    if (gpio_get_level(BOARD_TP_INT) != 0) return;
 
     uint8_t status;
     if (!i2c_read_reg(FT_REG_TD_STATUS, &status, 1)) return;

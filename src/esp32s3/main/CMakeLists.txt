@@ -60,8 +60,20 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     MICRONES_ENABLE_APU_EMULATION=1
     MICRONES_ENABLE_FRAMEBUFFER=1
     MICRONES_ENABLE_STEP_PROFILING=0
+    # Activates IRAM placement for cpu6502_step / ppu_render_scanline / apu_step etc.
+    # Those functions run in SRAM instead of flash-backed ICache, eliminating
+    # cache-miss stalls in the tight 6502/PPU dispatch loops.
+    MICRONES_ESP32_PLATFORM=1
     # ROM embedding flag
     MICRONES_HAS_ROM=${MICRONES_HAS_ROM_FLAG}
+)
+
+# Compile everything in this component at -O3.
+# ESP-IDF sdkconfig.defaults sets CONFIG_COMPILER_OPTIMIZATION_PERF=y (-O2)
+# globally.  The per-target override here raises only this component to -O3,
+# which noticeably tightens the cpu6502/PPU inner loops.
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:-O3>
 )
 
 # Link math library (required by micrones APU)

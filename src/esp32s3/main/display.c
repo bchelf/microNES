@@ -51,9 +51,11 @@ static const char *TAG = "display";
 #define ROW_BUF_PIXELS  512
 static DMA_ATTR uint8_t s_row_buf[ROW_BUF_PIXELS * 2];
 
-// Chunk size for display_blit_region (direct DRAM→DMA path, no copy).
-// 4096 pixels = 8192 bytes is well within ESP32-S3 GDMA limits.
-#define BLIT_CHUNK_PIXELS  4096
+// Maximum pixels per DMA chunk for display_blit_region.
+// Set large enough to send the entire NES frame (256×240 = 61 440 pixels =
+// 122 880 bytes) in ONE SPI transaction, eliminating per-chunk overhead.
+// max_transfer_sz below must be ≥ BLIT_CHUNK_PIXELS × 2.
+#define BLIT_CHUNK_PIXELS  65536
 
 static spi_device_handle_t s_spi = NULL;
 static bool s_streaming = false;
@@ -207,7 +209,8 @@ bool display_init(void)
         .data5_io_num    = -1,
         .data6_io_num    = -1,
         .data7_io_num    = -1,
-        .max_transfer_sz = BLIT_CHUNK_PIXELS * 2 + 64,  // 8256 bytes
+        // Must hold a full NES frame (256×240×2 = 122 880 bytes) in one shot.
+        .max_transfer_sz = 256 * 240 * 2 + 64,
         .flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_QUAD,
     };
 
