@@ -3,10 +3,6 @@ cmake_minimum_required(VERSION 3.16)
 # Path to the portable NES core (relative to this CMakeLists.txt)
 set(MICRONES_COMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../../common")
 
-# ROM lives at roms/smb1.nes in the repository root.
-# From src/esp32s3/main/ that is three directories up.
-set(MICRONES_ROM_PATH "${CMAKE_CURRENT_LIST_DIR}/../../../roms/smb1.nes")
-
 set(MICRONES_APU_ENGINE "infones" CACHE STRING "APU engine for ESP32-S3 target (infones or micrones)")
 set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS infones micrones)
 
@@ -24,10 +20,12 @@ message(STATUS "microNES ESP32-S3 APU engine: ${MICRONES_APU_ENGINE}")
 
 if(EXISTS "${MICRONES_ROM_PATH}")
     set(MICRONES_HAS_ROM_FLAG 1)
+    get_filename_component(MICRONES_ROM_FILENAME "${MICRONES_ROM_PATH}" NAME)
+    string(MAKE_C_IDENTIFIER "${MICRONES_ROM_FILENAME}" MICRONES_ROM_SYMBOL_STEM)
     message(STATUS "microNES: embedding ${MICRONES_ROM_PATH}")
 else()
     set(MICRONES_HAS_ROM_FLAG 0)
-    message(WARNING "microNES: roms/smb1.nes not found in repo root – build will succeed but the emulator won't run. Add the ROM at roms/smb1.nes and rebuild.")
+    message(WARNING "microNES: ROM not found at ${MICRONES_ROM_PATH} – build will succeed but the emulator won't run. Set MICRONES_ROM_PATH or place a ROM at the default path and rebuild.")
 endif()
 
 idf_component_register(
@@ -84,6 +82,8 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     MICRONES_ESP32_PLATFORM=1
     # ROM embedding flag
     MICRONES_HAS_ROM=${MICRONES_HAS_ROM_FLAG}
+    MICRONES_ROM_START_SYMBOL="_binary_${MICRONES_ROM_SYMBOL_STEM}_start"
+    MICRONES_ROM_END_SYMBOL="_binary_${MICRONES_ROM_SYMBOL_STEM}_end"
 )
 
 # Compile everything in this component at -O3.
