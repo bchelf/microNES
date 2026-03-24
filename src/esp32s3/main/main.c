@@ -126,6 +126,18 @@ static void emulator_task(void *arg)
         goto idle;
     }
     nes_reset(&s_nes);
+    {
+        /* Diagnose whether PRG ROM was copied to DRAM or is running from flash.
+         * On ESP32-S3: internal DRAM ≥ 0x3FC00000, flash DROM < 0x3C000000.
+         * A DRAM copy avoids DCache contention on every 6502 instruction fetch. */
+        const uint8_t *prg = s_nes.cartridge.prg_rom;
+        bool prg_in_dram = ((uintptr_t)prg >= 0x3FC00000u);
+        ESP_LOGI(TAG, "PRG ROM @ %p (%s, %u bytes), free heap: %lu bytes",
+                 (void *)prg,
+                 prg_in_dram ? "DRAM – fast" : "FLASH – slow, expect lower fps",
+                 (unsigned)s_nes.cartridge.prg_rom_size,
+                 (unsigned long)esp_get_free_heap_size());
+    }
     ESP_LOGI(TAG, "Emulator running");
 #else
     ESP_LOGW(TAG, "No ROM embedded.  Place roms/smb1.nes in the repo root and rebuild.");

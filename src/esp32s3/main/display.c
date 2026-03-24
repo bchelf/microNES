@@ -46,11 +46,17 @@ static const char *TAG = "display";
 #define QSPI_INST_WRITE_SINGLE  0x02
 #define QSPI_INST_WRITE_QUAD    0x32
 
-// DMA-capable scratch buffer in internal SRAM (used by display_fill,
-// display_write_region and display_blit_region for chunked transfers).
-// Sized for one full NES scanline (256 px × 2 bytes = 512 bytes).
+// DMA-capable scratch buffer in internal SRAM (used by display_fill and
+// display_write_region for chunked transfers when the source may not be
+// DMA-accessible).  Sized for one full NES scanline (256 px × 2 bytes).
 #define ROW_BUF_PIXELS  256
 static DMA_ATTR uint8_t s_row_buf[ROW_BUF_PIXELS * 2];
+
+// display_blit_region sends pixels directly from the caller's DMA-accessible
+// buffer (s_frame_rgb in main.c is DMA_ATTR) in large chunks to minimise
+// per-transaction SPI overhead.  One chunk = the whole NES frame (61440 px =
+// 122880 bytes), so the entire blit is a single SPI transaction instead of 240.
+#define BLIT_CHUNK_PIXELS  (NES_DISPLAY_W * NES_DISPLAY_H)
 
 static spi_device_handle_t s_spi = NULL;
 static bool s_streaming = false;
@@ -204,8 +210,10 @@ bool display_init(void)
         .data5_io_num    = -1,
         .data6_io_num    = -1,
         .data7_io_num    = -1,
-        // Must hold one scanline (ROW_BUF_PIXELS × 2 bytes) plus overhead.
-        .max_transfer_sz = ROW_BUF_PIXELS * 2 + 64,
+        // Must hold the full NES frame (256×240×2 = 122880 bytes) so
+        // display_blit_region can send it in a single DMA transaction.
+        // 122944 = 122880 + 64-byte alignment headroom.
+        .max_transfer_sz = NES_DISPLAY_W * NES_DISPLAY_H * 2 + 64,
         .flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_QUAD,
     };
 
@@ -293,18 +301,28 @@ void display_write_row(uint16_t x, uint16_t row_y, uint16_t w,
     display_write_region(x, row_y, w, 1, row);
 }
 
-// Blit a pre-rendered buffer to the display one scanline at a time.
-// Uses the same streaming path as the UI overlay (proven working) so each
-// SPI transaction is exactly ROW_BUF_PIXELS × 2 bytes – well within any
-// hardware limit.  memcpy into s_row_buf also guarantees DMA-safe source.
+// Blit a pre-rendered buffer to the display.
+// buf must be in internal SRAM with DMA_ATTR (guaranteed for s_frame_rgb in
+// main.c).  Pixels are sent directly without copying through s_row_buf, in
+// chunks of up to BLIT_CHUNK_PIXELS.  For a 256×240 NES frame this is one
+// SPI transaction instead of 240, eliminating most per-transaction overhead.
 void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                          const uint16_t *buf)
 {
-    display_stream_begin(x, y, w, h);
-    for (uint16_t row = 0; row < h; row++) {
-        display_stream_row(buf + (uint32_t)row * w, w);
+    lcd_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    lcd_pixel_begin();
+
+    uint32_t total_pixels = (uint32_t)w * h;
+    uint32_t sent = 0;
+    const uint8_t *src = (const uint8_t *)buf;
+
+    while (sent < total_pixels) {
+        uint32_t chunk = total_pixels - sent;
+        if (chunk > BLIT_CHUNK_PIXELS) chunk = BLIT_CHUNK_PIXELS;
+        bool last = (sent + chunk >= total_pixels);
+        lcd_pixel_chunk(src + sent * 2, chunk * 2, !last);
+        sent += chunk;
     }
-    display_stream_end();
 }
 
 // ── Streaming API ──────────────────────────────────────────────
