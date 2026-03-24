@@ -3,6 +3,7 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,6 +25,9 @@ static const uint8_t ft_point_base[TOUCH_MAX_POINTS] = {0x03, 0x09, 0x0F, 0x15, 
 
 static i2c_master_bus_handle_t  s_bus    = NULL;
 static i2c_master_dev_handle_t  s_dev    = NULL;
+static uint64_t                 s_last_idle_probe_us = 0;
+
+#define TOUCH_IDLE_POLL_US 16000
 
 static bool i2c_read_reg(uint8_t reg, uint8_t *buf, size_t len)
 {
@@ -90,11 +94,16 @@ void touch_read(TouchData *out)
 {
     memset(out, 0, sizeof(*out));
 
-    // Fast path: FT3168 keeps INT low while at least one finger is on-screen.
-    // When INT is high the controller is idle – skip the I2C transaction
-    // entirely.  This avoids ~0.3 ms of bus overhead every frame and prevents
-    // the NACK errors that occur when the FT3168 is in low-power idle mode.
-    if (gpio_get_level(BOARD_TP_INT) != 0) return;
+    // Some board revisions do not reliably assert INT for every touch, so INT
+    // can only be treated as a hint.  Poll immediately when it is low; when it
+    // is high, probe at a reduced rate so touches still work without bringing
+    // back the full-rate idle I2C traffic that caused FT3168 NACKs.
+    bool int_asserted = (gpio_get_level(BOARD_TP_INT) == 0);
+    if (!int_asserted) {
+        uint64_t now_us = esp_timer_get_time();
+        if ((now_us - s_last_idle_probe_us) < TOUCH_IDLE_POLL_US) return;
+        s_last_idle_probe_us = now_us;
+    }
 
     uint8_t status;
     if (!i2c_read_reg(FT_REG_TD_STATUS, &status, 1)) return;
