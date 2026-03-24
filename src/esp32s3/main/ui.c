@@ -28,7 +28,6 @@ static const uint16_t kDArrow = BE(COL_DPAD_ARROW);
 static const uint16_t kBtnA   = BE(COL_BTN_A);
 static const uint16_t kBtnB   = BE(COL_BTN_B);
 static const uint16_t kBtnSS  = BE(COL_BTN_START);
-static const uint16_t kLabel  = BE(COL_LABEL);
 
 // ─────────────────────────────────────────────────────────────
 //  Per-zone line buffer
@@ -44,12 +43,6 @@ static uint16_t s_line[ZONE_W];
 static void fill_line(int w, uint16_t colour)
 {
     for (int i = 0; i < w; i++) s_line[i] = colour;
-}
-
-static void draw_pixel(int x, int y, uint16_t colour, int zone_x_offset)
-{
-    (void)zone_x_offset;  // unused; caller writes via display_write_row
-    if (x >= 0 && x < ZONE_W) s_line[x] = colour;
 }
 
 // Draw a filled circle into the current s_line buffer for scanline y.
