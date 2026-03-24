@@ -7,6 +7,21 @@ set(MICRONES_COMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../../common")
 # From src/esp32s3/main/ that is three directories up.
 set(MICRONES_ROM_PATH "${CMAKE_CURRENT_LIST_DIR}/../../../roms/smb1.nes")
 
+set(MICRONES_APU_ENGINE "infones" CACHE STRING "APU engine for ESP32-S3 target (infones or micrones)")
+set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS infones micrones)
+
+if(MICRONES_APU_ENGINE STREQUAL "micrones")
+    set(MICRONES_APU_SOURCE "${MICRONES_COMMON_DIR}/apu_micrones.c")
+    set(MICRONES_APU_ENGINE_FLAG 1)
+elseif(MICRONES_APU_ENGINE STREQUAL "infones")
+    set(MICRONES_APU_SOURCE "${MICRONES_COMMON_DIR}/apu_infones.c")
+    set(MICRONES_APU_ENGINE_FLAG 0)
+else()
+    message(FATAL_ERROR "MICRONES_APU_ENGINE must be 'infones' or 'micrones'")
+endif()
+
+message(STATUS "microNES ESP32-S3 APU engine: ${MICRONES_APU_ENGINE}")
+
 if(EXISTS "${MICRONES_ROM_PATH}")
     set(MICRONES_HAS_ROM_FLAG 1)
     message(STATUS "microNES: embedding ${MICRONES_ROM_PATH}")
@@ -18,7 +33,7 @@ endif()
 idf_component_register(
     SRCS
         # Portable NES emulator core
-        "${MICRONES_COMMON_DIR}/apu_micrones.c"
+        "${MICRONES_APU_SOURCE}"
         "${MICRONES_COMMON_DIR}/cart.c"
         "${MICRONES_COMMON_DIR}/cpu6502.c"
         "${MICRONES_COMMON_DIR}/cpu6502_opcode.c"
@@ -53,13 +68,15 @@ endif()
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC
     # NES core flags
-    MICRONES_APU_ENGINE_MICRONES=1
+    MICRONES_APU_ENGINE_MICRONES=${MICRONES_APU_ENGINE_FLAG}
     MICRONES_ENABLE_RUNTIME_DIAGNOSTICS=0
     MICRONES_ENABLE_APU_DEBUG_METRICS=0
     MICRONES_ENABLE_APU_PCM_OUTPUT=1
     MICRONES_ENABLE_APU_EMULATION=1
     MICRONES_ENABLE_FRAMEBUFFER=1
+    MICRONES_ENABLE_SCANLINE_BUFFER=0
     MICRONES_ENABLE_STEP_PROFILING=0
+    MICRONES_ENABLE_CYCLE_PROFILING=0
     # Activates IRAM placement for cpu6502_step / ppu_render_scanline / apu_step etc.
     # Those functions run in SRAM instead of flash-backed ICache, eliminating
     # cache-miss stalls in the tight 6502/PPU dispatch loops.

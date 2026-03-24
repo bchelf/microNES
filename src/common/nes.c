@@ -127,6 +127,8 @@ bool MICRONES_HOT_FUNC(nes_step_instruction)(Nes *nes) {
 bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
     uint64_t frame_before = nes->ppu.frame_count;
     uint64_t token = ((uint64_t)frame_before << 16) | (uint16_t)(nes->ppu.scanline_buffer.y & 0xffff);
+    uint64_t scanline_started_us = nes_profile_now_us(nes);
+    uint32_t scanline_started_cycles = micrones_profile_now_cycles();
 
     nes->ppu.scanline_ready = false;
     nes->ppu.scanline_buffer.ready = false;
@@ -143,8 +145,35 @@ bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
      * Batching here (240×/frame) instead of per-instruction (~9828×/frame)
      * saves ~1.8ms/frame of apu_step call overhead. */
     if (nes->pending_apu_cycles > 0) {
+        uint64_t apu_started_us = nes_profile_now_us(nes);
+        uint32_t apu_started_cycles = micrones_profile_now_cycles();
+        bool counted_apu_step = false;
         apu_step(&nes->apu, nes->pending_apu_cycles);
+        if (apu_started_us != 0) {
+            nes->step_profile.apu_step_us_total += nes_profile_now_us(nes) - apu_started_us;
+            ++nes->step_profile.apu_step_count;
+            counted_apu_step = true;
+        }
+        if (apu_started_cycles != 0) {
+            nes->step_profile.apu_step_cycles_total +=
+                (uint32_t)(micrones_profile_now_cycles() - apu_started_cycles);
+            if (!counted_apu_step) {
+                ++nes->step_profile.apu_step_count;
+            }
+        }
         nes->pending_apu_cycles = 0;
+    }
+
+    if (scanline_started_us != 0) {
+        nes->step_profile.scanline_step_us_total += nes_profile_now_us(nes) - scanline_started_us;
+        ++nes->step_profile.scanline_count;
+    }
+    if (scanline_started_cycles != 0) {
+        nes->step_profile.scanline_step_cycles_total +=
+            (uint32_t)(micrones_profile_now_cycles() - scanline_started_cycles);
+        if (scanline_started_us == 0) {
+            ++nes->step_profile.scanline_count;
+        }
     }
 
     return true;

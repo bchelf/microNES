@@ -1,8 +1,16 @@
 #pragma once
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
+
+typedef struct {
+    uint64_t blit_calls;
+    uint64_t blit_chunks;
+    uint64_t blit_copy_us;
+    uint64_t blit_tx_us;
+    uint64_t blit_bytes;
+} DisplayProfile;
 
 // Initialise the SPI bus and SH8601 AMOLED panel.
 // After this call the display is on, rotated to landscape (536×240),
@@ -34,4 +42,7 @@ void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 // then display_stream_row() for each row, then display_stream_end().
 void display_stream_begin(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 void display_stream_row(const uint16_t *row, uint16_t w);
+void display_stream_indexed_row(const uint8_t *palette_row, uint16_t w);
 void display_stream_end(void);
+
+DisplayProfile display_profile_snapshot(void);
