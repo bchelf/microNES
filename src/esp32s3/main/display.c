@@ -82,8 +82,12 @@ static void lcd_cmd(uint8_t cmd, const uint8_t *params, size_t n_params)
 // Begin a pixel-data write: send RAMWR in quad mode, keep CS active.
 // Caller must follow up with lcd_pixel_chunk() calls and finish with
 // lcd_pixel_end().
+// ESP-IDF rule: spi_device_acquire_bus() MUST be called before any
+// transaction that uses SPI_TRANS_CS_KEEP_ACTIVE, otherwise polling
+// transactions cannot obtain the bus lock.
 static void lcd_pixel_begin(void)
 {
+    ESP_ERROR_CHECK(spi_device_acquire_bus(s_spi, portMAX_DELAY));
     spi_transaction_ext_t t = {
         .base = {
             .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
@@ -100,7 +104,8 @@ static void lcd_pixel_begin(void)
 }
 
 // Send a chunk of pixel data.  buf must be DMA-accessible.
-// keep_cs: true = CS stays active after this chunk, false = CS deasserted.
+// keep_cs: true  = CS stays active (intermediate chunk, bus stays acquired)
+//          false = CS deasserts    (final chunk, bus is released)
 static void lcd_pixel_chunk(const void *buf, size_t len_bytes, bool keep_cs)
 {
     spi_transaction_ext_t t = {
@@ -117,6 +122,9 @@ static void lcd_pixel_chunk(const void *buf, size_t len_bytes, bool keep_cs)
         .address_bits = 0,
     };
     ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, (spi_transaction_t *)&t));
+    if (!keep_cs) {
+        spi_device_release_bus(s_spi);
+    }
 }
 
 // Set the CASET/RASET write window in landscape coordinates.
@@ -315,23 +323,24 @@ void display_stream_row(const uint16_t *row, uint16_t w)
 
 void display_stream_end(void)
 {
-    // If called before all rows are pushed, send an empty final transaction
-    // to deassert CS.
+    // Called before all rows were pushed: deassert CS and release the bus.
     if (s_streaming) {
-        // Send a zero-length transaction without CS_KEEP_ACTIVE to release CS
+        // A transaction without CS_KEEP_ACTIVE deasserts CS cleanly.
+        // bus is still acquired so the transaction goes through fine.
         spi_transaction_ext_t t = {
             .base = {
                 .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
                         | SPI_TRANS_MODE_QIO,
                 .cmd    = 0,
                 .addr   = 0,
-                .tx_buffer = NULL,
-                .length    = 0,
+                .tx_buffer = s_row_buf,  // must be non-NULL for DMA path
+                .length    = 8,          // 1 dummy byte – enough to deassert CS
             },
             .command_bits = 0,
             .address_bits = 0,
         };
         spi_device_polling_transmit(s_spi, (spi_transaction_t *)&t);
+        spi_device_release_bus(s_spi);
         s_streaming = false;
     }
 }

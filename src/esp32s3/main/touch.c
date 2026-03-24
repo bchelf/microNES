@@ -27,10 +27,9 @@ static i2c_master_dev_handle_t  s_dev    = NULL;
 
 static bool i2c_read_reg(uint8_t reg, uint8_t *buf, size_t len)
 {
-    esp_err_t ret;
-    ret = i2c_master_transmit(s_dev, &reg, 1, 100);
-    if (ret != ESP_OK) return false;
-    ret = i2c_master_receive(s_dev, buf, len, 100);
+    // Use write-then-read combined transfer to avoid a repeated-start issue
+    // on some FT series controllers.
+    esp_err_t ret = i2c_master_transmit_receive(s_dev, &reg, 1, buf, len, 100);
     return (ret == ESP_OK);
 }
 
@@ -49,7 +48,7 @@ bool touch_init(void)
     gpio_set_level(BOARD_TP_RST, 0);
     vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(BOARD_TP_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(300));  // FT3168 needs ~200 ms after reset before I2C is ready
 
     // Initialise I2C master bus
     i2c_master_bus_config_t bus_cfg = {
