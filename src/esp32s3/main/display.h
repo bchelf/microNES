@@ -24,6 +24,11 @@ void display_write_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 void display_write_row(uint16_t x, uint16_t row_y, uint16_t w,
                        const uint16_t *row);
 
+// Fast path for DMA-accessible (internal SRAM) buffers: sends w*h pixels in a
+// single SPI transaction with no intermediate copy.  buf must be in internal SRAM.
+void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                         const uint16_t *buf);
+
 // Convenience: set the write window once, then stream rows via
 // display_stream_row().  Call display_stream_begin() first,
 // then display_stream_row() for each row, then display_stream_end().

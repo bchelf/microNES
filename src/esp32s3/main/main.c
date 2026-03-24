@@ -10,6 +10,7 @@
 #include "nes.h"
 #include "framebuffer.h"
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -37,9 +38,9 @@ extern const uint8_t    _binary_smb1_nes_end[];
 // ─────────────────────────────────────────────────────────────
 static Nes s_nes;
 
-// Per-scanline RGB565 conversion buffer (256 pixels × 2 bytes, SRAM)
-// display_stream_row() copies this into the DMA buffer internally.
-static uint16_t s_scanline_rgb[NES_FRAME_WIDTH];
+// Full-frame RGB565 buffer (256×240 × 2 bytes = 120 KB) in internal SRAM.
+// DMA_ATTR ensures 4-byte alignment so the SPI DMA engine can read it directly.
+static DMA_ATTR uint16_t s_frame_rgb[NES_FRAME_WIDTH * NES_FRAME_HEIGHT];
 
 // ─────────────────────────────────────────────────────────────
 //  Frame timing
@@ -135,17 +136,16 @@ static void emulator_task(void *arg)
                 break;
             }
 
-            // 3. Blit NES framebuffer to display (NES centre region only)
+            // 3. Blit NES framebuffer to display (one DMA transfer for the full frame)
             {
                 const NesFrameBuffer *fb = nes_framebuffer(&s_nes);
-                display_stream_begin(NES_DISPLAY_X, NES_DISPLAY_Y,
-                                     NES_DISPLAY_W, NES_DISPLAY_H);
                 for (int y = 0; y < NES_FRAME_HEIGHT; y++) {
                     const uint8_t *row = nes_framebuffer_scanline_const(fb, (uint16_t)y);
-                    nes_video_convert_scanline(row, s_scanline_rgb);
-                    display_stream_row(s_scanline_rgb, NES_FRAME_WIDTH);
+                    nes_video_convert_scanline(row, &s_frame_rgb[y * NES_FRAME_WIDTH]);
                 }
-                display_stream_end();
+                display_blit_region(NES_DISPLAY_X, NES_DISPLAY_Y,
+                                    NES_DISPLAY_W, NES_DISPLAY_H,
+                                    s_frame_rgb);
             }
 
             // 4. Drain APU samples into audio ring buffer
@@ -202,11 +202,6 @@ idle:
 // ─────────────────────────────────────────────────────────────
 void app_main(void)
 {
-    // USB CDC needs ~2-3 s to enumerate after a hard reset before the host
-    // serial monitor is ready.  Without this delay any early log output and
-    // crash traces are lost.
-    vTaskDelay(pdMS_TO_TICKS(3000));
-
     ESP_LOGI(TAG, "microNES ESP32-S3 AMOLED starting");
     ESP_LOGI(TAG, "free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
 

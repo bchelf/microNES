@@ -17,8 +17,8 @@
 
 // --- I2C bus (shared by Touch + IMU) ---
 #define BOARD_I2C_PORT        0   // I2C peripheral number
-#define BOARD_I2C_SDA         4
-#define BOARD_I2C_SCL         5
+#define BOARD_I2C_SDA        40   // GP40 per board pinout
+#define BOARD_I2C_SCL        39   // GP39 per board pinout
 #define BOARD_I2C_FREQ_HZ   400000
 
 // --- Touch controller (FT3168) ---

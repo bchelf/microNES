@@ -45,8 +45,8 @@ static const char *TAG = "display";
 #define QSPI_INST_WRITE_SINGLE  0x02
 #define QSPI_INST_WRITE_QUAD    0x32
 
-// DMA-capable row buffer in internal SRAM for pixel streaming
-// (256 pixels × 2 bytes = 512 bytes per scanline)
+// DMA-capable scratch buffer in internal SRAM (used by display_fill and
+// display_write_region for chunked transfers from non-DMA sources).
 #define ROW_BUF_PIXELS  512
 static DMA_ATTR uint8_t s_row_buf[ROW_BUF_PIXELS * 2];
 
@@ -61,15 +61,16 @@ static bool s_streaming = false;
 // cmd + params transferred in single-bit SPI mode.
 static void lcd_cmd(uint8_t cmd, const uint8_t *params, size_t n_params)
 {
-    // Pack command into the 24-bit SPI address field:
-    //   addr[23:16] = 0x00
-    //   addr[15:8]  = cmd
+    // Pack command into the 24-bit SPI address field.
+    // SH8601 expects the DCS command byte in addr[23:16] (MSB first):
+    //   addr[23:16] = cmd
+    //   addr[15:8]  = 0x00
     //   addr[7:0]   = 0x00
     spi_transaction_ext_t t = {
         .base = {
             .flags = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR,
             .cmd   = QSPI_INST_WRITE_SINGLE,
-            .addr  = (uint32_t)cmd << 8,
+            .addr  = (uint32_t)cmd << 16,
             .tx_buffer = (n_params > 0) ? params : NULL,
             .length    = n_params * 8,
         },
@@ -93,7 +94,7 @@ static void lcd_pixel_begin(void)
             .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
                     | SPI_TRANS_MODE_QIO | SPI_TRANS_CS_KEEP_ACTIVE,
             .cmd    = QSPI_INST_WRITE_QUAD,
-            .addr   = (uint32_t)SH8601_RAMWR << 8,
+            .addr   = (uint32_t)SH8601_RAMWR << 16,
             .tx_buffer = NULL,
             .length    = 0,
         },
@@ -205,7 +206,8 @@ bool display_init(void)
         .data5_io_num    = -1,
         .data6_io_num    = -1,
         .data7_io_num    = -1,
-        .max_transfer_sz = ROW_BUF_PIXELS * 2 + 32,
+        // Allow transfers up to one full NES frame (256×240 × 2 bytes) plus overhead
+        .max_transfer_sz = (256 * 240 * 2) + 64,
         .flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_QUAD,
     };
 
@@ -291,6 +293,47 @@ void display_write_row(uint16_t x, uint16_t row_y, uint16_t w,
                        const uint16_t *row)
 {
     display_write_region(x, row_y, w, 1, row);
+}
+
+// Send a pre-rendered, DMA-accessible buffer directly – no intermediate copy.
+// buf must reside in internal SRAM (always the case when PSRAM is disabled).
+// This is the fast path for full-frame NES blits (one SPI transaction).
+void display_blit_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                         const uint16_t *buf)
+{
+    lcd_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    ESP_ERROR_CHECK(spi_device_acquire_bus(s_spi, portMAX_DELAY));
+
+    // RAMWR header in quad mode, CS stays active
+    spi_transaction_ext_t hdr = {
+        .base = {
+            .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
+                    | SPI_TRANS_MODE_QIO | SPI_TRANS_CS_KEEP_ACTIVE,
+            .cmd    = QSPI_INST_WRITE_QUAD,
+            .addr   = (uint32_t)SH8601_RAMWR << 16,
+            .tx_buffer = NULL,
+            .length    = 0,
+        },
+        .command_bits = 8,
+        .address_bits = 24,
+    };
+    ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, (spi_transaction_t *)&hdr));
+
+    // Pixel data – single large DMA transaction, CS deasserts at end
+    spi_transaction_ext_t px = {
+        .base = {
+            .flags  = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR
+                    | SPI_TRANS_MODE_QIO,
+            .cmd    = 0,
+            .addr   = 0,
+            .tx_buffer = buf,
+            .length    = (uint32_t)w * h * 16,  // bits
+        },
+        .command_bits = 0,
+        .address_bits = 0,
+    };
+    ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, (spi_transaction_t *)&px));
+    spi_device_release_bus(s_spi);
 }
 
 // ── Streaming API ──────────────────────────────────────────────
