@@ -53,10 +53,12 @@ static const char *TAG = "display";
 static DMA_ATTR uint8_t s_row_buf[ROW_BUF_PIXELS * 2];
 
 // display_blit_region sends pixels directly from the caller's DMA-accessible
-// buffer (s_frame_rgb in main.c is DMA_ATTR) in large chunks to minimise
-// per-transaction SPI overhead.  One chunk = the whole NES frame (61440 px =
-// 122880 bytes), so the entire blit is a single SPI transaction instead of 240.
-#define BLIT_CHUNK_PIXELS  (NES_DISPLAY_W * NES_DISPLAY_H)
+// buffer (s_frame_rgb in main.c is DMA_ATTR) in chunks of BLIT_CHUNK_PIXELS
+// to reduce per-transaction SPI overhead.  4096 px = 8192 bytes/chunk gives
+// 15 transactions for a 256×240 frame instead of 240, a 16× reduction.
+// Kept safely below the ESP32-S3 GDMA per-descriptor limit (~4095 B) by
+// chaining two descriptors, and well within max_transfer_sz below.
+#define BLIT_CHUNK_PIXELS  4096
 
 static spi_device_handle_t s_spi = NULL;
 static bool s_streaming = false;
@@ -210,10 +212,10 @@ bool display_init(void)
         .data5_io_num    = -1,
         .data6_io_num    = -1,
         .data7_io_num    = -1,
-        // Must hold the full NES frame (256×240×2 = 122880 bytes) so
-        // display_blit_region can send it in a single DMA transaction.
-        // 122944 = 122880 + 64-byte alignment headroom.
-        .max_transfer_sz = NES_DISPLAY_W * NES_DISPLAY_H * 2 + 64,
+        // Must hold one BLIT_CHUNK_PIXELS chunk (4096 px × 2 bytes = 8192 bytes)
+        // plus alignment headroom.  Keeping this small avoids large DMA
+        // descriptor allocations that fragment the heap before ROM load.
+        .max_transfer_sz = BLIT_CHUNK_PIXELS * 2 + 64,
         .flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_QUAD,
     };
 
