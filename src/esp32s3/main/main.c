@@ -24,10 +24,11 @@ static const char *TAG = "micrones";
 //  Embedded ROM (injected by CMakeLists.txt via EMBED_FILES)
 // ─────────────────────────────────────────────────────────────
 #if MICRONES_HAS_ROM
-extern const uint8_t    _binary_rom_nes_start[];
-extern const uint8_t    _binary_rom_nes_end[];
-#define ROM_START  _binary_rom_nes_start
-#define ROM_SIZE   ((size_t)(_binary_rom_nes_end - _binary_rom_nes_start))
+// Symbol names are derived from the filename: roms/smb1.nes → smb1_nes
+extern const uint8_t    _binary_smb1_nes_start[];
+extern const uint8_t    _binary_smb1_nes_end[];
+#define ROM_START  _binary_smb1_nes_start
+#define ROM_SIZE   ((size_t)(_binary_smb1_nes_end - _binary_smb1_nes_start))
 #endif
 
 // ─────────────────────────────────────────────────────────────
@@ -95,7 +96,7 @@ static void emulator_task(void *arg)
     nes_reset(&s_nes);
     ESP_LOGI(TAG, "Emulator running");
 #else
-    ESP_LOGW(TAG, "No ROM embedded.  Place rom.nes in src/esp32s3/main/ and rebuild.");
+    ESP_LOGW(TAG, "No ROM embedded.  Place roms/smb1.nes in the repo root and rebuild.");
     goto idle;
 #endif
 

@@ -3,15 +3,16 @@ cmake_minimum_required(VERSION 3.16)
 # Path to the portable NES core (relative to this CMakeLists.txt)
 set(MICRONES_COMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../../common")
 
-# Optionally embed a ROM: place rom.nes alongside this file before building.
-if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/rom.nes")
-    set(EMBED_ROM_FILES EMBED_FILES "rom.nes")
+# ROM lives at roms/smb1.nes in the repository root.
+# From src/esp32s3/main/ that is three directories up.
+set(MICRONES_ROM_PATH "${CMAKE_CURRENT_LIST_DIR}/../../../roms/smb1.nes")
+
+if(EXISTS "${MICRONES_ROM_PATH}")
     set(MICRONES_HAS_ROM_FLAG 1)
-    message(STATUS "microNES: embedding rom.nes")
+    message(STATUS "microNES: embedding ${MICRONES_ROM_PATH}")
 else()
-    set(EMBED_ROM_FILES "")
     set(MICRONES_HAS_ROM_FLAG 0)
-    message(WARNING "microNES: rom.nes not found in ${CMAKE_CURRENT_LIST_DIR} – build will succeed but the emulator won't run without a ROM. Copy your NES ROM to src/esp32s3/main/rom.nes and rebuild.")
+    message(WARNING "microNES: roms/smb1.nes not found in repo root – build will succeed but the emulator won't run. Add the ROM at roms/smb1.nes and rebuild.")
 endif()
 
 idf_component_register(
@@ -43,8 +44,12 @@ idf_component_register(
         esp_lcd
         nvs_flash
         log
-    ${EMBED_ROM_FILES}
 )
+
+# Embed the ROM binary using target_add_binary_data, which accepts absolute paths.
+if(MICRONES_HAS_ROM_FLAG)
+    target_add_binary_data(${COMPONENT_LIB} "${MICRONES_ROM_PATH}" BINARY)
+endif()
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC
     # NES core flags
