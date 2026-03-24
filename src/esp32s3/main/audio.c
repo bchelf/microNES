@@ -2,6 +2,7 @@
 #include "board.h"
 
 #include "driver/ledc.h"
+#include "esp_attr.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 
@@ -57,7 +58,7 @@ static void ledc_setup(void)
 // ─────────────────────────────────────────────────────────────
 //  esp_timer ISR – fires at the configured sample rate
 // ─────────────────────────────────────────────────────────────
-static void IRAM_ATTR audio_timer_cb(void *arg)
+static void audio_timer_cb(void *arg)
 {
     uint32_t head = s_head;
     uint32_t tail = s_tail;
@@ -83,7 +84,7 @@ void audio_init(uint32_t sample_rate)
     esp_timer_create_args_t args = {
         .callback        = audio_timer_cb,
         .arg             = NULL,
-        .dispatch_method = ESP_TIMER_ISR,
+        .dispatch_method = ESP_TIMER_TASK,
         .name            = "audio",
     };
     ESP_ERROR_CHECK(esp_timer_create(&args, &timer));
