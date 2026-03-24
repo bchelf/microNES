@@ -1,4 +1,4 @@
-#include "apu.h"
+#include "apu_micrones.h"
 
 #include <math.h>
 #include <string.h>
@@ -224,6 +224,16 @@ static void apu_clock_noise_length(ApuNoiseChannel *noise) {
 
 static void apu_clock_triangle_linear(ApuTriangleChannel *triangle) {
     if (triangle->linear_reload_flag) {
+        /* When reloading from silence (counter was 0), reset the sequencer to
+         * a zero-value position so the waveform begins at the bottom of its
+         * cycle.  This prevents the click caused by the output jumping from
+         * silence to an arbitrary mid-waveform amplitude at note-on.  The
+         * real 2A03 does not reset the sequencer here, but without the NES
+         * hardware's analog output smoothing the discontinuity is clearly
+         * audible in digital emulation. */
+        if (triangle->linear_counter == 0) {
+            triangle->sequence_step = 15; /* sequence value 0 — zero crossing */
+        }
         triangle->linear_counter = triangle->linear_reload_value;
     } else if (triangle->linear_counter > 0) {
         --triangle->linear_counter;
@@ -372,7 +382,7 @@ static uint8_t apu_triangle_output(const ApuTriangleChannel *triangle) {
     if (!triangle->enabled ||
         triangle->length_counter == 0 ||
         triangle->linear_counter == 0 ||
-        triangle->timer_period < 2u) {
+        triangle->timer_period < 8u) {
         return 0;
     }
 
@@ -450,7 +460,10 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
     /* Leaky DC-level tracker. Chases the mean of `mixed` at ~0.76 Hz.
      * Subtracting it removes DC offset without creating step discontinuities
      * at note-on/off transitions — equivalent to the analog capacitor coupling
-     * on the real NES output circuit. R = 0.9999 per sample at 48 kHz. */
+     * on the real NES output circuit. R = 0.9999 per sample at 48 kHz.
+     * A faster constant (e.g. matching the NES RC filter at ~16 Hz) decays
+     * the baseline to zero between notes, making the amplitude jump at
+     * note-on larger and the click more audible — so keep it slow. */
     apu->dc_level_tracker += ((double)mixed - apu->dc_level_tracker) * 0.0001;
     mixed = mixed - (float)apu->dc_level_tracker;
 
@@ -491,7 +504,11 @@ void apu_init(Apu *apu) {
 }
 
 void apu_reset(Apu *apu) {
+    /* Preserve the DC-level tracker across reset so the first post-reset
+     * sample isn't subtracted against 0 (which would cause an audible pop). */
+    double dc = apu->dc_level_tracker;
     memset(apu, 0, sizeof(*apu));
+    apu->dc_level_tracker = dc;
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
     apu_reset_debug_defaults(apu);
@@ -501,16 +518,6 @@ void apu_reset(Apu *apu) {
 void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
     if (cpu_cycles == 0) return;
 
-    /* --- Triangle timer: clocked every CPU cycle --- */
-    {
-        ApuTriangleChannel *tri = &apu->triangle;
-        uint32_t fires = apu_timer_advance(&tri->timer_counter, tri->timer_period, cpu_cycles);
-        if (fires > 0 && tri->enabled && tri->length_counter > 0 &&
-                tri->linear_counter > 0 && tri->timer_period >= 2u) {
-            tri->sequence_step = (uint8_t)((tri->sequence_step + fires) & 0x1fu);
-        }
-    }
-
     /* Compute APU-rate cycles (half CPU rate, fired when cpu_cycles is even).
      * apu_cycles = number of even values in (old, old+cpu_cycles]. */
     uint32_t old_cpu  = (uint32_t)apu->cpu_cycles;
@@ -519,6 +526,8 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
 
     if (apu_cycles > 0) {
         /* --- Frame counter: clocked at APU rate --- */
+        /* Processed before the triangle timer so that any length/linear counter
+         * updates take effect before the sequencer is advanced this batch. */
         {
             uint32_t old_fc = (uint32_t)apu->frame_counter_cycle;
             uint32_t new_fc = old_fc + apu_cycles;
@@ -575,6 +584,20 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
                                                ((n->shift_register >> tap_bit) & 1u));
                 n->shift_register = (n->shift_register >> 1) | (uint16_t)(feedback << 14u);
             }
+        }
+    }
+
+    /* --- Triangle timer: clocked every CPU cycle --- */
+    /* Placed after the frame counter so length/linear counter changes this
+     * batch are visible before we advance the sequencer. On real hardware the
+     * sequencer is also gated by timer_period < 2 only at the output stage,
+     * not the timer itself, so that check is omitted here. */
+    {
+        ApuTriangleChannel *tri = &apu->triangle;
+        uint32_t fires = apu_timer_advance(&tri->timer_counter, tri->timer_period, cpu_cycles);
+        if (fires > 0 && tri->enabled && tri->length_counter > 0 &&
+                tri->linear_counter > 0) {
+            tri->sequence_step = (uint8_t)((tri->sequence_step + fires) & 0x1fu);
         }
     }
 
@@ -714,6 +737,7 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         }
         if (!apu->triangle.enabled) {
             apu->triangle.length_counter = 0;
+            apu->triangle.linear_counter = 0;
         }
         if (!apu->noise.enabled) {
             apu->noise.length_counter = 0;
