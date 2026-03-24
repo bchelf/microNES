@@ -199,7 +199,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(
         emulator_task,
         "emulator",
-        16 * 1024,  // 16 KB stack
+        32 * 1024,  // 32 KB stack
         NULL,
         5,          // priority
         NULL,
