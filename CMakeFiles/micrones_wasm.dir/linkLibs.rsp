@@ -1,1 +1,1 @@
- libmicrones_core.a 
+ libmicrones_core.a -lm 

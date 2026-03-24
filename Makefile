@@ -142,29 +142,29 @@ micrones_wasm/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_wasm.dir/build.make CMakeFiles/micrones_wasm.dir/build
 .PHONY : micrones_wasm/fast
 
-src/common/apu.o: src/common/apu.c.o
-.PHONY : src/common/apu.o
+src/common/apu_micrones.o: src/common/apu_micrones.c.o
+.PHONY : src/common/apu_micrones.o
 
 # target to build an object file
-src/common/apu.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/apu.c.o
-.PHONY : src/common/apu.c.o
+src/common/apu_micrones.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o
+.PHONY : src/common/apu_micrones.c.o
 
-src/common/apu.i: src/common/apu.c.i
-.PHONY : src/common/apu.i
+src/common/apu_micrones.i: src/common/apu_micrones.c.i
+.PHONY : src/common/apu_micrones.i
 
 # target to preprocess a source file
-src/common/apu.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/apu.c.i
-.PHONY : src/common/apu.c.i
+src/common/apu_micrones.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.i
+.PHONY : src/common/apu_micrones.c.i
 
-src/common/apu.s: src/common/apu.c.s
-.PHONY : src/common/apu.s
+src/common/apu_micrones.s: src/common/apu_micrones.c.s
+.PHONY : src/common/apu_micrones.s
 
 # target to generate assembly for a file
-src/common/apu.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/apu.c.s
-.PHONY : src/common/apu.c.s
+src/common/apu_micrones.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.s
+.PHONY : src/common/apu_micrones.c.s
 
 src/common/cart.o: src/common/cart.c.o
 .PHONY : src/common/cart.o
@@ -392,9 +392,9 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... micrones_core"
 	@echo "... micrones_wasm"
-	@echo "... src/common/apu.o"
-	@echo "... src/common/apu.i"
-	@echo "... src/common/apu.s"
+	@echo "... src/common/apu_micrones.o"
+	@echo "... src/common/apu_micrones.i"
+	@echo "... src/common/apu_micrones.s"
 	@echo "... src/common/cart.o"
 	@echo "... src/common/cart.i"
 	@echo "... src/common/cart.s"

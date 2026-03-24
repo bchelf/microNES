@@ -424,6 +424,7 @@ const RING_MASK = RING_SIZE - 1;
 const audioRing = new Float32Array(RING_SIZE);
 let ringWrite = 0;
 let ringRead  = 0;
+let ringLastSample = 0.0; // used to fade out on underflow instead of hard-cutting to 0
 
 function ringPush(s) {
     if ((ringWrite - ringRead) < RING_SIZE) {
@@ -432,12 +433,21 @@ function ringPush(s) {
 }
 
 function ringPop() {
-    if (ringRead >= ringWrite) return 0.0;
-    return audioRing[ringRead++ & RING_MASK];
+    if (ringRead >= ringWrite) {
+        // Exponential fade to silence rather than a hard cut to 0, which would
+        // create a step discontinuity and an audible click. Half-life ~29 ms at
+        // 48 kHz (0.9995^1386 ≈ 0.5).
+        ringLastSample *= 0.9995;
+        return ringLastSample;
+    }
+    ringLastSample = audioRing[ringRead++ & RING_MASK];
+    return ringLastSample;
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
-const AUDIO_TMP_SAMPLES = 4096;
+// Must be <= APU_PCM_CAPACITY (1536) so the drain loop condition (n ===
+// AUDIO_TMP_SAMPLES) can actually be true and flush a full buffer in one shot.
+const AUDIO_TMP_SAMPLES = 1536;
 
 let romLoaded        = false;
 let running          = false;
@@ -500,6 +510,12 @@ function setupAudio() {
         audioCtx = new AudioContext({ sampleRate: nesAudioRate });
     } catch (_) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.sampleRate !== nesAudioRate) {
+        setStatus('Warning: audio running at ' + audioCtx.sampleRate +
+                  ' Hz instead of ' + nesAudioRate + ' Hz — sound may be off-pitch.');
+        console.warn('AudioContext sample rate mismatch:', audioCtx.sampleRate,
+                     'Hz (expected', nesAudioRate, 'Hz)');
     }
     // ScriptProcessorNode: deprecated but widely supported and requires no
     // separate AudioWorklet file, keeping this page self-contained.

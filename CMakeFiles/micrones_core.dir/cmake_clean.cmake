@@ -1,6 +1,6 @@
 file(REMOVE_RECURSE
-  "CMakeFiles/micrones_core.dir/src/common/apu.c.o"
-  "CMakeFiles/micrones_core.dir/src/common/apu.c.o.d"
+  "CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o"
+  "CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/cart.c.o"
   "CMakeFiles/micrones_core.dir/src/common/cart.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o"

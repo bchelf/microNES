@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/runner/work/microNES/microNES/src/common/apu.c" "CMakeFiles/micrones_core.dir/src/common/apu.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/apu.c.o.d"
+  "/home/runner/work/microNES/microNES/src/common/apu_micrones.c" "CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/cart.c" "CMakeFiles/micrones_core.dir/src/common/cart.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/cart.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/cpu6502.c" "CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c" "CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o.d"
