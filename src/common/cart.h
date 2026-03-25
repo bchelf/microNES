@@ -8,6 +8,8 @@
 typedef enum {
     NES_MIRROR_HORIZONTAL = 0,
     NES_MIRROR_VERTICAL = 1,
+    NES_MIRROR_ONE_SCREEN_LOWER = 2,
+    NES_MIRROR_ONE_SCREEN_UPPER = 3,
 } NesMirrorMode;
 
 typedef struct {
@@ -29,9 +31,15 @@ typedef struct {
     uint8_t *chr_row_pixels;
     size_t chr_row_count;
     bool chr_is_ram;
+    bool is_nes2;
     uint8_t mapper;
+    uint8_t submapper;
     uint8_t prg_banks;
     uint8_t chr_banks;
+    uint8_t prg_ram_shift;
+    uint8_t prg_nvram_shift;
+    uint8_t chr_ram_shift;
+    uint8_t chr_nvram_shift;
     NesMirrorMode mirror_mode;
     /* MMC1 (mapper 1) serial shift register state */
     uint8_t mmc1_shift;        /* accumulated bits, LSB-first */

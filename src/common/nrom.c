@@ -24,10 +24,19 @@ void nrom_cpu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
 }
 
 uint8_t nrom_ppu_read(const NesCartridge *cartridge, uint16_t addr) {
+    size_t mapped;
+
     if (cartridge->chr_size == 0) {
         return 0;
     }
-    return cartridge->chr_data[addr & cartridge->chr_mask];
+
+    if (cartridge->mapper == 1) {
+        mapped = mmc1_map_chr_addr(cartridge, addr);
+    } else {
+        mapped = addr & cartridge->chr_mask;
+    }
+
+    return cartridge->chr_data[mapped];
 }
 
 void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
@@ -38,7 +47,11 @@ void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
         return;
     }
 
-    masked = addr % cartridge->chr_size;
+    if (cartridge->mapper == 1) {
+        masked = mmc1_map_chr_addr(cartridge, addr);
+    } else {
+        masked = addr % cartridge->chr_size;
+    }
     cartridge->chr_data[masked] = value;
 
     if (cartridge->chr_row_pixels == NULL) {
@@ -58,4 +71,3 @@ void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
         }
     }
 }
-

@@ -381,8 +381,12 @@ static uint16_t ppu_nametable_index(const NesCartridge *cartridge, uint16_t addr
 
     if (cartridge->mirror_mode == NES_MIRROR_VERTICAL) {
         physical = table & 0x01u;
-    } else {
+    } else if (cartridge->mirror_mode == NES_MIRROR_HORIZONTAL) {
         physical = (uint16_t)((table >> 1) & 0x01u);
+    } else if (cartridge->mirror_mode == NES_MIRROR_ONE_SCREEN_UPPER) {
+        physical = 1u;
+    } else {
+        physical = 0u;
     }
 
     return (uint16_t)(physical * 0x0400u + inner);
