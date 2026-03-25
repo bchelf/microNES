@@ -82,6 +82,9 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
     cpu->pc = (uint16_t)(pc + 1u);
     if (pc >= 0x8000u) {
         off = (uint32_t)(pc - 0x8000u);
+        if (nes->cartridge.mapper == 4) {
+            return nes->cartridge.prg_banks_8k[off >> 13][off & 0x1fffu];
+        }
         if (off < 0x4000u) {
             return nes->cartridge.prg_bank_lo[off];
         }
@@ -108,12 +111,17 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
     if (pc >= 0x8000u && (uint16_t)(pc + 1u) >= 0x8000u) {
         lo_off = (uint32_t)(pc - 0x8000u);
         hi_off = (uint32_t)((uint16_t)(pc + 1u) - 0x8000u);
-        lo = (lo_off < 0x4000u)
-            ? nes->cartridge.prg_bank_lo[lo_off]
-            : nes->cartridge.prg_bank_hi[lo_off - 0x4000u];
-        hi = (hi_off < 0x4000u)
-            ? nes->cartridge.prg_bank_lo[hi_off]
-            : nes->cartridge.prg_bank_hi[hi_off - 0x4000u];
+        if (nes->cartridge.mapper == 4) {
+            lo = nes->cartridge.prg_banks_8k[lo_off >> 13][lo_off & 0x1fffu];
+            hi = nes->cartridge.prg_banks_8k[hi_off >> 13][hi_off & 0x1fffu];
+        } else {
+            lo = (lo_off < 0x4000u)
+                ? nes->cartridge.prg_bank_lo[lo_off]
+                : nes->cartridge.prg_bank_hi[lo_off - 0x4000u];
+            hi = (hi_off < 0x4000u)
+                ? nes->cartridge.prg_bank_lo[hi_off]
+                : nes->cartridge.prg_bank_hi[hi_off - 0x4000u];
+        }
         cpu->pc = (uint16_t)(pc + 2u);
     } else {
         lo = cpu_fetch8(cpu, nes);
@@ -433,6 +441,11 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
         nes->ppu.nmi_pending = false;
         ++nes->stats.nmi_count;
         cpu_service_interrupt(cpu, nes, 0xfffau, false);
+        return true;
+    }
+    if (nes->cartridge.irq_pending && (cpu->p & CPU6502_FLAG_I) == 0) {
+        nes->cartridge.irq_pending = false;
+        cpu_service_interrupt(cpu, nes, 0xfffeu, false);
         return true;
     }
 

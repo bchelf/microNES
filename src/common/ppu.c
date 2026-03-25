@@ -1411,6 +1411,28 @@ static inline void ppu_step_cycle_1(Ppu *ppu) {
 }
 
 static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
+    if (cartridge->mapper == 4) {
+        bool show_bg = (ppu->mask & PPU_MASK_SHOW_BG) != 0;
+        bool show_sprites = (ppu->mask & PPU_MASK_SHOW_SPRITES) != 0;
+        bool sprites_8x16 = (ppu->ctrl & 0x20u) != 0;
+        bool bg_high = show_bg && (ppu->ctrl & 0x10u) != 0;
+        bool sprite_high = show_sprites && (sprites_8x16 || (ppu->ctrl & 0x08u) != 0);
+        bool visible_or_prerender = (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) || ppu->scanline == 261;
+
+        if (visible_or_prerender && ppu_rendering_enabled(ppu)) {
+            /* Approximate MMC3's PPU A12 behavior at scanline granularity:
+             * force a low->high->low sequence once per scanline only when the
+             * current rendering setup would actually fetch from $1000-$1FFF. */
+            mmc3_ppu_a12_update(cartridge, false);
+            if (bg_high || sprite_high) {
+                mmc3_ppu_a12_update(cartridge, true);
+                mmc3_ppu_a12_update(cartridge, false);
+            }
+        } else {
+            mmc3_ppu_a12_update(cartridge, false);
+        }
+    }
+
     if (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
         uint64_t render_started_us = ppu_profile_now_us(ppu);
         uint32_t render_started_cycles = micrones_profile_now_cycles();

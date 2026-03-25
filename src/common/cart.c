@@ -1,5 +1,6 @@
 #include "cart.h"
 #include "mmc1.h"
+#include "mmc3.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,13 +139,17 @@ static bool cart_parse_ines_image(
         return false;
     }
     cartridge->mapper = (uint8_t)mapper;
-    if (cartridge->mapper != 0 && cartridge->mapper != 1) {
-        cart_set_error(error, error_size, "only mapper 0 (NROM) and mapper 1 (MMC1) are supported");
+    if (cartridge->mapper != 0 && cartridge->mapper != 1 && cartridge->mapper != 4) {
+        cart_set_error(error, error_size, "only mapper 0 (NROM), mapper 1 (MMC1), and mapper 4 (MMC3) are supported");
         return false;
     }
 
     if (is_nes2 && cartridge->mapper == 1 && cartridge->submapper != 0 && cartridge->submapper != 5) {
         cart_set_error(error, error_size, "only mapper 1 submapper 0 and 5 are supported");
+        return false;
+    }
+    if (is_nes2 && cartridge->mapper == 4 && cartridge->submapper != 0) {
+        cart_set_error(error, error_size, "only mapper 4 submapper 0 is supported");
         return false;
     }
 
@@ -224,9 +229,11 @@ static bool cart_parse_ines_image(
         cartridge->prg_bank_hi = (cartridge->prg_rom_size == 0x4000u)
             ? cartridge->prg_rom                        /* 16 KiB: mirror */
             : cartridge->prg_rom + 0x4000u;             /* 32 KiB: second half */
-    } else {
+    } else if (cartridge->mapper == 1) {
         /* mapper 1 / MMC1: mmc1_cart_init sets shift register and bank pointers */
         mmc1_cart_init(cartridge);
+    } else {
+        mmc3_cart_init(cartridge);
     }
 
     if (!cart_build_chr_row_cache(cartridge, error, error_size)) {
@@ -381,8 +388,12 @@ bool cart_load_ines_const_memory(
         memcpy(prg_dram, old_prg, cartridge->prg_rom_size);
         cartridge->prg_rom     = prg_dram;
         /* Rebase precomputed bank pointers into the new DRAM allocation */
-        cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);
-        cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);
+        if (cartridge->mapper == 4) {
+            mmc3_rebase_banks(cartridge, old_prg);
+        } else {
+            cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);
+            cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);
+        }
         cartridge->rom_image   = prg_dram;   // cart_unload will free this
     } else {
         // Not enough heap for PRG copy – run from flash (slower but correct).
