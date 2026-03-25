@@ -588,6 +588,17 @@ int main(int argc, char **argv) {
             break;
         }
 
+        ++presented_frames;
+        now_ns = host_now_ns();
+        micrones_frame_pacer_frame_done(&pacer, now_ns);
+
+        if (options.max_frames == 0 || presented_frames < options.max_frames) {
+            if (micrones_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
+                host_wait_until_ns(pacer.wait_until_ns);
+                micrones_frame_pacer_note_wait_complete(&pacer, host_now_ns());
+            }
+        }
+
         while (nes_audio_available_samples(&nes) > 0) {
             size_t sample_count = nes_audio_read_samples(&nes, audio_samples, sizeof(audio_samples) / sizeof(audio_samples[0]));
             size_t remaining;
@@ -612,9 +623,7 @@ int main(int argc, char **argv) {
             break;
         }
 
-        ++presented_frames;
         now_ns = host_now_ns();
-        micrones_frame_pacer_frame_done(&pacer, now_ns);
 
         if (now_ns - stats_window_start_ns >= HOST_FPS_SAMPLE_MS * 1000000ull) {
             micrones_frame_pacer_get_stats(&pacer, now_ns, &pacer_stats);
@@ -650,11 +659,6 @@ int main(int argc, char **argv) {
 
         if (options.max_frames != 0 && presented_frames >= options.max_frames) {
             break;
-        }
-
-        if (micrones_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
-            host_wait_until_ns(pacer.wait_until_ns);
-            micrones_frame_pacer_note_wait_complete(&pacer, host_now_ns());
         }
     }
 

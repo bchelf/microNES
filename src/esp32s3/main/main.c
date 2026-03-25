@@ -175,8 +175,10 @@ static void emulator_task(void *arg)
         ESP_LOGI(TAG, "touch_init OK");
     }
 
+    nes_init(&s_nes);
+
     ESP_LOGI(TAG, "audio_init...");
-    audio_init(24000);
+    audio_init(nes_audio_sample_rate(&s_nes));
     ESP_LOGI(TAG, "audio_init OK");
 
     // ── Draw static UI overlay ───────────────────────────────
@@ -198,8 +200,6 @@ static void emulator_task(void *arg)
     }
 
     // ── Load ROM ─────────────────────────────────────────────
-    nes_init(&s_nes);
-
 #if MICRONES_HAS_ROM
     ESP_LOGI(TAG, "Loading embedded ROM (%u bytes)", (unsigned)ROM_SIZE);
     if (!nes_load_cartridge_const_memory(&s_nes, ROM_START, ROM_SIZE)) {

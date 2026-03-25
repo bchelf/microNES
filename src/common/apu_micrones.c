@@ -145,6 +145,9 @@ static bool apu_pulse_sweep_muted(const ApuPulseChannel *pulse) {
     if (pulse->sweep_shift == 0u) {
         return false;
     }
+    if (pulse->sweep_negate) {
+        return false;
+    }
     return apu_pulse_sweep_target(pulse) > 0x07ffu;
 }
 
@@ -676,8 +679,12 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         if (pulse->enabled) {
             pulse->length_counter = k_apu_length_table[(value >> 3) & 0x1fu];
         }
-        /* Do not reset timer_counter or duty_step: the 2A03 duty sequencer is
-         * free-running and the timer reloads naturally at the next expiry. */
+        /* $4003/$4007 note-start writes must restart the pulse timer and
+         * sequencer so the new note begins from a stable waveform phase.
+         * Leaving them free-running produces wrong-sounding attacks, most
+         * noticeably on pulse1 melody lines. */
+        pulse->timer_counter = pulse->timer_period;
+        pulse->duty_step = 0;
         pulse->envelope_start = true;
         break;
     }
