@@ -491,6 +491,9 @@ void video_ntsc_core1_entry(void) {
     irq_set_enabled(DMA_IRQ_1, true);
     printf("[c1] irq1 registered and enabled\n");
 
+    irq_set_exclusive_handler(DMA_IRQ_1, dma_irq1_handler);
+    irq_set_enabled(DMA_IRQ_1, true);
+
     ScanlineQueue *queue = core1_video_get_queue();
 
     /*

@@ -47,6 +47,7 @@ int main(void) {
      * 315 MHz / 22 = 14.318182 MHz sample rate (NTSC subcarrier × 4).
      * render_scanline_composite takes ~15k-20k cycles; budget at 315 MHz is
      * 20,064 cycles/scanline — half-speed would break the DMA chain. */
+     * 315 MHz / 22 = 14.318182 MHz sample rate (NTSC subcarrier × 4). */
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(10);
     set_sys_clock_pll(1260000000, 2, 2);   /* → 315 MHz */
