@@ -1,11 +1,67 @@
+;
+; video_ntsc.pio  —  4-bit binary-weighted composite DAC output
+;
+; Hardware mapping (GP0–GP3 via binary-weighted resistor network):
+;   GP0 = bit 0, weight 1,  1000 Ω
+;   GP1 = bit 1, weight 2,   485 Ω  (470+15)
+;   GP2 = bit 2, weight 4,   242 Ω  (220+22)
+;   GP3 = bit 3, weight 8,   120 Ω
+;   Output: Node A → 75.5 Ω series → 75 Ω TV load
+;
+; DAC codes (analytically derived, see video_ntsc.c):
+;   Code  0: 0.000 V  — sync tip (GP4 MOSFET clamp active during sync)
+;   Code  4: 0.306 V  — blank / back-porch level
+;   Code 13: 0.998 V  — white luma
+;   Code 15: 1.151 V  — peak chroma headroom
+;
+; Sample rate: 315 MHz sys_clk ÷ 22 cycles/instruction = 14.318182 MHz
+;   315,000,000 / 14,318,180 = 22.000 exactly
+;
+; Each 'out pins, 4 [21]' = 1 execution cycle + 21 delay = 22 sys_clk cycles.
+; PIO clock divider MUST be 1.0 (no division).
+;
+; FIFO packing: 8 nibbles per 32-bit word, MSB-first (shift-left, autopull at 32).
+;   Word bits [31:28] = nibble 0 (first sample), [3:0] = nibble 7 (eighth sample).
+;
+
 .program video_ntsc
 
-; One 2-bit sample is shifted to GP0..GP1 each PIO clock.
-; Sample encoding with the resistor DAC wiring:
-;   0b00 = sync
-;   0b01 = black / blank
-;   0b11 = white
-
 .wrap_target
-    out pins, 2
+    out pins, 4  [21]   ; emit 4-bit DAC code on GP0-GP3, hold 22 sys_clk cycles
 .wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+static inline void video_ntsc_program_init(
+    PIO  pio,
+    uint sm,
+    uint offset,
+    uint pin_base       // GP0 — must be 0 to match resistor-DAC wiring
+) {
+    pio_sm_config c = video_ntsc_program_get_default_config(offset);
+
+    // Drive GP0-GP3 from this state machine
+    sm_config_set_out_pins(&c, pin_base, 4);
+
+    // shift_direction=false → shift LEFT (MSB first); autopull at 32-bit threshold (= 8 nibbles)
+    sm_config_set_out_shift(&c, /*shift_direction_right=*/false, /*autopull=*/true, /*threshold=*/32);
+
+    // Join TX FIFOs → 8-entry deep TX FIFO reduces DMA pressure
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    // Run at full sys_clk (315 MHz). The [21] delay gives the 22-cycle sample period.
+    sm_config_set_clkdiv(&c, 1.0f);
+
+    // Claim and configure GPIO pins
+    for (uint i = 0; i < 4; i++) {
+        pio_gpio_init(pio, pin_base + i);
+        gpio_set_drive_strength(pin_base + i, GPIO_DRIVE_STRENGTH_4MA);
+        gpio_set_slew_rate(pin_base + i, GPIO_SLEW_RATE_SLOW);
+    }
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 4, /*output=*/true);
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

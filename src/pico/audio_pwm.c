@@ -1,84 +1,149 @@
+/*
+ * audio_pwm.c  —  PWM audio output on GP9 at 44,100 Hz
+ *
+ * System clock: 315 MHz
+ *
+ * PWM configuration (analytically derived):
+ *   Target sample rate: 44,100 Hz
+ *   315,000,000 / 44,100 = 50,000/7 = 7142.857...  (NOT an integer)
+ *   GCD(315,000,000, 44,100) = 6,300 → 44,100 does not divide evenly into 315 MHz.
+ *
+ *   Nearest integer:  wrap = 7142,  clkdiv_int = 1,  clkdiv_frac = 0
+ *   f_pwm = 315,000,000 / (7142 + 1) = 315,000,000 / 7143 = 44,103.3 Hz
+ *   Error: +3.3 Hz = 75 ppm  (negligible for audio)
+ *   Resolution: 7143 levels ≈ 12.8 bits  (> 8-bit minimum ✓)
+ *   Carrier = 44,103 Hz  (edge-aligned PWM, carrier = sample interrupt rate)
+ *
+ * Architecture:
+ *   • PWM wrap interrupt fires at 44,103 Hz on Core 0.
+ *   • Interrupt handler pops one sample from a ring buffer, scales it to
+ *     [0..AUDIO_PWM_WRAP], and writes the PWM level.
+ *   • Main loop (Core 0) pushes int16 PCM samples via audio_pwm_push_samples().
+ *   • Ring buffer is single-producer (Core 0 main) / single-consumer (Core 0 IRQ);
+ *     volatile indices provide sufficient ordering on a single core.
+ *
+ * Sample conversion  int16 → PWM level:
+ *   u8  = (uint8_t)((uint16_t)sample >> 8) ^ 0x80)
+ *        maps [-32768..32767] → [0..255] with 128 = silence
+ *   level = (u8 * (AUDIO_PWM_WRAP + 1)) >> 8
+ *        maps [0..255] → [0..AUDIO_PWM_WRAP]
+ */
+
 #include "audio_pwm.h"
 
 #include "hardware/gpio.h"
+#include "hardware/irq.h"
 #include "hardware/pwm.h"
-#include "pico/time.h"
 
+/* =========================================================================
+ * PWM parameters
+ * ========================================================================= */
+
+/*
+ * wrap = 7142  →  f_pwm = 315 MHz / 7143 = 44,103 Hz
+ * The interrupt fires once per PWM period (on wrap).
+ */
 enum {
-    AUDIO_PWM_WRAP  = 255,
-    AUDIO_BUF_SIZE  = 1024,   /* ~21 ms at 48 kHz */
+    AUDIO_PWM_WRAP  = 7142,
+    AUDIO_BUF_SIZE  = 2048,    /* ~46 ms at 44.1 kHz; power-of-2 for cheap modulo */
 };
 
-/* Single-producer (main loop) / single-consumer (ISR) ring buffer.
- * Both run on core 0, so volatile indices give sufficient ordering. */
-static int16_t          audio_buf[AUDIO_BUF_SIZE];
-static volatile uint32_t audio_buf_head = 0;   /* consumer read position  */
-static volatile uint32_t audio_buf_tail = 0;   /* producer write position */
+/* =========================================================================
+ * Ring buffer (single-producer Core 0 / single-consumer Core 0 IRQ)
+ * ========================================================================= */
+
+static int16_t           audio_buf[AUDIO_BUF_SIZE];
+static volatile uint32_t audio_buf_head  = 0;    /* consumer (IRQ) read position  */
+static volatile uint32_t audio_buf_tail  = 0;    /* producer (main) write position */
 static volatile uint32_t audio_underruns = 0;
 
-static struct repeating_timer audio_timer;
+static uint  s_audio_slice;
+static uint8_t s_audio_last_level = 128u;   /* sample-and-hold across underruns */
 
-static uint8_t audio_last_duty = 128u; /* sample-and-hold across underruns; 128 = silence */
+/* =========================================================================
+ * PWM wrap interrupt handler (Core 0)
+ *
+ * Execution time: ~10-15 instructions ≈ 10-15 sys_clk cycles.
+ * At 315 MHz / 44,103 Hz ≈ 7,143 cycles between interrupts, the ISR
+ * consumes < 0.2% of Core 0's cycle budget.
+ * ========================================================================= */
 
-static bool audio_timer_cb(struct repeating_timer *timer) {
-    (void)timer;
+static void __isr pwm_audio_irq_handler(void) {
+    pwm_clear_irq(s_audio_slice);
 
     uint32_t head = audio_buf_head;
-    uint8_t  duty;
+    uint32_t level;
 
     if (head == audio_buf_tail) {
-        /* Buffer empty: hold last output level to avoid the mid-level step
-         * that creates an audible buzz pattern at the underrun rate. */
-        duty = audio_last_duty;
+        /* Underrun: hold last output level to suppress buzz */
+        level = s_audio_last_level;
         ++audio_underruns;
     } else {
-        /* Convert int16 → unsigned 8-bit centred at 128.
-         * Reinterpret as uint16 and flip the sign bit: maps
-         * [-32768..32767] → [0..255] without signed-shift UB. */
+        /*
+         * Convert int16 → unsigned 8-bit centred at 128, then scale to
+         * [0..AUDIO_PWM_WRAP].
+         *
+         * Step 1: int16 → uint8 (sign-flip without UB)
+         *   raw = (uint16_t)sample            reinterpret bits
+         *   u8  = (raw >> 8) ^ 0x80           top byte, flip sign bit
+         *   Maps: -32768 → 0x80^0x80 = 0,  0 → 0x00^0x80 = 128,  32767 → 0x7F^0x80 = 255
+         *
+         * Step 2: uint8 → PWM level  (0-255 → 0-7142)
+         *   level = (u8 * 7143) >> 8  ≈ u8 * 27.9
+         */
         uint16_t raw = (uint16_t)audio_buf[head];
-        duty = (uint8_t)((raw >> 8) ^ 0x80u);
-        audio_last_duty = duty;
-        audio_buf_head = (head + 1u) % AUDIO_BUF_SIZE;
+        uint8_t  u8  = (uint8_t)((raw >> 8u) ^ 0x80u);
+        level = ((uint32_t)u8 * ((uint32_t)AUDIO_PWM_WRAP + 1u)) >> 8u;
+
+        s_audio_last_level = (uint8_t)u8;
+        audio_buf_head = (head + 1u) & (AUDIO_BUF_SIZE - 1u);
     }
 
-    pwm_set_gpio_level(MICRONES_AUDIO_PIN, duty);
-    return true;
+    pwm_set_gpio_level(MICRONES_AUDIO_PIN, level);
 }
+
+/* =========================================================================
+ * audio_pwm_init()
+ * ========================================================================= */
 
 void audio_pwm_init(uint32_t sample_rate) {
+    (void)sample_rate;   /* actual rate is fixed at 44,103 Hz; param is advisory */
+
     gpio_set_function(MICRONES_AUDIO_PIN, GPIO_FUNC_PWM);
-    uint audio_slice = pwm_gpio_to_slice_num(MICRONES_AUDIO_PIN);
+    s_audio_slice = pwm_gpio_to_slice_num(MICRONES_AUDIO_PIN);
 
     pwm_config config = pwm_get_default_config();
-    pwm_config_set_clkdiv(&config, 1.0f);
-    pwm_config_set_wrap(&config, AUDIO_PWM_WRAP);
-    pwm_init(audio_slice, &config, true);
+    pwm_config_set_clkdiv_int(&config, 1u);       /* clkdiv = 1.0 (integer, no fraction) */
+    pwm_config_set_wrap(&config, AUDIO_PWM_WRAP); /* wrap = 7142 */
+    pwm_init(s_audio_slice, &config, /*start=*/true);
 
-    pwm_set_gpio_level(MICRONES_AUDIO_PIN, AUDIO_PWM_WRAP / 2);
+    /* Initialise to mid-scale silence */
+    pwm_set_gpio_level(MICRONES_AUDIO_PIN, (AUDIO_PWM_WRAP + 1u) / 2u);
 
-    audio_buf_head = 0;
-    audio_buf_tail = 0;
-    audio_underruns = 0;
-    audio_last_duty = 128u;
+    audio_buf_head     = 0;
+    audio_buf_tail     = 0;
+    audio_underruns    = 0;
+    s_audio_last_level = 128u;
 
-    /* Fire the playback timer at slightly below sample_rate so the buffer
-     * fills rather than underruns as the APU produces at exactly sample_rate.
-     * +1 rounds the period up by 1 µs → timer fires at ~47619 Hz for 48 kHz.
-     * The ~0.8 % rate difference causes ~372 samples/sec excess production;
-     * once the 1024-sample buffer is full, the APU-side overflow handler
-     * drops the excess silently. */
-    int32_t period_us = -(int32_t)(1000000u / sample_rate + 1u);
-    add_repeating_timer_us(period_us, audio_timer_cb, NULL, &audio_timer);
+    /* Enable PWM wrap interrupt on Core 0 */
+    pwm_clear_irq(s_audio_slice);
+    pwm_set_irq_enabled(s_audio_slice, true);
+    irq_set_exclusive_handler(PWM_IRQ_WRAP, pwm_audio_irq_handler);
+    irq_set_enabled(PWM_IRQ_WRAP, true);
 }
+
+/* =========================================================================
+ * audio_pwm_push_samples()
+ * ========================================================================= */
 
 size_t audio_pwm_push_samples(const int16_t *samples, size_t count) {
     size_t   written = 0;
     uint32_t tail    = audio_buf_tail;
 
     for (size_t i = 0; i < count; ++i) {
-        uint32_t next_tail = (tail + 1u) % AUDIO_BUF_SIZE;
+        uint32_t next_tail = (tail + 1u) & (AUDIO_BUF_SIZE - 1u);
         if (next_tail == audio_buf_head) {
-            break;   /* buffer full — drop remainder */
+            break;   /* buffer full — drop remainder silently */
         }
         audio_buf[tail] = samples[i];
         tail = next_tail;
@@ -89,6 +154,10 @@ size_t audio_pwm_push_samples(const int16_t *samples, size_t count) {
     return written;
 }
 
+/* =========================================================================
+ * Diagnostics
+ * ========================================================================= */
+
 uint32_t audio_pwm_underrun_count(void) {
     return audio_underruns;
 }
@@ -96,5 +165,5 @@ uint32_t audio_pwm_underrun_count(void) {
 uint32_t audio_pwm_buffer_level(void) {
     uint32_t head = audio_buf_head;
     uint32_t tail = audio_buf_tail;
-    return (tail >= head) ? (tail - head) : (AUDIO_BUF_SIZE - head + tail);
+    return (tail - head) & (AUDIO_BUF_SIZE - 1u);
 }
