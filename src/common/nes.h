@@ -8,6 +8,7 @@
 #include "framebuffer.h"
 #include "input.h"
 #include "mmc1.h"
+#include "mmc3.h"
 #include "nrom.h"
 #include "ppu.h"
 #include "runtime_config.h"
@@ -127,11 +128,18 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
     // pointers updated on every bank switch; this keeps the hot path to a
     // single subtraction + compare + indexed load regardless of mapper.
     if (addr >= 0x8000u) {
-        uint32_t off = (uint32_t)(addr - 0x8000u);
-        if (off < 0x4000u) {
-            return nes->cartridge.prg_bank_lo[off];
+        if (nes->cartridge.mapper == 4) {
+            uint32_t off = (uint32_t)(addr - 0x8000u);
+            uint32_t bank = off >> 13;
+            return nes->cartridge.prg_banks_8k[bank][off & 0x1fffu];
         }
-        return nes->cartridge.prg_bank_hi[off - 0x4000u];
+        {
+            uint32_t off = (uint32_t)(addr - 0x8000u);
+            if (off < 0x4000u) {
+                return nes->cartridge.prg_bank_lo[off];
+            }
+            return nes->cartridge.prg_bank_hi[off - 0x4000u];
+        }
     }
     if (addr < 0x2000u) {
         return nes->cpu_ram[addr & 0x07ffu];
@@ -194,6 +202,8 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
     if (addr >= 0x8000u) {
         if (nes->cartridge.mapper == 1) {
             mmc1_cpu_write(&nes->cartridge, addr, value);
+        } else if (nes->cartridge.mapper == 4) {
+            mmc3_cpu_write(&nes->cartridge, addr, value);
         }
         /* mapper 0 / NROM: writes to cartridge space are ignored */
         return;

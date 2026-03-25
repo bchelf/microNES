@@ -25,6 +25,7 @@ typedef struct {
      * For MMC1 these are updated by mmc1_cpu_write() on every bank switch. */
     const uint8_t *prg_bank_lo;
     const uint8_t *prg_bank_hi;
+    const uint8_t *prg_banks_8k[4];
     uint8_t *chr_data;
     size_t chr_size;
     uint32_t chr_mask;       /* chr_size - 1; use with & instead of % in hot paths */
@@ -48,6 +49,15 @@ typedef struct {
     uint8_t mmc1_chr0;         /* CHR bank 0 register */
     uint8_t mmc1_chr1;         /* CHR bank 1 register */
     uint8_t mmc1_prg;          /* PRG bank register */
+    /* MMC3 / mapper 4 state */
+    uint8_t mmc3_bank_select;
+    uint8_t mmc3_bank_data[8];
+    uint8_t mmc3_irq_latch;
+    uint8_t mmc3_irq_counter;
+    bool mmc3_irq_reload;
+    bool mmc3_irq_enabled;
+    bool mmc3_a12_level;
+    bool irq_pending;
 } NesCartridge;
 
 bool cart_load_ines_file(NesCartridge *cartridge, const char *path, char *error, size_t error_size);

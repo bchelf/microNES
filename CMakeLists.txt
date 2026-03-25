@@ -35,6 +35,7 @@ set(MICRONES_COMMON_SOURCES
     src/common/frame_pacer.c
     src/common/input.c
     src/common/mmc1.c
+    src/common/mmc3.c
     src/common/nes.c
     src/common/nrom.c
     src/common/ppu.c

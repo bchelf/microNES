@@ -9,3 +9,11 @@ roms/
 .cache/
 src/esp32s3/sdkconfig
 .DS_Store
+best_runs*
+checkpoints*
+eval*
+game_runs*
+logs*
+old-data*
+rl*
+

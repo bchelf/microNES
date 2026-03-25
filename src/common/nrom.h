@@ -3,6 +3,7 @@
 
 #include "cart.h"
 #include "mmc1.h"
+#include "mmc3.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,6 +19,8 @@ static inline size_t nrom_chr_row_index(const NesCartridge *cartridge, uint16_t 
 
     if (cartridge->mapper == 1) {
         masked = mmc1_map_chr_addr(cartridge, pattern_addr);
+    } else if (cartridge->mapper == 4) {
+        masked = mmc3_map_chr_addr(cartridge, pattern_addr);
     } else {
         masked = pattern_addr & cartridge->chr_mask;
     }

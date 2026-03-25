@@ -32,6 +32,8 @@ uint8_t nrom_ppu_read(const NesCartridge *cartridge, uint16_t addr) {
 
     if (cartridge->mapper == 1) {
         mapped = mmc1_map_chr_addr(cartridge, addr);
+    } else if (cartridge->mapper == 4) {
+        mapped = mmc3_map_chr_addr(cartridge, addr);
     } else {
         mapped = addr & cartridge->chr_mask;
     }
@@ -49,6 +51,8 @@ void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value) {
 
     if (cartridge->mapper == 1) {
         masked = mmc1_map_chr_addr(cartridge, addr);
+    } else if (cartridge->mapper == 4) {
+        masked = mmc3_map_chr_addr(cartridge, addr);
     } else {
         masked = addr % cartridge->chr_size;
     }
