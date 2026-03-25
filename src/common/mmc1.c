@@ -82,9 +82,10 @@ void mmc1_cpu_write(NesCartridge *cart, uint16_t addr, uint8_t value) {
     case 0: /* $8000-$9FFF: control */
         cart->mmc1_control = data;
         switch (data & 0x03u) {
+        case 0: cart->mirror_mode = NES_MIRROR_ONE_SCREEN_LOWER; break;
+        case 1: cart->mirror_mode = NES_MIRROR_ONE_SCREEN_UPPER; break;
         case 2: cart->mirror_mode = NES_MIRROR_VERTICAL;   break;
         case 3: cart->mirror_mode = NES_MIRROR_HORIZONTAL; break;
-        default: break; /* one-screen modes: unchanged for now */
         }
         mmc1_update_prg_banks(cart);
         break;

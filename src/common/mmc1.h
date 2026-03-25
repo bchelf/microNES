@@ -3,6 +3,7 @@
 
 #include "cart.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 /*
@@ -32,5 +33,24 @@ void mmc1_rebase_banks(NesCartridge *cart, const uint8_t *old_prg_base);
 
 /* Called from nes_cpu_bus_write_fast for every write to $8000-$FFFF. */
 void mmc1_cpu_write(NesCartridge *cart, uint16_t addr, uint8_t value);
+
+static inline size_t mmc1_map_chr_addr(const NesCartridge *cart, uint16_t addr) {
+    uint16_t masked_addr = addr & 0x1fffu;
+
+    if (cart->chr_size == 0) {
+        return 0;
+    }
+
+    if ((cart->mmc1_control & 0x10u) == 0) {
+        uint8_t bank = cart->mmc1_chr0 & 0x1eu;
+        return (((size_t)bank * 0x1000u) + masked_addr) & cart->chr_mask;
+    }
+
+    if (masked_addr < 0x1000u) {
+        return (((size_t)cart->mmc1_chr0 * 0x1000u) + masked_addr) & cart->chr_mask;
+    }
+
+    return (((size_t)cart->mmc1_chr1 * 0x1000u) + (masked_addr - 0x1000u)) & cart->chr_mask;
+}
 
 #endif

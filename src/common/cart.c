@@ -99,8 +99,12 @@ static bool cart_parse_ines_image(
     char *error,
     size_t error_size
 ) {
+    bool is_nes2;
     uint8_t flags6;
     uint8_t flags7;
+    uint32_t mapper;
+    uint32_t prg_banks;
+    uint32_t chr_banks;
     size_t offset;
 
     if (rom_image_size < INES_HEADER_SIZE) {
@@ -115,15 +119,32 @@ static bool cart_parse_ines_image(
 
     flags6 = rom_image[6];
     flags7 = rom_image[7];
+    is_nes2 = (flags7 & 0x0cu) == 0x08u;
 
-    if ((flags7 & 0x0cu) == 0x08u) {
-        cart_set_error(error, error_size, "NES 2.0 ROMs are not supported");
+    cartridge->is_nes2 = is_nes2;
+
+    mapper = (uint32_t)(flags6 >> 4) | (uint32_t)(flags7 & 0xf0u);
+    if (is_nes2) {
+        mapper |= (uint32_t)(rom_image[8] & 0x0fu) << 8;
+        cartridge->submapper = (uint8_t)(rom_image[8] >> 4);
+        cartridge->prg_ram_shift = (uint8_t)(rom_image[10] & 0x0fu);
+        cartridge->prg_nvram_shift = (uint8_t)(rom_image[10] >> 4);
+        cartridge->chr_ram_shift = (uint8_t)(rom_image[11] & 0x0fu);
+        cartridge->chr_nvram_shift = (uint8_t)(rom_image[11] >> 4);
+    }
+
+    if (mapper > 255u) {
+        cart_set_error(error, error_size, "mapper number exceeds runtime cartridge model");
+        return false;
+    }
+    cartridge->mapper = (uint8_t)mapper;
+    if (cartridge->mapper != 0 && cartridge->mapper != 1) {
+        cart_set_error(error, error_size, "only mapper 0 (NROM) and mapper 1 (MMC1) are supported");
         return false;
     }
 
-    cartridge->mapper = (uint8_t)((flags6 >> 4) | (flags7 & 0xf0u));
-    if (cartridge->mapper != 0 && cartridge->mapper != 1) {
-        cart_set_error(error, error_size, "only mapper 0 (NROM) and mapper 1 (MMC1) are supported");
+    if (is_nes2 && cartridge->mapper == 1 && cartridge->submapper != 0 && cartridge->submapper != 5) {
+        cart_set_error(error, error_size, "only mapper 1 submapper 0 and 5 are supported");
         return false;
     }
 
@@ -132,8 +153,22 @@ static bool cart_parse_ines_image(
         return false;
     }
 
-    cartridge->prg_banks = rom_image[4];
-    cartridge->chr_banks = rom_image[5];
+    prg_banks = rom_image[4];
+    chr_banks = rom_image[5];
+    if (is_nes2) {
+        if ((rom_image[9] & 0x0fu) == 0x0fu || (rom_image[9] >> 4) == 0x0fu) {
+            cart_set_error(error, error_size, "NES 2.0 exponent/multiplier ROM sizes are not supported");
+            return false;
+        }
+        prg_banks |= (uint32_t)(rom_image[9] & 0x0fu) << 8;
+        chr_banks |= (uint32_t)(rom_image[9] >> 4) << 8;
+    }
+    if (prg_banks > 255u || chr_banks > 255u) {
+        cart_set_error(error, error_size, "ROM bank count exceeds runtime cartridge model");
+        return false;
+    }
+    cartridge->prg_banks = (uint8_t)prg_banks;
+    cartridge->chr_banks = (uint8_t)chr_banks;
     cartridge->mirror_mode = (flags6 & 0x01u) ? NES_MIRROR_VERTICAL : NES_MIRROR_HORIZONTAL;
 
     if (cartridge->mapper == 0) {

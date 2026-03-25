@@ -2,6 +2,7 @@
 #define MICRONES_NROM_H
 
 #include "cart.h"
+#include "mmc1.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -13,7 +14,13 @@ void nrom_ppu_write(NesCartridge *cartridge, uint16_t addr, uint8_t value);
 
 // Inlined here so callers (ppu.c) avoid a cross-TU call on the hot render path.
 static inline size_t nrom_chr_row_index(const NesCartridge *cartridge, uint16_t pattern_addr) {
-    size_t masked = pattern_addr & cartridge->chr_mask;
+    size_t masked;
+
+    if (cartridge->mapper == 1) {
+        masked = mmc1_map_chr_addr(cartridge, pattern_addr);
+    } else {
+        masked = pattern_addr & cartridge->chr_mask;
+    }
     return ((masked >> 4) * 8u) + (masked & 0x07u);
 }
 
