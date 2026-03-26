@@ -169,6 +169,30 @@ canvas {
     flex: 1;
 }
 
+.reset-btn {
+    width: 64px;
+    height: 18px;
+    border-radius: 4px;
+    background: linear-gradient(to bottom, #d0d0d0, #b0b0b0);
+    border: none;
+    font-size: 0.42em;
+    color: #333;
+    font-family: monospace;
+    font-weight: bold;
+    letter-spacing: 1px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    outline: none;
+    touch-action: none;
+    box-shadow: 0 3px 0 #888, 0 4px 6px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.6);
+    transition: transform 0.05s, box-shadow 0.05s;
+}
+
+.reset-btn:active {
+    transform: translateY(2px);
+    box-shadow: 0 1px 0 #888, 0 2px 3px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.4);
+}
+
 .sys-btns-row {
     background: #f0f0f0;
     border-radius: 8px;
@@ -212,34 +236,8 @@ canvas {
     flex-direction: column;
     align-items: center;
     gap: 5px;
-    position: relative;
-    padding-top: 8px;
     flex-shrink: 0;
 }
-
-.menu-btn {
-    position: absolute;
-    top: -2px;
-    right: -4px;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    background: #e8e8e8;
-    border: none;
-    font-size: 0.38em;
-    color: #555;
-    font-family: monospace;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-    outline: none;
-    touch-action: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
-}
-
-.menu-btn:active { background: #ccc; }
 
 .ab-group {
     display: flex;
@@ -322,6 +320,7 @@ canvas {
 
         <!-- Center: Select / Start -->
         <div class="ctrl-center">
+            <button class="reset-btn" id="btn-menu">RESET</button>
             <div class="sys-btns-row">
                 <button class="sys-btn" id="btn-select"></button>
                 <button class="sys-btn" id="btn-start"></button>
@@ -332,9 +331,8 @@ canvas {
             </div>
         </div>
 
-        <!-- A / B buttons + menu -->
+        <!-- A / B buttons -->
         <div class="ctrl-right">
-            <button class="menu-btn" id="btn-menu">menu</button>
             <div class="ab-group">
                 <div class="ab-col">
                     <div class="ab-wrap">
