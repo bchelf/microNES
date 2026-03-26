@@ -230,11 +230,13 @@ typedef struct {
     void *profile_now_user;
     PpuStepProfile step_profile;
     NesFrameBuffer frame_buffer;
+    NesFrameBuffer *active_frame_buffer; // render target; points to frame_buffer by default
     NesScanline scanline_buffer;
 } Ppu;
 
 void ppu_init(Ppu *ppu);
 void ppu_reset(Ppu *ppu);
+void ppu_set_render_target(Ppu *ppu, NesFrameBuffer *fb);
 void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_end);
 void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles);
 uint8_t ppu_cpu_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr);

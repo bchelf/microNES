@@ -295,7 +295,7 @@ static void ppu_finalize_frame(Ppu *ppu) {
     uint32_t sprite_pixels = 0;
 
     for (uint32_t i = 0; i < NES_FRAME_WIDTH * NES_FRAME_HEIGHT; ++i) {
-        if (ppu->frame_buffer.pixels[i] != 0) {
+        if (ppu->active_frame_buffer->pixels[i] != 0) {
             ++nonzero_pixels;
         }
     }
@@ -303,7 +303,7 @@ static void ppu_finalize_frame(Ppu *ppu) {
     ++ppu->completed_frame_count;
     ppu->completed_frame_ready = true;
     ppu->last_completed_nonzero_pixels = nonzero_pixels;
-    ppu->last_completed_frame_hash = ppu_hash_framebuffer(&ppu->frame_buffer);
+    ppu->last_completed_frame_hash = ppu_hash_framebuffer(ppu->active_frame_buffer);
     sprite_pixels = (uint32_t)ppu->sprite_composited_pixel_count;
     ppu->last_completed_sprite_pixels = sprite_pixels;
     if (nonzero_pixels != 0 && ppu->first_nonblank_frame_index == 0) {
@@ -524,7 +524,7 @@ static void ppu_detect_render_artifact(
         return;
     }
 
-    prev = nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)(y - 1));
+    prev = nes_framebuffer_scanline(ppu->active_frame_buffer, (uint16_t)(y - 1));
     for (int x = 0; x < NES_FRAME_WIDTH; ++x) {
         if (row[x] == prev[x]) {
             ++equal_prev_pixels;
@@ -866,7 +866,7 @@ static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
 static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartridge, int y) {
 #if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
 #if MICRONES_ENABLE_FRAMEBUFFER
-    uint8_t *dst = nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);
+    uint8_t *dst = nes_framebuffer_scanline(ppu->active_frame_buffer, (uint16_t)y);
 #else
     uint8_t *dst = ppu->scanline_buffer.pixels;
 #endif
@@ -1126,7 +1126,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
 #else /* MICRONES_ENABLE_RUNTIME_DIAGNOSTICS */
     uint8_t *dst =
 #if MICRONES_ENABLE_FRAMEBUFFER
-        nes_framebuffer_scanline(&ppu->frame_buffer, (uint16_t)y);
+        nes_framebuffer_scanline(ppu->active_frame_buffer, (uint16_t)y);
 #else
         NULL;
 #endif
@@ -1265,6 +1265,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
 void ppu_init(Ppu *ppu) {
     memset(ppu, 0, sizeof(*ppu));
     ppu->scanline = 261;
+    ppu->active_frame_buffer = &ppu->frame_buffer;
 }
 
 void ppu_reset(Ppu *ppu) {
@@ -1441,7 +1442,7 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
 #if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
         ppu->sprite_composited_pixel_count = 0;
 #if MICRONES_ENABLE_FRAMEBUFFER
-        ppu->frame_buffer.frame_index = ppu->frame_count;
+        ppu->active_frame_buffer->frame_index = ppu->frame_count;
 #endif
         memset(&ppu->render_artifact_diag, 0, sizeof(ppu->render_artifact_diag));
         ppu->visible_write_diag_count = 0;
@@ -1579,8 +1580,12 @@ void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t val
     }
 }
 
+void ppu_set_render_target(Ppu *ppu, NesFrameBuffer *fb) {
+    ppu->active_frame_buffer = (fb != NULL) ? fb : &ppu->frame_buffer;
+}
+
 const NesFrameBuffer *ppu_framebuffer(const Ppu *ppu) {
-    return &ppu->frame_buffer;
+    return ppu->active_frame_buffer;
 }
 
 const NesScanline *ppu_scanline(const Ppu *ppu) {

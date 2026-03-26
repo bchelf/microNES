@@ -87,6 +87,7 @@ bool nes_load_cartridge_const_memory(Nes *nes, const uint8_t *rom_image, size_t 
 void nes_reset(Nes *nes);
 void nes_set_profile_clock(Nes *nes, micrones_profile_now_us_fn now_us, void *user);
 void nes_set_controller_state(Nes *nes, unsigned controller_index, NesControllerState state);
+void nes_set_render_target(Nes *nes, NesFrameBuffer *fb);
 void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_end);
 bool nes_step_instruction(Nes *nes);
 bool nes_step_scanline(Nes *nes);

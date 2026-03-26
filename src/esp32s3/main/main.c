@@ -282,18 +282,22 @@ static void emulator_task(void *arg)
                 nes_set_controller_state(&s_nes, 0, state);
             }
 
-            // 2. Step one NES frame
+            // 2. Acquire display buffer and point the PPU render target directly at it,
+            //    so nes_step_frame() writes pixels straight into the buffer that Core 0
+            //    will stream to the display – no post-frame memcpy required.
+            uint32_t display_buffer = display_acquire_frame_buffer(next_display_buffer);
+            nes_set_render_target(&s_nes, s_display_frames[display_buffer]);
+
+            // 3. Step one NES frame (renders directly into s_display_frames[display_buffer])
             if (!nes_step_frame(&s_nes)) {
                 ESP_LOGE(TAG, "NES halted: %s",
                          nes_stop_reason_name(s_nes.stop_info.reason));
+                xSemaphoreGive(s_display_frame_free[display_buffer]);
                 break;
             }
 
-            // 3. Hand the completed indexed framebuffer to Core 0.
+            // 4. Hand the completed indexed framebuffer to Core 0 (no copy needed).
             {
-                const NesFrameBuffer *fb = nes_framebuffer(&s_nes);
-                uint32_t display_buffer = display_acquire_frame_buffer(next_display_buffer);
-                memcpy(s_display_frames[display_buffer], fb, sizeof(NesFrameBuffer));
                 if (xQueueSend(s_display_frame_queue, &display_buffer, portMAX_DELAY) != pdTRUE) {
                     ESP_LOGE(TAG, "Failed to queue display frame");
                     xSemaphoreGive(s_display_frame_free[display_buffer]);
@@ -302,7 +306,7 @@ static void emulator_task(void *arg)
                 next_display_buffer = (display_buffer + 1u) % DISPLAY_FRAME_BUFFER_COUNT;
             }
 
-            // 4. Drain APU samples into audio ring buffer
+            // 5. Drain APU samples into audio ring buffer
             {
                 static int16_t pcm_tmp[256];
                 size_t n;
@@ -314,7 +318,7 @@ static void emulator_task(void *arg)
 
             report_frames++;
 
-            // 5. Diagnostics every 60 frames
+            // 6. Diagnostics every 60 frames
             if (report_frames >= 60u) {
                 uint64_t now_us = esp_timer_get_time();
                 AudioStats audio_stats = audio_stats_snapshot();
@@ -327,7 +331,7 @@ static void emulator_task(void *arg)
                 prev_audio_stats = audio_stats;
             }
 
-            // 6. Frame pacing: spin-wait to maintain ~60 fps
+            // 7. Frame pacing: spin-wait to maintain ~60 fps
             {
                 uint64_t elapsed = esp_timer_get_time() - frame_start_us;
                 if (elapsed < TARGET_FRAME_US) {

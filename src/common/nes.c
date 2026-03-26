@@ -112,6 +112,10 @@ void nes_set_controller_state(Nes *nes, unsigned controller_index, NesController
     }
 }
 
+void nes_set_render_target(Nes *nes, NesFrameBuffer *fb) {
+    ppu_set_render_target(&nes->ppu, fb);
+}
+
 void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_end) {
     ppu_set_sprite0_diag_window(&nes->ppu, frame_start, frame_end);
 }
