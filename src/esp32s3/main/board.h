@@ -30,13 +30,15 @@
 // --- IMU (QMI8658) – same I2C bus, not used by emulator ---
 #define BOARD_IMU_I2C_ADDR 0x6B   // AD0 pulled high; use 0x6A if AD0 low
 
-// --- Audio output ---
-// The board has a passive buzzer on GPIO46 suitable for PWM audio.
-// Connect a 1 kΩ resistor + 10 nF RC filter for better fidelity.
-#define BOARD_AUDIO_PIN      46
-#define BOARD_AUDIO_LEDC_TIMER     LEDC_TIMER_0
-#define BOARD_AUDIO_LEDC_CHANNEL   LEDC_CHANNEL_0
-#define BOARD_AUDIO_LEDC_SPEED     LEDC_LOW_SPEED_MODE
+// --- Audio output (MAX98357A I2S amplifier) ---
+// Wire MAX98357A:  BCLK→GPIO4, LRC→GPIO2, DIN→GPIO3
+//                 VIN→3.3V (or 5V for more volume), GND→GND
+//                 SD_MODE→3.3V (left channel; float for (L+R)/2)
+//                 OUT+/OUT- directly to 8-ohm speaker
+#define BOARD_AUDIO_I2S_PORT   I2S_NUM_0
+#define BOARD_AUDIO_BCLK_PIN   4
+#define BOARD_AUDIO_WS_PIN     2
+#define BOARD_AUDIO_DOUT_PIN   3
 
 // --- NES hardware controller (original 4021 PISO shift register) ---
 // Connect the 7-pin NES controller cable as follows:

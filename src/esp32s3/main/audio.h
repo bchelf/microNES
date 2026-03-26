@@ -9,7 +9,7 @@ typedef struct {
     uint64_t overflow_samples;
 } AudioStats;
 
-// Initialise LEDC PWM output for audio on BOARD_AUDIO_PIN.
+// Initialise I2S output for audio via MAX98357A on BOARD_AUDIO_*_PIN.
 // sample_rate: target sample rate in Hz (typically 48000).
 void audio_init(uint32_t sample_rate);
 
