@@ -83,9 +83,9 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
     if (pc >= 0x8000u) {
         off = (uint32_t)(pc - 0x8000u);
         if (off < 0x4000u) {
-            return nes->cartridge.prg_bank_lo[off];
+            return nes->prg_bank_lo[off];
         }
-        return nes->cartridge.prg_bank_hi[off - 0x4000u];
+        return nes->prg_bank_hi[off - 0x4000u];
     }
     return cpu_read(cpu, nes, pc);
 }
@@ -109,11 +109,11 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
         lo_off = (uint32_t)(pc - 0x8000u);
         hi_off = (uint32_t)((uint16_t)(pc + 1u) - 0x8000u);
         lo = (lo_off < 0x4000u)
-            ? nes->cartridge.prg_bank_lo[lo_off]
-            : nes->cartridge.prg_bank_hi[lo_off - 0x4000u];
+            ? nes->prg_bank_lo[lo_off]
+            : nes->prg_bank_hi[lo_off - 0x4000u];
         hi = (hi_off < 0x4000u)
-            ? nes->cartridge.prg_bank_lo[hi_off]
-            : nes->cartridge.prg_bank_hi[hi_off - 0x4000u];
+            ? nes->prg_bank_lo[hi_off]
+            : nes->prg_bank_hi[hi_off - 0x4000u];
         cpu->pc = (uint16_t)(pc + 2u);
     } else {
         lo = cpu_fetch8(cpu, nes);

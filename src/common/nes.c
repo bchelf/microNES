@@ -56,6 +56,7 @@ bool nes_load_cartridge_file(Nes *nes, const char *path) {
         return false;
     }
 
+    nes_sync_prg_cache(nes);
     nes_clear_runtime_state(nes);
     nes_set_error(nes, "");
     return true;
@@ -69,6 +70,7 @@ bool nes_load_cartridge_memory(Nes *nes, const uint8_t *rom_image, size_t rom_im
         return false;
     }
 
+    nes_sync_prg_cache(nes);
     nes_clear_runtime_state(nes);
     nes_set_error(nes, "");
     return true;
@@ -82,6 +84,7 @@ bool nes_load_cartridge_const_memory(Nes *nes, const uint8_t *rom_image, size_t 
         return false;
     }
 
+    nes_sync_prg_cache(nes);
     nes_clear_runtime_state(nes);
     nes_set_error(nes, "");
     return true;
@@ -94,6 +97,7 @@ void nes_reset(Nes *nes) {
     apu_reset(&nes->apu);
     input_controller_reset(&nes->controllers[0]);
     input_controller_reset(&nes->controllers[1]);
+    nes_sync_prg_cache(nes);
     nes_clear_runtime_state(nes);
     cpu6502_reset(&nes->cpu, nes);
     nes_set_error(nes, "");
