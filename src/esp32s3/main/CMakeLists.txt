@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 # Path to the portable NES core (relative to this CMakeLists.txt)
 set(MICRONES_COMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../../common")
 
-set(MICRONES_APU_ENGINE "micrones" CACHE STRING "APU engine for ESP32-S3 target (infones or micrones)")
+set(MICRONES_APU_ENGINE "infones" CACHE STRING "APU engine for ESP32-S3 target (infones or micrones)")
 set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS infones micrones)
 
 if(MICRONES_APU_ENGINE STREQUAL "micrones")
