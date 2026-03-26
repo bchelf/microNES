@@ -136,17 +136,18 @@ typedef struct {
 
 static void print_diag(uint64_t period_us, uint32_t frames,
                        uint32_t audio_pushed, uint32_t audio_skipped, uint32_t audio_overflow,
-                       const StepTimes *avg)
+                       const StepTimes *avg, uint32_t insn_per_frame)
 {
     double fps       = (frames * 1000000.0) / (double)period_us;
     double frame_ms  = (double)period_us / (frames * 1000.0);
     ESP_LOGI(TAG,
-        "frames=%lu fps=%.1f frame_ms=%.2f | touch=%luus nes=%luus audio=%luus | "
+        "frames=%lu fps=%.1f frame_ms=%.2f | touch=%luus nes=%luus audio=%luus insn/frame=%lu | "
         "audio_pushed=%lu audio_skipped=%lu audio_overflow=%lu audio_free=%u",
         (unsigned long)frames, fps, frame_ms,
         (unsigned long)avg->touch_us,
         (unsigned long)avg->nes_us,
         (unsigned long)avg->audio_us,
+        (unsigned long)insn_per_frame,
         (unsigned long)audio_pushed,
         (unsigned long)audio_skipped,
         (unsigned long)audio_overflow,
@@ -281,6 +282,7 @@ static void emulator_task(void *arg)
         AudioStats prev_audio_stats = audio_stats_snapshot();
         uint32_t next_display_buffer = 0;
         StepTimes acc = {0};   // accumulated µs per step over report window
+        uint64_t prev_insn_count = s_nes.stats.instruction_count;
 
         while (true) {
             uint64_t frame_start_us = esp_timer_get_time();
@@ -339,6 +341,7 @@ static void emulator_task(void *arg)
             if (report_frames >= 60u) {
                 uint64_t now_us = esp_timer_get_time();
                 AudioStats audio_stats = audio_stats_snapshot();
+                uint64_t cur_insn_count = s_nes.stats.instruction_count;
                 StepTimes avg = {
                     .touch_us = acc.touch_us / report_frames,
                     .nes_us   = acc.nes_us   / report_frames,
@@ -348,10 +351,12 @@ static void emulator_task(void *arg)
                            (uint32_t)(audio_stats.pushed_samples - prev_audio_stats.pushed_samples),
                            (uint32_t)(audio_stats.skipped_samples - prev_audio_stats.skipped_samples),
                            (uint32_t)(audio_stats.overflow_samples - prev_audio_stats.overflow_samples),
-                           &avg);
+                           &avg,
+                           (uint32_t)((cur_insn_count - prev_insn_count) / report_frames));
                 report_start_us  = now_us;
                 report_frames    = 0;
                 prev_audio_stats = audio_stats;
+                prev_insn_count  = cur_insn_count;
                 acc = (StepTimes){0};
             }
 

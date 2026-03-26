@@ -239,6 +239,21 @@ void ppu_reset(Ppu *ppu);
 void ppu_set_render_target(Ppu *ppu, NesFrameBuffer *fb);
 void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_end);
 void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles);
+
+// Inline fast path for ppu_step_cycles.  The hot loop in cpu6502_step calls
+// this ~29,780 times per frame; ~98 % of those calls advance within a single
+// scanline and take the three-instruction fast path here.  The remaining ~2 %
+// fall through to the out-of-line slow path (scanline boundary / cycle==0).
+static inline void ppu_step_cycles_fast(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
+    if (ppu->cycle != 0) {
+        uint32_t advance = 341u - (uint32_t)ppu->cycle;
+        if (advance > cycles) {
+            ppu->cycle += (int)cycles;
+            return;
+        }
+    }
+    ppu_step_cycles(ppu, cartridge, cycles);
+}
 uint8_t ppu_cpu_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr);
 void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t value);
 void ppu_oam_write_byte(Ppu *ppu, uint8_t index, uint8_t value, bool via_dma);

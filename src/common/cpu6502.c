@@ -1351,7 +1351,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     cpu_started_us = nes_profile_now_us(nes);
 #endif
     cpu_started_cycles = micrones_profile_now_cycles();
-    ppu_step_cycles(&nes->ppu, &nes->cartridge, cycles * 3u);
+    ppu_step_cycles_fast(&nes->ppu, &nes->cartridge, cycles * 3u);
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.ppu_step_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
