@@ -38,6 +38,7 @@ int main(void) {
     uint64_t report_samples_drained = 0;
     uint64_t report_samples_dropped = 0;
     uint64_t report_apu_internal_dropped = 0;
+    uint64_t report_apu_dropped_baseline = 0;
     bool     report_saw_nonzero_sample = false;
 #endif
 
@@ -99,7 +100,8 @@ int main(void) {
                         }
                     }
                 }
-                report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
+                report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples - report_apu_dropped_baseline;
+                report_apu_dropped_baseline  = emulator_video.nes.apu.dropped_samples;
             }
             if ((emulator_video.rendered_frames % 60u) == 0u) {
                 uint64_t now_us = time_us_64();
@@ -204,7 +206,7 @@ int main(void) {
                     " drained=%llu dropped=%llu nonzero=%u"
                     " apu_int_drop=%llu apu_pcm_buf=%u"
                     " underruns=%u buf_level=%u"
-                    " apu_samples=%llu apu_p0_en=%u apu_p0_lc=%u"
+                    " apu_samples=%u apu_p0_en=%u apu_p0_lc=%u"
                     " $4015_writes=%llu $4015_last=%02x"
                     " $4003_writes=%llu fc_steps=%llu"
                     " clip=%llu\n",
