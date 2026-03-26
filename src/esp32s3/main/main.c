@@ -311,8 +311,6 @@ static void emulator_task(void *arg)
                 size_t n;
                 while ((n = nes_audio_read_samples(&s_nes, pcm_tmp,
                             sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
-                    for (size_t i = 0; i < n; ++i)
-                        pcm_tmp[i] = (int16_t)(pcm_tmp[i] * 3 / 4);
                     (void)audio_push_samples(pcm_tmp, n);
                 }
             }
