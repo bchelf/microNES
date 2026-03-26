@@ -1,6 +1,6 @@
-CMakeFiles/micrones_core.dir/src/common/mmc1.c.o: \
-  /home/runner/work/microNES/microNES/src/common/mmc1.c \
-  /home/runner/work/microNES/microNES/src/common/mmc1.h \
+CMakeFiles/micrones_core.dir/src/common/mmc3.c.o: \
+  /home/runner/work/microNES/microNES/src/common/mmc3.c \
+  /home/runner/work/microNES/microNES/src/common/mmc3.h \
   /home/runner/work/microNES/microNES/src/common/cart.h \
   /home/runner/work/_temp/e5d127ac-2200-4879-a6a5-c9e61f8b116d/emsdk-main/upstream/lib/clang/20/include/stdbool.h \
   /home/runner/work/_temp/e5d127ac-2200-4879-a6a5-c9e61f8b116d/emsdk-main/upstream/emscripten/cache/sysroot/include/stdbool.h \
