@@ -2,8 +2,6 @@
 #include "board.h"
 #include "display.h"
 #include "nes_hw_controller.h"
-#include "nes_input.h"
-#include "touch.h"
 #include "ui.h"
 
 // Portable NES core
@@ -129,7 +127,6 @@ static void display_task(void *arg)
 }
 
 typedef struct {
-    uint32_t touch_us;
     uint32_t nes_us;
     uint32_t audio_us;
 } StepTimes;
@@ -141,10 +138,9 @@ static void print_diag(uint64_t period_us, uint32_t frames,
     double fps       = (frames * 1000000.0) / (double)period_us;
     double frame_ms  = (double)period_us / (frames * 1000.0);
     ESP_LOGI(TAG,
-        "frames=%lu fps=%.1f frame_ms=%.2f | touch=%luus nes=%luus audio=%luus insn/frame=%lu | "
+        "frames=%lu fps=%.1f frame_ms=%.2f | nes=%luus audio=%luus insn/frame=%lu | "
         "audio_pushed=%lu audio_skipped=%lu audio_overflow=%lu audio_free=%u",
         (unsigned long)frames, fps, frame_ms,
-        (unsigned long)avg->touch_us,
         (unsigned long)avg->nes_us,
         (unsigned long)avg->audio_us,
         (unsigned long)insn_per_frame,
@@ -181,12 +177,6 @@ static void emulator_task(void *arg)
     }
     ESP_LOGI(TAG, "display_init OK");
 
-    ESP_LOGI(TAG, "touch_init...");
-    if (!touch_init()) {
-        ESP_LOGW(TAG, "touch_init failed – touch input disabled");
-    } else {
-        ESP_LOGI(TAG, "touch_init OK");
-    }
 
     ESP_LOGI(TAG, "audio_init...");
     audio_init(48000);  // APU outputs at 48 kHz; I2S runs at native rate, no resampling needed
@@ -287,18 +277,11 @@ static void emulator_task(void *arg)
             uint64_t frame_start_us = esp_timer_get_time();
             uint64_t t0, t1;
 
-            // 1. Read inputs → NES controller (touch and hardware controller ORed)
-            t0 = esp_timer_get_time();
+            // 1. Read inputs → NES controller (hardware controller only; touch disabled)
             {
-                TouchData td;
-                touch_read(&td);
-                NesControllerState state = nes_input_from_touch(&td);
-                NesControllerState hw    = nes_hw_controller_read();
-                state.buttons |= hw.buttons;
-                nes_set_controller_state(&s_nes, 0, state);
+                NesControllerState hw = nes_hw_controller_read();
+                nes_set_controller_state(&s_nes, 0, hw);
             }
-            t1 = esp_timer_get_time();
-            acc.touch_us += (uint32_t)(t1 - t0);
 
             // 2. Acquire display buffer and point the PPU render target directly at it,
             //    so nes_step_frame() writes pixels straight into the buffer that Core 0
@@ -342,7 +325,6 @@ static void emulator_task(void *arg)
                 AudioStats audio_stats = audio_stats_snapshot();
                 uint32_t cur_insn_count = s_nes.cpu.insn_count;
                 StepTimes avg = {
-                    .touch_us = acc.touch_us / report_frames,
                     .nes_us   = acc.nes_us   / report_frames,
                     .audio_us = acc.audio_us  / report_frames,
                 };
