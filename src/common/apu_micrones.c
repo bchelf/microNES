@@ -399,21 +399,41 @@ static uint8_t apu_noise_output(const ApuNoiseChannel *noise) {
     return apu_noise_volume(noise);
 }
 
-static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
+/* ---- NES hardware mixer lookup tables ----------------------------------------
+ * The NES nonlinear mixing formula requires 6 float divides per sample:
+ *   pulse_out = 95.88 / (8128/(p1+p2) + 100)        p1+p2 in 0..30
+ *   tnd_out   = 159.79 / (1/(tri/8227 + n/12241) + 100)   tri,n in 0..15
+ * At 800 samples/frame that's ~4800 float divides/frame. Precomputing these
+ * as int16_t tables (built once at apu_init) reduces the hot path to two
+ * table lookups + integer add. */
+static int16_t s_pulse_mix_table[31];  /* index = pulse1+pulse2, 0..30   */
+static int16_t s_tnd_mix_table[256];   /* index = triangle*16+noise, dmc=0 */
+/* Scale: max combined NES output ≈ 0.6318; table values scaled so that sum
+ * of both tables never exceeds INT16_MAX (tables individually may approach
+ * ~13400 and ~19400 respectively). */
+static const float k_mix_table_scale = 32767.0f / (0.258498f + 0.373355f);
+
+static void apu_build_mix_tables(void) {
+    int ps, tri, noise;
+    for (ps = 1; ps <= 30; ++ps) {
+        float v = 95.88f / (8128.0f / (float)ps + 100.0f);
+        s_pulse_mix_table[ps] = (int16_t)lrintf(v * k_mix_table_scale);
+    }
+    s_pulse_mix_table[0] = 0;
+    for (tri = 0; tri <= 15; ++tri) {
+        for (noise = 0; noise <= 15; ++noise) {
+            float tnd = (float)tri / 8227.0f + (float)noise / 12241.0f;
+            float v = (tnd > 0.0f) ? 159.79f / (1.0f / tnd + 100.0f) : 0.0f;
+            s_tnd_mix_table[tri * 16 + noise] = (int16_t)lrintf(v * k_mix_table_scale);
+        }
+    }
+}
+
+static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
     int32_t pulse1_raw = (int32_t)apu_pulse_output(&apu->pulse[0]);
     int32_t pulse2_raw = (int32_t)apu_pulse_output(&apu->pulse[1]);
     int32_t triangle_raw = (int32_t)apu_triangle_output(&apu->triangle);
     int32_t noise_raw = (int32_t)apu_noise_output(&apu->noise);
-    int32_t dmc_raw = 0;
-    float pulse1;
-    float pulse2;
-    float triangle;
-    float noise;
-    float pulse_sum;
-    float pulse_out = 0.0f;
-    float tnd_out = 0.0f;
-    float mixed;
-    int sample;
 
     if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_PULSE1) {
         apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] += k_apu_test_tone_step_pulse1;
@@ -422,17 +442,12 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
         triangle_raw = 0;
         noise_raw = 0;
     } else if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_TRIANGLE) {
-        uint32_t phase;
-        uint32_t step;
-        int32_t tri;
-
-        apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] += k_apu_test_tone_step_triangle;
-        phase = apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE];
-        step = phase >> 27;
-        tri = (step < 16u) ? (int32_t)step : (int32_t)(31u - step);
+        uint32_t phase = apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] + k_apu_test_tone_step_triangle;
+        apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] = phase;
+        uint32_t step = phase >> 27;
+        triangle_raw = (step < 16u) ? (int32_t)step : (int32_t)(31u - step);
         pulse1_raw = 0;
         pulse2_raw = 0;
-        triangle_raw = tri;
         noise_raw = 0;
     }
 
@@ -440,34 +455,25 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_PULSE2], pulse2_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_TRIANGLE], triangle_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_NOISE], noise_raw);
-    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], dmc_raw);
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], 0);
 
-    pulse1 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1) ? (float)pulse1_raw : 0.0f;
-    pulse2 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2) ? (float)pulse2_raw : 0.0f;
-    triangle = (apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE) ? (float)triangle_raw : 0.0f;
-    noise = (apu->mix_enable_mask & APU_DEBUG_MASK_NOISE) ? (float)noise_raw : 0.0f;
-    pulse_sum = pulse1 + pulse2;
+    /* Apply per-channel debug mute mask (all-on by default; no-op in production) */
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1))   pulse1_raw = 0;
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2))   pulse2_raw = 0;
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE)) triangle_raw = 0;
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_NOISE))    noise_raw = 0;
 
-    if (pulse_sum > 0.0f) {
-        pulse_out = 95.88f / ((8128.0f / pulse_sum) + 100.0f);
-    }
-    if ((triangle + noise) > 0.0f) {
-        tnd_out = 159.79f / ((1.0f / ((triangle / 8227.0f) + (noise / 12241.0f))) + 100.0f);
-    }
+    /* Table lookup replaces 6 float divides with 2 lookups + integer add */
+    int32_t mixed_raw = (int32_t)s_pulse_mix_table[pulse1_raw + pulse2_raw]
+                      + s_tnd_mix_table[triangle_raw * 16 + noise_raw];
 
-    mixed = pulse_out + tnd_out;
-
-    /* Leaky DC-level tracker. Chases the mean of `mixed` at ~0.76 Hz.
-     * Subtracting it removes DC offset without creating step discontinuities
-     * at note-on/off transitions — equivalent to the analog capacitor coupling
-     * on the real NES output circuit. R = 0.9999 per sample at 48 kHz.
-     * A faster constant (e.g. matching the NES RC filter at ~16 Hz) decays
-     * the baseline to zero between notes, making the amplitude jump at
-     * note-on larger and the click more audible — so keep it slow. */
+    /* Normalize and apply leaky DC-level tracker (~0.76 Hz) to remove the
+     * positive DC bias from the NES nonlinear output range. */
+    float mixed = (float)mixed_raw * (1.0f / 32767.0f);
     apu->dc_level_tracker += (mixed - apu->dc_level_tracker) * 0.0001f;
     mixed -= apu->dc_level_tracker;
 
-    sample = (int)lrintf(mixed * 32767.0f);
+    int sample = (int)lrintf(mixed * 32767.0f);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -497,6 +503,7 @@ static uint32_t MICRONES_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
 }
 
 void apu_init(Apu *apu) {
+    apu_build_mix_tables();
     memset(apu, 0, sizeof(*apu));
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
