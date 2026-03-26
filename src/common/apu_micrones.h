@@ -166,11 +166,11 @@ typedef struct {
     uint64_t register_write_count[APU_DEBUG_REGISTER_COUNT];
     uint8_t mix_enable_mask;
     uint8_t test_tone_mode;
-    uint64_t cpu_cycles;
-    uint64_t sample_count;
+    uint32_t cpu_cycles;         /* low 32 bits sufficient; wraps harmlessly after ~40 min */
+    uint32_t sample_count;       /* uint32_t overflows after ~24 h; fine for embedded use */
     uint64_t dropped_samples;
     uint64_t clip_count;
-    uint64_t frame_counter_cycle;
+    uint32_t frame_counter_cycle; /* resets every ~14915 APU cycles; uint32_t is ample */
     uint64_t frame_counter_steps;
     uint32_t sample_phase;
     uint32_t pcm_read_index;

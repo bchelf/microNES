@@ -467,13 +467,15 @@ static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
     int32_t mixed_raw = (int32_t)s_pulse_mix_table[pulse1_raw + pulse2_raw]
                       + s_tnd_mix_table[triangle_raw * 16 + noise_raw];
 
-    /* Normalize and apply leaky DC-level tracker (~0.76 Hz) to remove the
-     * positive DC bias from the NES nonlinear output range. */
-    float mixed = (float)mixed_raw * (1.0f / 32767.0f);
-    apu->dc_level_tracker += (mixed - apu->dc_level_tracker) * 0.0001f;
-    mixed -= apu->dc_level_tracker;
+    /* Leaky DC-level tracker to remove positive DC bias (~0.76 Hz corner).
+     * dc_level_tracker stores the DC estimate pre-scaled by 32767 so the
+     * update and output use integer-range arithmetic, eliminating two float
+     * multiplies per sample vs the normalise→track→denormalise approach. */
+    float dc = apu->dc_level_tracker;
+    dc += ((float)mixed_raw - dc) * 0.0001f;
+    apu->dc_level_tracker = dc;
 
-    int sample = (int)lrintf(mixed * 32767.0f);
+    int sample = (int)lrintf((float)mixed_raw - dc);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -487,10 +489,14 @@ static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
 
 /* Advance a channel timer by n_cycles. Returns the number of times it fired.
  * Timers count down from period to 0, fire, then reset to period.
- * Period length in cycles = timer_period + 1. */
-static uint32_t MICRONES_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
-                                                     uint16_t  period,
-                                                     uint32_t  n_cycles) {
+ * Period length in cycles = timer_period + 1.
+ *
+ * Marked inline (not MICRONES_HOT_FUNC) so the compiler expands it directly
+ * into apu_step's inner loop, which is already in IRAM.  Eliminates ~3200
+ * CALL8/ENTRY/RETW round-trips per frame (~73 µs at 240 MHz on LX7). */
+static inline uint32_t apu_timer_advance(uint16_t *counter,
+                                         uint16_t  period,
+                                         uint32_t  n_cycles) {
     if (*counter >= n_cycles) {
         *counter -= (uint16_t)n_cycles;
         return 0;
@@ -541,7 +547,7 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
 
         /* Compute APU-rate cycles (half CPU rate) for this sub-batch.
          * apu_cycles = number of even values in (old, old+cycles_this]. */
-        uint32_t old_cpu = (uint32_t)apu->cpu_cycles;
+        uint32_t old_cpu = apu->cpu_cycles;
         apu->cpu_cycles += cycles_this;
         uint32_t apu_cycles = (old_cpu + cycles_this) / 2u - old_cpu / 2u;
 
@@ -550,7 +556,7 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
             /* Processed before the triangle timer so that any length/linear counter
              * updates take effect before the sequencer is advanced this sub-batch. */
             {
-                uint32_t old_fc = (uint32_t)apu->frame_counter_cycle;
+                uint32_t old_fc = apu->frame_counter_cycle;
                 uint32_t new_fc = old_fc + apu_cycles;
                 /* Sub-batches are ≤38 CPU cycles (~19 APU cycles); thresholds are
                  * 3728+ apart, so at most one threshold crossing per sub-batch.
