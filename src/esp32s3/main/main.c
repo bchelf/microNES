@@ -129,14 +129,25 @@ static void display_task(void *arg)
     }
 }
 
+typedef struct {
+    uint32_t touch_us;
+    uint32_t nes_us;
+    uint32_t audio_us;
+} StepTimes;
+
 static void print_diag(uint64_t period_us, uint32_t frames,
-                       uint32_t audio_pushed, uint32_t audio_skipped, uint32_t audio_overflow)
+                       uint32_t audio_pushed, uint32_t audio_skipped, uint32_t audio_overflow,
+                       const StepTimes *avg)
 {
     double fps       = (frames * 1000000.0) / (double)period_us;
     double frame_ms  = (double)period_us / (frames * 1000.0);
     ESP_LOGI(TAG,
-        "frames=%lu fps=%.1f frame_ms=%.2f audio_pushed=%lu audio_skipped=%lu audio_overflow=%lu audio_free=%u",
+        "frames=%lu fps=%.1f frame_ms=%.2f | touch=%luus nes=%luus audio=%luus | "
+        "audio_pushed=%lu audio_skipped=%lu audio_overflow=%lu audio_free=%u",
         (unsigned long)frames, fps, frame_ms,
+        (unsigned long)avg->touch_us,
+        (unsigned long)avg->nes_us,
+        (unsigned long)avg->audio_us,
         (unsigned long)audio_pushed,
         (unsigned long)audio_skipped,
         (unsigned long)audio_overflow,
@@ -323,11 +334,14 @@ static void emulator_task(void *arg)
         uint32_t report_frames   = 0;
         AudioStats prev_audio_stats = audio_stats_snapshot();
         uint32_t next_display_buffer = 0;
+        StepTimes acc = {0};   // accumulated µs per step over report window
 
         while (true) {
             uint64_t frame_start_us = esp_timer_get_time();
+            uint64_t t0, t1;
 
             // 1. Read inputs → NES controller (touch and hardware controller ORed)
+            t0 = esp_timer_get_time();
             {
                 TouchData td;
                 touch_read(&td);
@@ -336,6 +350,8 @@ static void emulator_task(void *arg)
                 state.buttons |= hw.buttons;
                 nes_set_controller_state(&s_nes, 0, state);
             }
+            t1 = esp_timer_get_time();
+            acc.touch_us += (uint32_t)(t1 - t0);
 
             // 2. Acquire display buffer and point the PPU render target directly at it,
             //    so nes_step_frame() writes pixels straight into the buffer that Core 0
@@ -344,18 +360,22 @@ static void emulator_task(void *arg)
             nes_set_render_target(&s_nes, s_display_frames[display_buffer]);
 
             // 3. Step one NES frame (renders directly into s_display_frames[display_buffer])
+            t0 = esp_timer_get_time();
             if (!nes_step_frame(&s_nes)) {
                 ESP_LOGE(TAG, "NES halted: %s",
                          nes_stop_reason_name(s_nes.stop_info.reason));
                 xSemaphoreGive(s_display_frame_free[display_buffer]);
                 break;
             }
+            t1 = esp_timer_get_time();
+            acc.nes_us += (uint32_t)(t1 - t0);
 
             // 4. AUDIO TEST: release buffer immediately, skip display streaming
             xSemaphoreGive(s_display_frame_free[display_buffer]);
             next_display_buffer = (display_buffer + 1u) % DISPLAY_FRAME_BUFFER_COUNT;
 
             // 5. Drain APU samples into audio ring buffer
+            t0 = esp_timer_get_time();
             {
                 static int16_t pcm_tmp[256];
                 size_t n;
@@ -364,6 +384,8 @@ static void emulator_task(void *arg)
                     (void)audio_push_samples(pcm_tmp, n);
                 }
             }
+            t1 = esp_timer_get_time();
+            acc.audio_us += (uint32_t)(t1 - t0);
 
             report_frames++;
 
@@ -371,13 +393,20 @@ static void emulator_task(void *arg)
             if (report_frames >= 60u) {
                 uint64_t now_us = esp_timer_get_time();
                 AudioStats audio_stats = audio_stats_snapshot();
+                StepTimes avg = {
+                    .touch_us = acc.touch_us / report_frames,
+                    .nes_us   = acc.nes_us   / report_frames,
+                    .audio_us = acc.audio_us  / report_frames,
+                };
                 print_diag(now_us - report_start_us, report_frames,
                            (uint32_t)(audio_stats.pushed_samples - prev_audio_stats.pushed_samples),
                            (uint32_t)(audio_stats.skipped_samples - prev_audio_stats.skipped_samples),
-                           (uint32_t)(audio_stats.overflow_samples - prev_audio_stats.overflow_samples));
+                           (uint32_t)(audio_stats.overflow_samples - prev_audio_stats.overflow_samples),
+                           &avg);
                 report_start_us  = now_us;
                 report_frames    = 0;
                 prev_audio_stats = audio_stats;
+                acc = (StepTimes){0};
             }
 
             // 7. Frame pacing: spin-wait to maintain ~60 fps
