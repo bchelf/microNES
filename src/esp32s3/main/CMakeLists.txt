@@ -59,6 +59,7 @@ idf_component_register(
         esp_lcd
         nvs_flash
         log
+        freertos
 )
 
 # Embed the ROM binary using target_add_binary_data, which accepts absolute paths.
