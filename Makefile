@@ -310,6 +310,30 @@ src/common/mmc1.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc1.c.s
 .PHONY : src/common/mmc1.c.s
 
+src/common/mmc3.o: src/common/mmc3.c.o
+.PHONY : src/common/mmc3.o
+
+# target to build an object file
+src/common/mmc3.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.o
+.PHONY : src/common/mmc3.c.o
+
+src/common/mmc3.i: src/common/mmc3.c.i
+.PHONY : src/common/mmc3.i
+
+# target to preprocess a source file
+src/common/mmc3.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.i
+.PHONY : src/common/mmc3.c.i
+
+src/common/mmc3.s: src/common/mmc3.c.s
+.PHONY : src/common/mmc3.s
+
+# target to generate assembly for a file
+src/common/mmc3.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.s
+.PHONY : src/common/mmc3.c.s
+
 src/common/nes.o: src/common/nes.c.o
 .PHONY : src/common/nes.o
 
@@ -437,6 +461,9 @@ help:
 	@echo "... src/common/mmc1.o"
 	@echo "... src/common/mmc1.i"
 	@echo "... src/common/mmc1.s"
+	@echo "... src/common/mmc3.o"
+	@echo "... src/common/mmc3.i"
+	@echo "... src/common/mmc3.s"
 	@echo "... src/common/nes.o"
 	@echo "... src/common/nes.i"
 	@echo "... src/common/nes.s"

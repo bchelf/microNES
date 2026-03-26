@@ -13,6 +13,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/micrones_core.dir/src/common/input.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/mmc1.c.o"
   "CMakeFiles/micrones_core.dir/src/common/mmc1.c.o.d"
+  "CMakeFiles/micrones_core.dir/src/common/mmc3.c.o"
+  "CMakeFiles/micrones_core.dir/src/common/mmc3.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/nes.c.o"
   "CMakeFiles/micrones_core.dir/src/common/nes.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/nrom.c.o"
