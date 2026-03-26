@@ -213,6 +213,7 @@ static void emulator_task(void *arg)
         goto idle;
     }
     nes_reset(&s_nes);
+    s_nes.ppu.mask = 0;  // AUDIO TEST: disable PPU rendering loops
     {
         /* Diagnose whether PRG ROM landed in internal SRAM, PSRAM, or flash.
          *
@@ -296,15 +297,9 @@ static void emulator_task(void *arg)
                 break;
             }
 
-            // 4. Hand the completed indexed framebuffer to Core 0 (no copy needed).
-            {
-                if (xQueueSend(s_display_frame_queue, &display_buffer, portMAX_DELAY) != pdTRUE) {
-                    ESP_LOGE(TAG, "Failed to queue display frame");
-                    xSemaphoreGive(s_display_frame_free[display_buffer]);
-                    break;
-                }
-                next_display_buffer = (display_buffer + 1u) % DISPLAY_FRAME_BUFFER_COUNT;
-            }
+            // 4. AUDIO TEST: release buffer immediately, skip display streaming
+            xSemaphoreGive(s_display_frame_free[display_buffer]);
+            next_display_buffer = (display_buffer + 1u) % DISPLAY_FRAME_BUFFER_COUNT;
 
             // 5. Drain APU samples into audio ring buffer
             {
