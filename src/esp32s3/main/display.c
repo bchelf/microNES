@@ -419,11 +419,9 @@ void display_stream_indexed_row(const uint8_t *palette_row, uint16_t w)
         uint32_t space = BLIT_CHUNK_PIXELS - s_stream_buf_px;
         if (chunk > space) chunk = space;
 
-        uint64_t t0 = (uint64_t)esp_timer_get_time();
         nes_video_convert_pixels(palette_row + sent,
                                  ((uint16_t *)s_dma_buf) + s_stream_buf_px,
                                  (uint16_t)chunk);
-        s_profile.blit_copy_us += (uint64_t)esp_timer_get_time() - t0;
 
         s_stream_buf_px += chunk;
         s_stream_sent_px += chunk;

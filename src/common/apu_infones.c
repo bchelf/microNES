@@ -340,8 +340,8 @@ static int16_t MICRONES_HOT_FUNC(apu_render_sample)(Apu *apu)
     float mixed = pulse_out + tnd_out;
 
     /* DC removal */
-    apu->dc_level_tracker += ((double)mixed - apu->dc_level_tracker) * 0.0001;
-    mixed -= (float)apu->dc_level_tracker;
+    apu->dc_level_tracker += (mixed - apu->dc_level_tracker) * 0.0001f;
+    mixed -= apu->dc_level_tracker;
 
     int sample = (int)(mixed * 32767.0f);
     if (sample < -32768) { sample = -32768; ++apu->clip_count; }

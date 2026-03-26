@@ -27,6 +27,11 @@ typedef struct {
     uint64_t cycles;
     uint8_t last_opcode;
     bool jammed;
+    /* insn_count sits in the 6-byte tail-padding of this struct (offset 20),
+     * keeping sizeof(Cpu6502) == 24.  It is incremented on every instruction
+     * via a single L32I/ADDI/S32I sequence (offset 20 = L32I imm5) instead of
+     * the uint64_t increment at a ~82 KB struct offset in NesExecutionStats. */
+    uint32_t insn_count;
 } Cpu6502;
 
 typedef struct {
