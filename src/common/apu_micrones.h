@@ -181,7 +181,7 @@ typedef struct {
     bool frame_counter_mode_5;
     bool frame_irq_inhibit;
     int16_t pcm[APU_PCM_CAPACITY];
-    double dc_level_tracker;
+    float dc_level_tracker;  // float is sufficient; double costs ~250 cycles/sample in SW on LX7
     ApuDebugSampleStats channel_stats[APU_DEBUG_CHANNEL_COUNT];
     ApuPulseChannel pulse[2];
     ApuTriangleChannel triangle;

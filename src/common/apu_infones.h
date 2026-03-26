@@ -256,7 +256,7 @@ typedef struct {
 
     /* ---- Debug / metrics ---- */
     ApuDebugSampleStats channel_stats[APU_DEBUG_CHANNEL_COUNT];
-    double   dc_level_tracker;
+    float    dc_level_tracker;  // float is sufficient; double costs ~250 cycles/sample in SW on LX7
     uint32_t test_tone_phase[2];
 } Apu;
 

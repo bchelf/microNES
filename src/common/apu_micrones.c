@@ -464,8 +464,8 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
      * A faster constant (e.g. matching the NES RC filter at ~16 Hz) decays
      * the baseline to zero between notes, making the amplitude jump at
      * note-on larger and the click more audible — so keep it slow. */
-    apu->dc_level_tracker += ((double)mixed - apu->dc_level_tracker) * 0.0001;
-    mixed = mixed - (float)apu->dc_level_tracker;
+    apu->dc_level_tracker += (mixed - apu->dc_level_tracker) * 0.0001f;
+    mixed -= apu->dc_level_tracker;
 
     sample = (int)lrintf(mixed * 32767.0f);
     if (sample < -32768) {
@@ -506,7 +506,7 @@ void apu_init(Apu *apu) {
 void apu_reset(Apu *apu) {
     /* Preserve the DC-level tracker across reset so the first post-reset
      * sample isn't subtracted against 0 (which would cause an audible pop). */
-    double dc = apu->dc_level_tracker;
+    float dc = apu->dc_level_tracker;
     memset(apu, 0, sizeof(*apu));
     apu->dc_level_tracker = dc;
     apu->pulse[0].sweep_ones_complement = true;
