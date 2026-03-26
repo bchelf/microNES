@@ -186,10 +186,9 @@ static void audio_scale_test(void)
             remaining -= batch;
         }
 
-        // Wait for the ring buffer to drain before the next note
-        while (audio_free_slots() < total - 1u) {
-            vTaskDelay(1);
-        }
+        // Wait for the ring buffer to drain before the next note.
+        // The ring buffer holds ~85 ms; 100 ms is enough to flush it.
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
     ESP_LOGI(TAG, "audio scale test done");
 }
