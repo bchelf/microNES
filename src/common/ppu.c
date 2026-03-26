@@ -863,6 +863,20 @@ static void ppu_note_sprite0_opaque(Ppu *ppu, int x, int y) {
 #endif
 }
 
+/* Precomputed nametable physical offsets for each mirror mode.
+ * Row i = mirror mode i; col j = physical byte-offset for virtual nametable j.
+ * Indexed as k_nt_phys[cartridge->mirror_mode][virtual_table_0_to_3]. */
+static const uint16_t k_nt_phys[4][4] = {
+    /* NES_MIRROR_HORIZONTAL  (0): A/B→physical 0, C/D→physical 1 */
+    { 0u, 0u, 0x0400u, 0x0400u },
+    /* NES_MIRROR_VERTICAL    (1): A/C→physical 0, B/D→physical 1 */
+    { 0u, 0x0400u, 0u, 0x0400u },
+    /* NES_MIRROR_ONE_SCREEN_LOWER (2): all→physical 0 */
+    { 0u, 0u, 0u, 0u },
+    /* NES_MIRROR_ONE_SCREEN_UPPER (3): all→physical 1 */
+    { 0x0400u, 0x0400u, 0x0400u, 0x0400u },
+};
+
 static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartridge, int y) {
 #if !MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
 #if MICRONES_ENABLE_FRAMEBUFFER
@@ -886,6 +900,8 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
     uint16_t bg_base_nametable = (bg_base_v >> 10) & 0x0003u;
     uint16_t bg_row = (bg_base_v >> 12) & 0x0007u;
     uint16_t bg_pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
+    /* Mirror mode doesn't change mid-scanline: precompute once for the 66 tile/attr lookups. */
+    const uint16_t *nt_phys = k_nt_phys[cartridge->mirror_mode];
 
     if (needs_sprite_comp) {
         memset(bg_opaque, 0, sizeof(bg_opaque));
@@ -906,8 +922,11 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                 (uint16_t)(0x2000u + name_table + bg_coarse_y * 32u + coarse_x);
             uint16_t attr_addr =
                 (uint16_t)(0x23c0u + name_table + ((bg_coarse_y >> 2) * 8u) + (coarse_x >> 2));
-            uint8_t tile = ppu->nametables[ppu_nametable_index(cartridge, tile_index_addr)];
-            uint8_t attr = ppu->nametables[ppu_nametable_index(cartridge, attr_addr)];
+            /* Use precomputed nt_phys[] instead of ppu_nametable_index() to avoid
+             * a 4-way branch on mirror_mode for each of the 66 tile/attr lookups
+             * per scanline.  (tile_index_addr >> 10) & 3 == effective_nametable. */
+            uint8_t tile = ppu->nametables[nt_phys[(tile_index_addr >> 10u) & 3u] | (tile_index_addr & 0x03ffu)];
+            uint8_t attr = ppu->nametables[nt_phys[(attr_addr >> 10u) & 3u] | (attr_addr & 0x03ffu)];
             uint8_t palette_select =
                 (uint8_t)((attr >> ((((bg_coarse_y & 0x02u) << 1) | (coarse_x & 0x02u)))) & 0x03u);
             uint16_t pattern_addr = (uint16_t)(bg_pattern_base + tile * 16u + bg_row);
