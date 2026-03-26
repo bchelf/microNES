@@ -174,63 +174,75 @@ typedef struct {
 } PpuStepProfile;
 
 typedef struct {
-    uint8_t ctrl;
-    uint8_t mask;
-    uint8_t status;
-    uint8_t oam_addr;
-    uint8_t oam[256];
-    uint8_t nametables[2048];
-    uint8_t palette[32];
-    uint8_t read_buffer;
-    uint16_t vram_addr;
-    uint16_t temp_addr;
-    uint8_t fine_x;
-    bool write_toggle;
-    uint8_t scroll_x;
-    uint8_t scroll_y;
-    uint16_t render_vram_addr;
-    uint8_t render_fine_x;
-    uint8_t render_scroll_x;
-    uint8_t render_scroll_y;
-    uint8_t render_base_nametable;
-    int scanline;
-    int cycle;
-    uint64_t frame_count;
-    bool frame_ready;
-    bool scanline_ready;
-    bool nmi_pending;
-    uint64_t completed_frame_count;
-    bool completed_frame_ready;
-    uint64_t last_completed_frame_hash;
-    uint32_t last_completed_nonzero_pixels;
-    uint64_t first_nonblank_frame_index;
-    uint64_t first_nonblank_frame_hash;
-    bool sprite0_hit_ever;
-    uint64_t sprite0_hit_count;
-    uint64_t sprite0_opaque_pixel_count;
-    uint64_t sprite0_background_overlap_count;
-    uint64_t first_sprite0_hit_frame;
-    int first_sprite0_hit_scanline;
-    int first_sprite0_hit_x;
-    uint64_t first_sprite0_opaque_frame;
-    int first_sprite0_opaque_scanline;
-    int first_sprite0_opaque_x;
-    uint64_t sprite_composited_pixel_count;
-    uint64_t frames_with_sprite_pixels;
-    uint32_t last_completed_sprite_pixels;
-    uint64_t first_frame_with_sprite_pixels;
-    uint8_t max_scanline_sprite_count;
+    /* ── Hot scalars first: Xtensa LX7 can address these with a single L32I /
+     * L8UI from the Nes struct base (Ppu starts at Nes offset ~36, so all
+     * fields within the first ~984 bytes of Ppu are within the L32I direct
+     * immediate range of ≤ 1020 bytes).
+     *
+     * Previously scanline/cycle were buried at Ppu offset ~2360 (behind the
+     * oam/nametable/palette arrays), requiring an ADDMI+L32I two-instruction
+     * sequence.  Moving them here cuts that to a single L32I. */
+    int scanline;                        /* Ppu+0:  updated every ppu_step_cycles call */
+    int cycle;                           /* Ppu+4:  3× per CPU instruction (ppu_step_cycles_fast) */
+    bool frame_ready;                    /* Ppu+8  */
+    bool scanline_ready;                 /* Ppu+9:  tested every CPU instruction (nes_step_scanline) */
+    bool nmi_pending;                    /* Ppu+10 */
+    bool completed_frame_ready;          /* Ppu+11 */
+    uint8_t ctrl;                        /* Ppu+12 */
+    uint8_t mask;                        /* Ppu+13 */
+    uint8_t status;                      /* Ppu+14 */
+    uint8_t oam_addr;                    /* Ppu+15 */
+    uint8_t read_buffer;                 /* Ppu+16 */
+    uint8_t fine_x;                      /* Ppu+17 */
+    bool write_toggle;                   /* Ppu+18 */
+    uint8_t scroll_x;                    /* Ppu+19 */
+    uint8_t scroll_y;                    /* Ppu+20 */
+    uint8_t render_fine_x;               /* Ppu+21 */
+    uint8_t render_scroll_x;             /* Ppu+22 */
+    uint8_t render_scroll_y;             /* Ppu+23 */
+    uint8_t render_base_nametable;       /* Ppu+24 */
+    bool sprite0_hit_ever;               /* Ppu+25 */
+    uint8_t max_scanline_sprite_count;   /* Ppu+26 */
+    uint8_t visible_write_diag_count;    /* Ppu+27 */
+    uint8_t last_completed_visible_write_diag_count; /* Ppu+28 */
+    /* 1 byte implicit pad → */
+    uint16_t vram_addr;                  /* Ppu+30 */
+    uint16_t temp_addr;                  /* Ppu+32 */
+    uint16_t render_vram_addr;           /* Ppu+34 */
+    /* 4 bytes implicit pad for uint64_t alignment → */
+    uint64_t frame_count;                /* Ppu+40 */
+    uint64_t completed_frame_count;      /* Ppu+48 */
+    uint64_t last_completed_frame_hash;  /* Ppu+56 */
+    uint32_t last_completed_nonzero_pixels; /* Ppu+64 */
+    uint32_t last_completed_sprite_pixels;  /* Ppu+68 */
+    uint64_t first_nonblank_frame_index; /* Ppu+72 */
+    uint64_t first_nonblank_frame_hash;  /* Ppu+80 */
+    uint64_t sprite0_hit_count;          /* Ppu+88 */
+    uint64_t sprite0_opaque_pixel_count; /* Ppu+96 */
+    uint64_t sprite0_background_overlap_count; /* Ppu+104 */
+    uint64_t first_sprite0_hit_frame;    /* Ppu+112 */
+    int first_sprite0_hit_scanline;      /* Ppu+120 */
+    int first_sprite0_hit_x;             /* Ppu+124 */
+    uint64_t first_sprite0_opaque_frame; /* Ppu+128 */
+    int first_sprite0_opaque_scanline;   /* Ppu+136 */
+    int first_sprite0_opaque_x;          /* Ppu+140 */
+    uint64_t sprite_composited_pixel_count; /* Ppu+144 */
+    uint64_t frames_with_sprite_pixels;  /* Ppu+152 */
+    uint64_t first_frame_with_sprite_pixels; /* Ppu+160 */
+    /* ── Large tables pushed below the hot scalars ── */
+    uint8_t oam[256];                    /* Ppu+168 */
+    uint8_t nametables[2048];            /* Ppu+424 */
+    uint8_t palette[32];                 /* Ppu+2472 */
+    /* ── Diagnostics and frame buffer (cold, large) ── */
     PpuSprite0Diag sprite0_diag;
     PpuRenderArtifactDiag render_artifact_diag;
     PpuVisibleWriteDiag visible_write_diag[PPU_VISIBLE_WRITE_DIAG_MAX];
-    uint8_t visible_write_diag_count;
     PpuVisibleWriteDiag last_completed_visible_write_diag[PPU_VISIBLE_WRITE_DIAG_MAX];
-    uint8_t last_completed_visible_write_diag_count;
     micrones_profile_now_us_fn profile_now_us;
     void *profile_now_user;
     PpuStepProfile step_profile;
     NesFrameBuffer frame_buffer;
-    NesFrameBuffer *active_frame_buffer; // render target; points to frame_buffer by default
+    NesFrameBuffer *active_frame_buffer; /* render target; points to frame_buffer by default */
     NesScanline scanline_buffer;
 } Ppu;
 
