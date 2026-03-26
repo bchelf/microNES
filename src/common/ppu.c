@@ -902,6 +902,12 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
     uint16_t bg_pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
     /* Mirror mode doesn't change mid-scanline: precompute once for the 66 tile/attr lookups. */
     const uint16_t *nt_phys = k_nt_phys[cartridge->mirror_mode];
+    /* Scanline-invariant nametable row offsets, hoisted out of the tile loop.
+     * bg_row_offset   = coarse-Y * 32  (tile nametable row byte offset, 0..992)
+     * bg_attr_row     = (coarse-Y/4)*8  (attribute nametable row offset added to 0x3C0)
+     * Both fit in 10 bits so no masking needed when combined with coarse_x (≤31). */
+    uint16_t bg_row_offset = (uint16_t)(bg_coarse_y * 32u);
+    uint16_t bg_attr_row   = (uint16_t)((bg_coarse_y >> 2u) * 8u);
 
     if (needs_sprite_comp) {
         memset(bg_opaque, 0, sizeof(bg_opaque));
@@ -917,16 +923,16 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
             uint16_t coarse_x = coarse_x_total & 0x001fu;
             uint16_t effective_nametable =
                 (uint16_t)(bg_base_nametable ^ ((coarse_x_total >> 5) & 0x0001u));
-            uint16_t name_table = (uint16_t)(effective_nametable * 0x0400u);
-            uint16_t tile_index_addr =
-                (uint16_t)(0x2000u + name_table + bg_coarse_y * 32u + coarse_x);
-            uint16_t attr_addr =
-                (uint16_t)(0x23c0u + name_table + ((bg_coarse_y >> 2) * 8u) + (coarse_x >> 2));
-            /* Use precomputed nt_phys[] instead of ppu_nametable_index() to avoid
-             * a 4-way branch on mirror_mode for each of the 66 tile/attr lookups
-             * per scanline.  (tile_index_addr >> 10) & 3 == effective_nametable. */
-            uint8_t tile = ppu->nametables[nt_phys[(tile_index_addr >> 10u) & 3u] | (tile_index_addr & 0x03ffu)];
-            uint8_t attr = ppu->nametables[nt_phys[(attr_addr >> 10u) & 3u] | (attr_addr & 0x03ffu)];
+            /* (tile_index_addr >> 10) & 3 == effective_nametable (see comment below),
+             * so we do ONE nt_phys lookup shared by both tile and attr instead of two. */
+            uint16_t nt_base = nt_phys[effective_nametable];
+            /* Tile: nametable byte at (coarse-Y * 32 + coarse-X) within the physical table.
+             * Attr: attribute byte at (0x3C0 + (coarse-Y/4)*8 + coarse-X/4).
+             * Both offsets fit in 10 bits (tile ≤ 0x3FF, attr ≤ 0x3FF) so the nt_base
+             * OR combines cleanly.  Eliminates the 0x2000 bias and the two redundant
+             * (addr >> 10) & 3 shifts that previously re-derived effective_nametable. */
+            uint8_t tile = ppu->nametables[nt_base | (uint16_t)(bg_row_offset + coarse_x)];
+            uint8_t attr = ppu->nametables[nt_base | (uint16_t)(0x3c0u + bg_attr_row + (coarse_x >> 2u))];
             uint8_t palette_select =
                 (uint8_t)((attr >> ((((bg_coarse_y & 0x02u) << 1) | (coarse_x & 0x02u)))) & 0x03u);
             uint16_t pattern_addr = (uint16_t)(bg_pattern_base + tile * 16u + bg_row);
