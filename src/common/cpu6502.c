@@ -83,9 +83,9 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
     if (pc >= 0x8000u) {
         off = (uint32_t)(pc - 0x8000u);
         if (off < 0x4000u) {
-            return nes->cartridge.prg_bank_lo[off];
+            return nes->prg_bank_lo[off];
         }
-        return nes->cartridge.prg_bank_hi[off - 0x4000u];
+        return nes->prg_bank_hi[off - 0x4000u];
     }
     return cpu_read(cpu, nes, pc);
 }
@@ -109,11 +109,11 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
         lo_off = (uint32_t)(pc - 0x8000u);
         hi_off = (uint32_t)((uint16_t)(pc + 1u) - 0x8000u);
         lo = (lo_off < 0x4000u)
-            ? nes->cartridge.prg_bank_lo[lo_off]
-            : nes->cartridge.prg_bank_hi[lo_off - 0x4000u];
+            ? nes->prg_bank_lo[lo_off]
+            : nes->prg_bank_hi[lo_off - 0x4000u];
         hi = (hi_off < 0x4000u)
-            ? nes->cartridge.prg_bank_lo[hi_off]
-            : nes->cartridge.prg_bank_hi[hi_off - 0x4000u];
+            ? nes->prg_bank_lo[hi_off]
+            : nes->prg_bank_hi[hi_off - 0x4000u];
         cpu->pc = (uint16_t)(pc + 2u);
     } else {
         lo = cpu_fetch8(cpu, nes);
@@ -388,6 +388,7 @@ void cpu6502_init(Cpu6502 *cpu) {
     cpu->cycles = 0;
     cpu->last_opcode = 0;
     cpu->jammed = false;
+    cpu->insn_count = 0;
 }
 
 void cpu6502_reset(Cpu6502 *cpu, Nes *nes) {
@@ -400,6 +401,7 @@ void cpu6502_reset(Cpu6502 *cpu, Nes *nes) {
     cpu->cycles = 7;
     cpu->last_opcode = 0;
     cpu->jammed = false;
+    cpu->insn_count = 0;
 }
 
 bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
@@ -423,7 +425,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
             nes->stop_info.opcode_is_official = cpu6502_opcode_info(cpu->last_opcode)->official;
             nes->stop_info.opcode_is_supported = cpu6502_opcode_info(cpu->last_opcode)->supported;
 #endif
-            nes->stop_info.instruction_index = nes->stats.instruction_count;
+            nes->stop_info.instruction_index = (uint64_t)cpu->insn_count;
         }
         snprintf(nes->last_error, sizeof(nes->last_error), "CPU is jammed");
         return false;
@@ -448,7 +450,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     case 0x00:
         cpu->pc++;
         cpu_service_interrupt(cpu, nes, 0xfffeu, true);
-        ++nes->stats.instruction_count;
+        ++cpu->insn_count;
         return true;
 
     case 0x01:
@@ -1314,7 +1316,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
             nes->stop_info.opcode_is_official = opcode_info->official;
             nes->stop_info.opcode_is_supported = opcode_info->supported;
 #endif
-            nes->stop_info.instruction_index = nes->stats.instruction_count + 1;
+            nes->stop_info.instruction_index = (uint64_t)cpu->insn_count + 1;
         }
         snprintf(
             nes->last_error,
@@ -1330,15 +1332,17 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
             cpu->y,
             cpu->sp,
             cpu->p,
-            (unsigned long long)(nes->stats.instruction_count + 1)
+            (unsigned long long)cpu->insn_count + 1u
         );
         cpu->jammed = true;
         return false;
     } /* default */
     } /* switch */
 
-    cpu->cycles += cycles;
-    ++nes->stats.instruction_count;
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
+    cpu->cycles += cycles;  /* uint64_t: only needed for trace/hash; not used in production */
+#endif
+    ++cpu->insn_count;  /* uint32_t at offset 20 in Cpu6502: single L32I/ADDI/S32I sequence */
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
@@ -1351,7 +1355,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     cpu_started_us = nes_profile_now_us(nes);
 #endif
     cpu_started_cycles = micrones_profile_now_cycles();
-    ppu_step_cycles(&nes->ppu, &nes->cartridge, cycles * 3u);
+    ppu_step_cycles_fast(&nes->ppu, &nes->cartridge, cycles * 3u);
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.ppu_step_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif

@@ -1,6 +1,7 @@
 build/
 build-*/
 roms*
+build_*/
 *.uf2
 *.elf
 *.bin

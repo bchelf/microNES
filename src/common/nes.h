@@ -61,6 +61,17 @@ typedef struct {
 
 typedef struct Nes {
     Cpu6502 cpu;
+    /* pending_apu_cycles is kept immediately after cpu (offset 24) so that the
+     * hot-path increment in cpu6502_step uses L32I with a small immediate
+     * (offset 24 = L32I imm6) instead of a large-offset L32R+ADD sequence. */
+    uint32_t pending_apu_cycles;  /* accumulated CPU cycles not yet flushed to apu_step */
+    /* prg_bank_lo/hi are hot caches of cartridge.prg_bank_lo/hi placed at
+     * offsets 28/32 so cpu_fetch8, cpu_fetch16, and nes_cpu_bus_read_fast can
+     * load them with a single small-immediate L32I instead of L32R+ADD through
+     * the ~70 KB cartridge offset.  Sync via nes_sync_prg_cache() on cart load,
+     * reset, and MMC1 bank switches. */
+    const uint8_t *prg_bank_lo;   /* offset 28: $8000-$BFFF window */
+    const uint8_t *prg_bank_hi;   /* offset 32: $C000-$FFFF window */
     Ppu ppu;
     Apu apu;
     NesCartridge cartridge;
@@ -75,7 +86,6 @@ typedef struct Nes {
     micrones_profile_now_us_fn profile_now_us;
     void *profile_now_user;
     NesStepProfile step_profile;
-    uint32_t pending_apu_cycles;  /* accumulated CPU cycles not yet flushed to apu_step */
     char last_error[1024];
 } Nes;
 
@@ -87,6 +97,7 @@ bool nes_load_cartridge_const_memory(Nes *nes, const uint8_t *rom_image, size_t 
 void nes_reset(Nes *nes);
 void nes_set_profile_clock(Nes *nes, micrones_profile_now_us_fn now_us, void *user);
 void nes_set_controller_state(Nes *nes, unsigned controller_index, NesControllerState state);
+void nes_set_render_target(Nes *nes, NesFrameBuffer *fb);
 void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_end);
 bool nes_step_instruction(Nes *nes);
 bool nes_step_scanline(Nes *nes);
@@ -117,21 +128,27 @@ static inline uint8_t nes_nrom_prg_read_fast(const Nes *nes, uint16_t addr) {
     return nes->cartridge.prg_rom[(uint32_t)(addr - 0x8000u) & nes->cartridge.prg_rom_mask];
 }
 
+/* Sync the prg_bank_lo/hi hot cache from cartridge after any event that may
+ * change the bank pointers (cart load, reset, MMC1 write). */
+static inline void nes_sync_prg_cache(Nes *nes) {
+    nes->prg_bank_lo = nes->cartridge.prg_bank_lo;
+    nes->prg_bank_hi = nes->cartridge.prg_bank_hi;
+}
+
 static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
 #if MICRONES_ENABLE_STEP_PROFILING
     ++nes->step_profile.bus_read_count;
 #endif
     // PRG ROM is checked first: the majority of reads are instruction fetches
     // and data from the $8000-$FFFF range.
-    // prg_bank_lo/$8000-$BFFF and prg_bank_hi/$C000-$FFFF are precomputed
-    // pointers updated on every bank switch; this keeps the hot path to a
-    // single subtraction + compare + indexed load regardless of mapper.
+    // prg_bank_lo/hi are cached at small Nes offsets (28/32) so each PRG read
+    // costs a single L32I instead of L32R+ADD through the ~70 KB cartridge offset.
     if (addr >= 0x8000u) {
         uint32_t off = (uint32_t)(addr - 0x8000u);
         if (off < 0x4000u) {
-            return nes->cartridge.prg_bank_lo[off];
+            return nes->prg_bank_lo[off];
         }
-        return nes->cartridge.prg_bank_hi[off - 0x4000u];
+        return nes->prg_bank_hi[off - 0x4000u];
     }
     if (addr < 0x2000u) {
         return nes->cpu_ram[addr & 0x07ffu];
@@ -194,6 +211,7 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
     if (addr >= 0x8000u) {
         if (nes->cartridge.mapper == 1) {
             mmc1_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);  /* keep hot cache in sync after bank switch */
         }
         /* mapper 0 / NROM: writes to cartridge space are ignored */
         return;

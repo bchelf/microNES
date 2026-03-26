@@ -382,7 +382,7 @@ static uint8_t apu_triangle_output(const ApuTriangleChannel *triangle) {
     if (!triangle->enabled ||
         triangle->length_counter == 0 ||
         triangle->linear_counter == 0 ||
-        triangle->timer_period < 8u) {
+        triangle->timer_period < 2u) {
         return 0;
     }
 
@@ -399,21 +399,41 @@ static uint8_t apu_noise_output(const ApuNoiseChannel *noise) {
     return apu_noise_volume(noise);
 }
 
-static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
+/* ---- NES hardware mixer lookup tables ----------------------------------------
+ * The NES nonlinear mixing formula requires 6 float divides per sample:
+ *   pulse_out = 95.88 / (8128/(p1+p2) + 100)        p1+p2 in 0..30
+ *   tnd_out   = 159.79 / (1/(tri/8227 + n/12241) + 100)   tri,n in 0..15
+ * At 800 samples/frame that's ~4800 float divides/frame. Precomputing these
+ * as int16_t tables (built once at apu_init) reduces the hot path to two
+ * table lookups + integer add. */
+static int16_t s_pulse_mix_table[31];  /* index = pulse1+pulse2, 0..30   */
+static int16_t s_tnd_mix_table[256];   /* index = triangle*16+noise, dmc=0 */
+/* Scale: max combined NES output ≈ 0.6318; table values scaled so that sum
+ * of both tables never exceeds INT16_MAX (tables individually may approach
+ * ~13400 and ~19400 respectively). */
+static const float k_mix_table_scale = 32767.0f / (0.258498f + 0.373355f);
+
+static void apu_build_mix_tables(void) {
+    int ps, tri, noise;
+    for (ps = 1; ps <= 30; ++ps) {
+        float v = 95.88f / (8128.0f / (float)ps + 100.0f);
+        s_pulse_mix_table[ps] = (int16_t)lrintf(v * k_mix_table_scale);
+    }
+    s_pulse_mix_table[0] = 0;
+    for (tri = 0; tri <= 15; ++tri) {
+        for (noise = 0; noise <= 15; ++noise) {
+            float tnd = (float)tri / 8227.0f + (float)noise / 12241.0f;
+            float v = (tnd > 0.0f) ? 159.79f / (1.0f / tnd + 100.0f) : 0.0f;
+            s_tnd_mix_table[tri * 16 + noise] = (int16_t)lrintf(v * k_mix_table_scale);
+        }
+    }
+}
+
+static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
     int32_t pulse1_raw = (int32_t)apu_pulse_output(&apu->pulse[0]);
     int32_t pulse2_raw = (int32_t)apu_pulse_output(&apu->pulse[1]);
     int32_t triangle_raw = (int32_t)apu_triangle_output(&apu->triangle);
     int32_t noise_raw = (int32_t)apu_noise_output(&apu->noise);
-    int32_t dmc_raw = 0;
-    float pulse1;
-    float pulse2;
-    float triangle;
-    float noise;
-    float pulse_sum;
-    float pulse_out = 0.0f;
-    float tnd_out = 0.0f;
-    float mixed;
-    int sample;
 
     if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_PULSE1) {
         apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] += k_apu_test_tone_step_pulse1;
@@ -422,17 +442,12 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
         triangle_raw = 0;
         noise_raw = 0;
     } else if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_TRIANGLE) {
-        uint32_t phase;
-        uint32_t step;
-        int32_t tri;
-
-        apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] += k_apu_test_tone_step_triangle;
-        phase = apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE];
-        step = phase >> 27;
-        tri = (step < 16u) ? (int32_t)step : (int32_t)(31u - step);
+        uint32_t phase = apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] + k_apu_test_tone_step_triangle;
+        apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] = phase;
+        uint32_t step = phase >> 27;
+        triangle_raw = (step < 16u) ? (int32_t)step : (int32_t)(31u - step);
         pulse1_raw = 0;
         pulse2_raw = 0;
-        triangle_raw = tri;
         noise_raw = 0;
     }
 
@@ -440,34 +455,27 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_PULSE2], pulse2_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_TRIANGLE], triangle_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_NOISE], noise_raw);
-    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], dmc_raw);
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], 0);
 
-    pulse1 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1) ? (float)pulse1_raw : 0.0f;
-    pulse2 = (apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2) ? (float)pulse2_raw : 0.0f;
-    triangle = (apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE) ? (float)triangle_raw : 0.0f;
-    noise = (apu->mix_enable_mask & APU_DEBUG_MASK_NOISE) ? (float)noise_raw : 0.0f;
-    pulse_sum = pulse1 + pulse2;
+    /* Apply per-channel debug mute mask (all-on by default; no-op in production) */
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1))   pulse1_raw = 0;
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2))   pulse2_raw = 0;
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE)) triangle_raw = 0;
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_NOISE))    noise_raw = 0;
 
-    if (pulse_sum > 0.0f) {
-        pulse_out = 95.88f / ((8128.0f / pulse_sum) + 100.0f);
-    }
-    if ((triangle + noise) > 0.0f) {
-        tnd_out = 159.79f / ((1.0f / ((triangle / 8227.0f) + (noise / 12241.0f))) + 100.0f);
-    }
+    /* Table lookup replaces 6 float divides with 2 lookups + integer add */
+    int32_t mixed_raw = (int32_t)s_pulse_mix_table[pulse1_raw + pulse2_raw]
+                      + s_tnd_mix_table[triangle_raw * 16 + noise_raw];
 
-    mixed = pulse_out + tnd_out;
+    /* Leaky DC-level tracker to remove positive DC bias (~0.76 Hz corner).
+     * dc_level_tracker stores the DC estimate pre-scaled by 32767 so the
+     * update and output use integer-range arithmetic, eliminating two float
+     * multiplies per sample vs the normalise→track→denormalise approach. */
+    float dc = apu->dc_level_tracker;
+    dc += ((float)mixed_raw - dc) * 0.0001f;
+    apu->dc_level_tracker = dc;
 
-    /* Leaky DC-level tracker. Chases the mean of `mixed` at ~0.76 Hz.
-     * Subtracting it removes DC offset without creating step discontinuities
-     * at note-on/off transitions — equivalent to the analog capacitor coupling
-     * on the real NES output circuit. R = 0.9999 per sample at 48 kHz.
-     * A faster constant (e.g. matching the NES RC filter at ~16 Hz) decays
-     * the baseline to zero between notes, making the amplitude jump at
-     * note-on larger and the click more audible — so keep it slow. */
-    apu->dc_level_tracker += ((double)mixed - apu->dc_level_tracker) * 0.0001;
-    mixed = mixed - (float)apu->dc_level_tracker;
-
-    sample = (int)lrintf(mixed * 32767.0f);
+    int sample = (int)lrintf((float)mixed_raw - dc);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -481,10 +489,14 @@ static int16_t __attribute__((noinline)) MICRONES_HOT_FUNC(apu_mix_sample)(Apu *
 
 /* Advance a channel timer by n_cycles. Returns the number of times it fired.
  * Timers count down from period to 0, fire, then reset to period.
- * Period length in cycles = timer_period + 1. */
-static uint32_t MICRONES_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
-                                                     uint16_t  period,
-                                                     uint32_t  n_cycles) {
+ * Period length in cycles = timer_period + 1.
+ *
+ * Marked inline (not MICRONES_HOT_FUNC) so the compiler expands it directly
+ * into apu_step's inner loop, which is already in IRAM.  Eliminates ~3200
+ * CALL8/ENTRY/RETW round-trips per frame (~73 µs at 240 MHz on LX7). */
+static inline uint32_t apu_timer_advance(uint16_t *counter,
+                                         uint16_t  period,
+                                         uint32_t  n_cycles) {
     if (*counter >= n_cycles) {
         *counter -= (uint16_t)n_cycles;
         return 0;
@@ -497,6 +509,7 @@ static uint32_t MICRONES_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
 }
 
 void apu_init(Apu *apu) {
+    apu_build_mix_tables();
     memset(apu, 0, sizeof(*apu));
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
@@ -506,7 +519,7 @@ void apu_init(Apu *apu) {
 void apu_reset(Apu *apu) {
     /* Preserve the DC-level tracker across reset so the first post-reset
      * sample isn't subtracted against 0 (which would cause an audible pop). */
-    double dc = apu->dc_level_tracker;
+    float dc = apu->dc_level_tracker;
     memset(apu, 0, sizeof(*apu));
     apu->dc_level_tracker = dc;
     apu->pulse[0].sweep_ones_complement = true;
@@ -518,97 +531,113 @@ void apu_reset(Apu *apu) {
 void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
     if (cpu_cycles == 0) return;
 
-    /* Compute APU-rate cycles (half CPU rate, fired when cpu_cycles is even).
-     * apu_cycles = number of even values in (old, old+cpu_cycles]. */
-    uint32_t old_cpu  = (uint32_t)apu->cpu_cycles;
-    apu->cpu_cycles  += cpu_cycles;
-    uint32_t apu_cycles = (old_cpu + cpu_cycles) / 2u - old_cpu / 2u;
+    uint32_t cycles_left = cpu_cycles;
 
-    if (apu_cycles > 0) {
-        /* --- Frame counter: clocked at APU rate --- */
-        /* Processed before the triangle timer so that any length/linear counter
-         * updates take effect before the sequencer is advanced this batch. */
-        {
-            uint32_t old_fc = (uint32_t)apu->frame_counter_cycle;
-            uint32_t new_fc = old_fc + apu_cycles;
-            /* Each batch is 1-4 APU cycles; thresholds are 3728+ apart, so at
-             * most one threshold crossing per call. Check from high to low so
-             * the reset case is handled first. */
-            if (!apu->frame_counter_mode_5) {
-                if (old_fc < APU_FRAME_STEP_4 && new_fc >= APU_FRAME_STEP_4) {
-                    apu_quarter_frame(apu); apu_half_frame(apu);
-                    ++apu->frame_counter_steps;
-                    new_fc = 0;
-                } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
-                    apu_quarter_frame(apu);
-                } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
-                    apu_quarter_frame(apu); apu_half_frame(apu);
-                } else if (old_fc < APU_FRAME_STEP_1 && new_fc >= APU_FRAME_STEP_1) {
-                    apu_quarter_frame(apu);
+    do {
+#if MICRONES_ENABLE_APU_PCM_OUTPUT
+        /* Advance only to the next sample output point so each sample is mixed
+         * from channel state that reflects timers up to that exact cycle.
+         * cycles_to_next = ceil((APU_CPU_CLOCK_HZ - sample_phase) / RATE) */
+        uint32_t to_next = (APU_CPU_CLOCK_HZ - apu->sample_phase + APU_OUTPUT_SAMPLE_RATE - 1u)
+                           / APU_OUTPUT_SAMPLE_RATE;
+        uint32_t cycles_this = to_next < cycles_left ? to_next : cycles_left;
+#else
+        uint32_t cycles_this = cycles_left;
+#endif
+
+        /* Compute APU-rate cycles (half CPU rate) for this sub-batch.
+         * apu_cycles = number of even values in (old, old+cycles_this]. */
+        uint32_t old_cpu = apu->cpu_cycles;
+        apu->cpu_cycles += cycles_this;
+        uint32_t apu_cycles = (old_cpu + cycles_this) / 2u - old_cpu / 2u;
+
+        if (apu_cycles > 0) {
+            /* --- Frame counter: clocked at APU rate --- */
+            /* Processed before the triangle timer so that any length/linear counter
+             * updates take effect before the sequencer is advanced this sub-batch. */
+            {
+                uint32_t old_fc = apu->frame_counter_cycle;
+                uint32_t new_fc = old_fc + apu_cycles;
+                /* Sub-batches are ≤38 CPU cycles (~19 APU cycles); thresholds are
+                 * 3728+ apart, so at most one threshold crossing per sub-batch.
+                 * Check from high to low so the reset case is handled first. */
+                if (!apu->frame_counter_mode_5) {
+                    if (old_fc < APU_FRAME_STEP_4 && new_fc >= APU_FRAME_STEP_4) {
+                        apu_quarter_frame(apu); apu_half_frame(apu);
+                        ++apu->frame_counter_steps;
+                        new_fc = 0;
+                    } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
+                        apu_quarter_frame(apu);
+                    } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
+                        apu_quarter_frame(apu); apu_half_frame(apu);
+                    } else if (old_fc < APU_FRAME_STEP_1 && new_fc >= APU_FRAME_STEP_1) {
+                        apu_quarter_frame(apu);
+                    }
+                } else {
+                    if (old_fc < APU_FRAME_STEP_5 && new_fc >= APU_FRAME_STEP_5) {
+                        apu_quarter_frame(apu); apu_half_frame(apu);
+                        ++apu->frame_counter_steps;
+                        new_fc = 0;
+                    } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
+                        apu_quarter_frame(apu);
+                    } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
+                        apu_quarter_frame(apu); apu_half_frame(apu);
+                    } else if (old_fc < APU_FRAME_STEP_1 && new_fc >= APU_FRAME_STEP_1) {
+                        apu_quarter_frame(apu);
+                    }
                 }
-            } else {
-                if (old_fc < APU_FRAME_STEP_5 && new_fc >= APU_FRAME_STEP_5) {
-                    apu_quarter_frame(apu); apu_half_frame(apu);
-                    ++apu->frame_counter_steps;
-                    new_fc = 0;
-                } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
-                    apu_quarter_frame(apu);
-                } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
-                    apu_quarter_frame(apu); apu_half_frame(apu);
-                } else if (old_fc < APU_FRAME_STEP_1 && new_fc >= APU_FRAME_STEP_1) {
-                    apu_quarter_frame(apu);
+                apu->frame_counter_cycle = new_fc;
+            }
+
+            /* --- Pulse timers: clocked at APU rate --- */
+            {
+                ApuPulseChannel *p = &apu->pulse[0];
+                uint32_t fires = apu_timer_advance(&p->timer_counter, p->timer_period, apu_cycles);
+                p->duty_step = (uint8_t)((p->duty_step + fires) & 0x07u);
+            }
+            {
+                ApuPulseChannel *p = &apu->pulse[1];
+                uint32_t fires = apu_timer_advance(&p->timer_counter, p->timer_period, apu_cycles);
+                p->duty_step = (uint8_t)((p->duty_step + fires) & 0x07u);
+            }
+
+            /* --- Noise timer: clocked at APU rate --- */
+            {
+                ApuNoiseChannel *n = &apu->noise;
+                uint32_t fires = apu_timer_advance(&n->timer_counter, n->timer_period, apu_cycles);
+                uint8_t tap_bit = n->mode ? 6u : 1u;
+                for (uint32_t i = 0; i < fires; ++i) {
+                    uint16_t feedback = (uint16_t)((n->shift_register & 1u) ^
+                                                   ((n->shift_register >> tap_bit) & 1u));
+                    n->shift_register = (n->shift_register >> 1) | (uint16_t)(feedback << 14u);
                 }
             }
-            apu->frame_counter_cycle = new_fc;
         }
 
-        /* --- Pulse timers: clocked at APU rate --- */
+        /* --- Triangle timer: clocked every CPU cycle --- */
+        /* Placed after the frame counter so length/linear counter changes from
+         * this sub-batch's frame counter fire are visible before advancing the
+         * sequencer. The output gate (timer_period < 2) is in apu_triangle_output,
+         * not here; the timer itself runs unconditionally per NES hardware. */
         {
-            ApuPulseChannel *p = &apu->pulse[0];
-            uint32_t fires = apu_timer_advance(&p->timer_counter, p->timer_period, apu_cycles);
-            p->duty_step = (uint8_t)((p->duty_step + fires) & 0x07u);
-        }
-        {
-            ApuPulseChannel *p = &apu->pulse[1];
-            uint32_t fires = apu_timer_advance(&p->timer_counter, p->timer_period, apu_cycles);
-            p->duty_step = (uint8_t)((p->duty_step + fires) & 0x07u);
-        }
-
-        /* --- Noise timer: clocked at APU rate --- */
-        {
-            ApuNoiseChannel *n = &apu->noise;
-            uint32_t fires = apu_timer_advance(&n->timer_counter, n->timer_period, apu_cycles);
-            uint8_t tap_bit = n->mode ? 6u : 1u;
-            for (uint32_t i = 0; i < fires; ++i) {
-                uint16_t feedback = (uint16_t)((n->shift_register & 1u) ^
-                                               ((n->shift_register >> tap_bit) & 1u));
-                n->shift_register = (n->shift_register >> 1) | (uint16_t)(feedback << 14u);
+            ApuTriangleChannel *tri = &apu->triangle;
+            uint32_t fires = apu_timer_advance(&tri->timer_counter, tri->timer_period, cycles_this);
+            if (fires > 0 && tri->enabled && tri->length_counter > 0 &&
+                    tri->linear_counter > 0) {
+                tri->sequence_step = (uint8_t)((tri->sequence_step + fires) & 0x1fu);
             }
         }
-    }
-
-    /* --- Triangle timer: clocked every CPU cycle --- */
-    /* Placed after the frame counter so length/linear counter changes this
-     * batch are visible before we advance the sequencer. On real hardware the
-     * sequencer is also gated by timer_period < 2 only at the output stage,
-     * not the timer itself, so that check is omitted here. */
-    {
-        ApuTriangleChannel *tri = &apu->triangle;
-        uint32_t fires = apu_timer_advance(&tri->timer_counter, tri->timer_period, cpu_cycles);
-        if (fires > 0 && tri->enabled && tri->length_counter > 0 &&
-                tri->linear_counter > 0) {
-            tri->sequence_step = (uint8_t)((tri->sequence_step + fires) & 0x1fu);
-        }
-    }
 
 #if MICRONES_ENABLE_APU_PCM_OUTPUT
-    /* --- Sample output: batched for the whole cpu_cycles block --- */
-    apu->sample_phase += APU_OUTPUT_SAMPLE_RATE * cpu_cycles;
-    while (apu->sample_phase >= APU_CPU_CLOCK_HZ) {
-        apu->sample_phase -= APU_CPU_CLOCK_HZ;
-        apu_pcm_push(apu, apu_mix_sample(apu));
-    }
+        apu->sample_phase += APU_OUTPUT_SAMPLE_RATE * cycles_this;
+        if (apu->sample_phase >= APU_CPU_CLOCK_HZ) {
+            apu->sample_phase -= APU_CPU_CLOCK_HZ;
+            apu_pcm_push(apu, apu_mix_sample(apu));
+        }
 #endif
+
+        cycles_left -= cycles_this;
+    } while (cycles_left > 0);
 }
 #endif
 

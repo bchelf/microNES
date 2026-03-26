@@ -90,7 +90,11 @@ void audio_init(uint32_t sample_rate)
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_tx_chan, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(s_tx_chan));
 
-    xTaskCreate(audio_task, "audio", 4096, NULL, configMAX_PRIORITIES - 2, NULL);
+    // Pin to Core 0 so the high-priority audio task cannot preempt the
+    // emulator task on Core 1.  Display task also runs on Core 0 (priority 4);
+    // audio at configMAX_PRIORITIES-2 takes precedence there, which is fine.
+    xTaskCreatePinnedToCore(audio_task, "audio", 4096, NULL,
+                            configMAX_PRIORITIES - 2, NULL, 0);
 
     ESP_LOGI(TAG, "I2S audio on BCLK=%d WS=%d DOUT=%d, rate=%" PRIu32 " Hz",
              BOARD_AUDIO_BCLK_PIN, BOARD_AUDIO_WS_PIN, BOARD_AUDIO_DOUT_PIN,
