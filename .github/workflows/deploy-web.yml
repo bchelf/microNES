@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - claude/create-wasm-branch-dhzVw
+      - claude/deploy-gh-pages-TrOfP
   workflow_dispatch:
 
 permissions:
