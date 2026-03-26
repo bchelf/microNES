@@ -19,7 +19,6 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -155,56 +154,6 @@ static void print_diag(uint64_t period_us, uint32_t frames,
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Boot audio test: play A major scale before emulator starts
-// ─────────────────────────────────────────────────────────────
-static void audio_scale_test(void)
-{
-    static const float k_scale_hz[] = {
-        440.00f, 493.88f, 554.37f, 587.33f,
-        659.26f, 739.99f, 830.61f, 880.00f,
-    };
-    const uint32_t sample_rate = 48000u;
-    const uint32_t total       = sample_rate;   // 1 second per note
-
-    // Precompute the 2π/2^32 constant for the phase→angle conversion
-    const float k_phase_to_rad = 6.283185307f / 4294967296.0f;
-
-    int16_t buf[256];
-
-    ESP_LOGI(TAG, "audio scale test: A major scale");
-    for (unsigned n = 0; n < sizeof(k_scale_hz) / sizeof(k_scale_hz[0]); ++n) {
-        float    freq      = k_scale_hz[n];
-        uint32_t phase_acc = 0;
-        uint32_t phase_inc = (uint32_t)((double)freq * 4294967296.0 / (double)sample_rate);
-        uint32_t remaining = total;
-
-        ESP_LOGI(TAG, "  note %u: %.2f Hz", n, (double)freq);
-
-        while (remaining > 0u) {
-            uint32_t batch = remaining < 256u ? remaining : 256u;
-
-            // Wait until the ring buffer has room for this batch
-            while (audio_free_slots() < batch) {
-                vTaskDelay(1);
-            }
-
-            for (uint32_t i = 0; i < batch; ++i) {
-                float angle = (float)phase_acc * k_phase_to_rad;
-                buf[i]      = (int16_t)(sinf(angle) * 16384.0f);
-                phase_acc  += phase_inc;
-            }
-            audio_push_samples(buf, batch);
-            remaining -= batch;
-        }
-
-        // Wait for the ring buffer to drain before the next note.
-        // The ring buffer holds ~85 ms; 100 ms is enough to flush it.
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    ESP_LOGI(TAG, "audio scale test done");
-}
-
-// ─────────────────────────────────────────────────────────────
 //  Emulator task  (runs on Core 1, large stack)
 // ─────────────────────────────────────────────────────────────
 static void emulator_task(void *arg)
@@ -241,9 +190,6 @@ static void emulator_task(void *arg)
     ESP_LOGI(TAG, "audio_init...");
     audio_init(48000);  // APU outputs at 48 kHz; I2S runs at native rate, no resampling needed
     ESP_LOGI(TAG, "audio_init OK");
-
-    // ── Boot audio test ──────────────────────────────────────
-    audio_scale_test();
 
     ESP_LOGI(TAG, "nes_hw_controller_init...");
     nes_hw_controller_init();
