@@ -282,7 +282,7 @@ static void emulator_task(void *arg)
         AudioStats prev_audio_stats = audio_stats_snapshot();
         uint32_t next_display_buffer = 0;
         StepTimes acc = {0};   // accumulated µs per step over report window
-        uint64_t prev_insn_count = s_nes.stats.instruction_count;
+        uint32_t prev_insn_count = s_nes.cpu.insn_count;
 
         while (true) {
             uint64_t frame_start_us = esp_timer_get_time();
@@ -341,7 +341,7 @@ static void emulator_task(void *arg)
             if (report_frames >= 60u) {
                 uint64_t now_us = esp_timer_get_time();
                 AudioStats audio_stats = audio_stats_snapshot();
-                uint64_t cur_insn_count = s_nes.stats.instruction_count;
+                uint32_t cur_insn_count = s_nes.cpu.insn_count;
                 StepTimes avg = {
                     .touch_us = acc.touch_us / report_frames,
                     .nes_us   = acc.nes_us   / report_frames,

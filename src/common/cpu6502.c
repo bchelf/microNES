@@ -388,6 +388,7 @@ void cpu6502_init(Cpu6502 *cpu) {
     cpu->cycles = 0;
     cpu->last_opcode = 0;
     cpu->jammed = false;
+    cpu->insn_count = 0;
 }
 
 void cpu6502_reset(Cpu6502 *cpu, Nes *nes) {
@@ -400,6 +401,7 @@ void cpu6502_reset(Cpu6502 *cpu, Nes *nes) {
     cpu->cycles = 7;
     cpu->last_opcode = 0;
     cpu->jammed = false;
+    cpu->insn_count = 0;
 }
 
 bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
@@ -423,7 +425,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
             nes->stop_info.opcode_is_official = cpu6502_opcode_info(cpu->last_opcode)->official;
             nes->stop_info.opcode_is_supported = cpu6502_opcode_info(cpu->last_opcode)->supported;
 #endif
-            nes->stop_info.instruction_index = nes->stats.instruction_count;
+            nes->stop_info.instruction_index = (uint64_t)cpu->insn_count;
         }
         snprintf(nes->last_error, sizeof(nes->last_error), "CPU is jammed");
         return false;
@@ -448,7 +450,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     case 0x00:
         cpu->pc++;
         cpu_service_interrupt(cpu, nes, 0xfffeu, true);
-        ++nes->stats.instruction_count;
+        ++cpu->insn_count;
         return true;
 
     case 0x01:
@@ -1314,7 +1316,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
             nes->stop_info.opcode_is_official = opcode_info->official;
             nes->stop_info.opcode_is_supported = opcode_info->supported;
 #endif
-            nes->stop_info.instruction_index = nes->stats.instruction_count + 1;
+            nes->stop_info.instruction_index = (uint64_t)cpu->insn_count + 1;
         }
         snprintf(
             nes->last_error,
@@ -1330,15 +1332,17 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
             cpu->y,
             cpu->sp,
             cpu->p,
-            (unsigned long long)(nes->stats.instruction_count + 1)
+            (unsigned long long)cpu->insn_count + 1u
         );
         cpu->jammed = true;
         return false;
     } /* default */
     } /* switch */
 
-    cpu->cycles += cycles;
-    ++nes->stats.instruction_count;
+#if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
+    cpu->cycles += cycles;  /* uint64_t: only needed for trace/hash; not used in production */
+#endif
+    ++cpu->insn_count;  /* uint32_t at offset 20 in Cpu6502: single L32I/ADDI/S32I sequence */
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.cpu_exec_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif

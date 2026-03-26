@@ -61,6 +61,10 @@ typedef struct {
 
 typedef struct Nes {
     Cpu6502 cpu;
+    /* pending_apu_cycles is kept immediately after cpu (offset 24) so that the
+     * hot-path increment in cpu6502_step uses L32I with a small immediate
+     * (offset 24 = L32I imm6) instead of a large-offset L32R+ADD sequence. */
+    uint32_t pending_apu_cycles;  /* accumulated CPU cycles not yet flushed to apu_step */
     Ppu ppu;
     Apu apu;
     NesCartridge cartridge;
@@ -75,7 +79,6 @@ typedef struct Nes {
     micrones_profile_now_us_fn profile_now_us;
     void *profile_now_user;
     NesStepProfile step_profile;
-    uint32_t pending_apu_cycles;  /* accumulated CPU cycles not yet flushed to apu_step */
     char last_error[1024];
 } Nes;
 

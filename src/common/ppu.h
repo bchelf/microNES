@@ -245,9 +245,9 @@ void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles);
 // scanline and take the three-instruction fast path here.  The remaining ~2 %
 // fall through to the out-of-line slow path (scanline boundary / cycle==0).
 static inline void ppu_step_cycles_fast(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
-    if (ppu->cycle != 0) {
+    if (__builtin_expect(ppu->cycle != 0, 1)) {
         uint32_t advance = 341u - (uint32_t)ppu->cycle;
-        if (advance > cycles) {
+        if (__builtin_expect(advance > cycles, 1)) {
             ppu->cycle += (int)cycles;
             return;
         }
