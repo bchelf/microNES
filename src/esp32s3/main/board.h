@@ -33,7 +33,7 @@
 // --- Audio output (MAX98357A I2S amplifier) ---
 // Wire MAX98357A:  BCLK→GPIO4, LRC→GPIO2, DIN→GPIO3
 //                 VIN→3.3V (or 5V for more volume), GND→GND
-//                 SD_MODE→3.3V (left channel; float for (L+R)/2)
+//                 SD_MODE→leave unconnected ((L+R)/2 mix, best for mono speaker)
 //                 OUT+/OUT- directly to 8-ohm speaker
 #define BOARD_AUDIO_I2S_PORT   I2S_NUM_0
 #define BOARD_AUDIO_BCLK_PIN   4
