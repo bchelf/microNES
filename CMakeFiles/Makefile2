@@ -88,12 +88,12 @@ clean: CMakeFiles/micrones_wasm.dir/clean
 CMakeFiles/micrones_core.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12 "Built target micrones_core"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11 "Built target micrones_core"
 .PHONY : CMakeFiles/micrones_core.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/micrones_core.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/runner/work/microNES/microNES/build-web/CMakeFiles 12
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/runner/work/microNES/microNES/build-web/CMakeFiles 11
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/micrones_core.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/runner/work/microNES/microNES/build-web/CMakeFiles 0
 .PHONY : CMakeFiles/micrones_core.dir/rule
@@ -105,7 +105,7 @@ micrones_core: CMakeFiles/micrones_core.dir/rule
 # codegen rule for target.
 CMakeFiles/micrones_core.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12 "Finished codegen for target micrones_core"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11 "Finished codegen for target micrones_core"
 .PHONY : CMakeFiles/micrones_core.dir/codegen
 
 # clean rule for target.
@@ -120,12 +120,12 @@ CMakeFiles/micrones_core.dir/clean:
 CMakeFiles/micrones_wasm.dir/all: CMakeFiles/micrones_core.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_wasm.dir/build.make CMakeFiles/micrones_wasm.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_wasm.dir/build.make CMakeFiles/micrones_wasm.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=13,14 "Built target micrones_wasm"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=12,13 "Built target micrones_wasm"
 .PHONY : CMakeFiles/micrones_wasm.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/micrones_wasm.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/runner/work/microNES/microNES/build-web/CMakeFiles 14
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/runner/work/microNES/microNES/build-web/CMakeFiles 13
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/micrones_wasm.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/runner/work/microNES/microNES/build-web/CMakeFiles 0
 .PHONY : CMakeFiles/micrones_wasm.dir/rule
@@ -137,7 +137,7 @@ micrones_wasm: CMakeFiles/micrones_wasm.dir/rule
 # codegen rule for target.
 CMakeFiles/micrones_wasm.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_wasm.dir/build.make CMakeFiles/micrones_wasm.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=13,14 "Finished codegen for target micrones_wasm"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=12,13 "Finished codegen for target micrones_wasm"
 .PHONY : CMakeFiles/micrones_wasm.dir/codegen
 
 # clean rule for target.
