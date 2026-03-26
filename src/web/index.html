@@ -160,13 +160,6 @@ canvas {
 .dpad-center-dot { background: #111; }
 .dpad-corner { background: transparent; }
 
-/* ── Reset button row ────────────────────────────────────────────────────── */
-.ctrl-top {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 8px;
-}
-
 /* ── Center select/start ─────────────────────────────────────────────────── */
 .ctrl-center {
     display: flex;
@@ -179,6 +172,7 @@ canvas {
 .reset-btn {
     width: 64px;
     height: 18px;
+    margin-top: -18px;
     border-radius: 4px;
     background: linear-gradient(to bottom, #d0d0d0, #b0b0b0);
     border: none;
@@ -311,9 +305,6 @@ canvas {
 </div>
 
 <div id="touch-controller">
-    <div class="ctrl-top">
-        <button class="reset-btn" id="btn-menu">RESET</button>
-    </div>
     <div class="ctrl-face">
         <!-- D-pad -->
         <div class="dpad">
@@ -330,6 +321,7 @@ canvas {
 
         <!-- Center: Select / Start -->
         <div class="ctrl-center">
+            <button class="reset-btn" id="btn-menu">RESET</button>
             <div class="sys-btns-row">
                 <button class="sys-btn" id="btn-select"></button>
                 <button class="sys-btn" id="btn-start"></button>
