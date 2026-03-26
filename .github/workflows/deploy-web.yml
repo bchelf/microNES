@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - claude/create-wasm-branch-dhzVw
-      - claude/fix-reset-button-styling-ExZpR
+      - ben/make-celeste-work
   workflow_dispatch:
 
 permissions:
