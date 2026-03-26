@@ -177,7 +177,7 @@ static void emulator_task(void *arg)
     }
 
     ESP_LOGI(TAG, "audio_init...");
-    audio_init(24000);
+    audio_init(48000);  // APU outputs at 48 kHz; I2S runs at native rate, no resampling needed
     ESP_LOGI(TAG, "audio_init OK");
 
     ESP_LOGI(TAG, "nes_hw_controller_init...");
