@@ -1377,12 +1377,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
  *
  * APU cycle flushing and profiling are left to the caller (nes_step_scanline)
  * so this function stays focused on the tight CPU dispatch loop. */
-/* optimize("Os") shrinks the inlined cpu6502_step body (256-case switch) to
- * ~10–20 KB in IRAM vs ~30–50 KB at O3, staying within the Xtensa J-instruction
- * ±512 KB range from the exception vectors while still eliminating the
- * CALL8 + ENTRY + RETW overhead (~3–5 cycles) on every instruction dispatch.
- * Most 6502 opcodes are simple register ops where Os ≈ O3 in practice. */
-bool __attribute__((flatten, optimize("Os"))) MICRONES_HOT_FUNC(cpu6502_run_scanline)(Cpu6502 *cpu, Nes *nes) {
+bool MICRONES_HOT_FUNC(cpu6502_run_scanline)(Cpu6502 *cpu, Nes *nes) {
     /* Snapshot the frame/scanline identity so we can distinguish a
      * scanline_ready flag that was already set from a genuinely new one. */
     uint64_t frame_before = nes->ppu.frame_count;
