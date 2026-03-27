@@ -72,7 +72,12 @@ typedef struct Nes {
      * reset, and MMC1 bank switches. */
     const uint8_t *prg_bank_lo;   /* offset 28: $8000-$BFFF window */
     const uint8_t *prg_bank_hi;   /* offset 32: $C000-$FFFF window */
-    Ppu ppu;
+    /* For NROM (mapper 0) both PRG windows are a contiguous region of prg_rom,
+     * so a single masked index into prg_bank_lo replaces the two-branch bank
+     * select in cpu_fetch8/16.  0x3FFF = NROM-128 (16 KiB mirror), 0x7FFF =
+     * NROM-256 (32 KiB flat).  0 = any other mapper → use two-pointer path. */
+    uint32_t prg_fetch_mask;      /* offset 36 */
+    Ppu ppu;                      /* offset 40 */
     Apu apu;
     NesCartridge cartridge;
     NesController controllers[2];
@@ -133,6 +138,11 @@ static inline uint8_t nes_nrom_prg_read_fast(const Nes *nes, uint16_t addr) {
 static inline void nes_sync_prg_cache(Nes *nes) {
     nes->prg_bank_lo = nes->cartridge.prg_bank_lo;
     nes->prg_bank_hi = nes->cartridge.prg_bank_hi;
+    /* NROM (mapper 0): both windows are contiguous in prg_rom, so a single
+     * masked index suffices.  All other mappers may have non-adjacent banks. */
+    nes->prg_fetch_mask = (nes->cartridge.mapper == 0)
+        ? (uint32_t)(nes->cartridge.prg_rom_size - 1u) & 0x7FFFu
+        : 0u;
 }
 
 static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
@@ -145,6 +155,10 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
     // costs a single L32I instead of L32R+ADD through the ~70 KB cartridge offset.
     if (addr >= 0x8000u) {
         uint32_t off = (uint32_t)(addr - 0x8000u);
+        uint32_t mask = nes->prg_fetch_mask;
+        if (__builtin_expect(mask != 0u, 1)) {
+            return nes->prg_bank_lo[off & mask];
+        }
         if (off < 0x4000u) {
             return nes->prg_bank_lo[off];
         }

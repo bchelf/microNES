@@ -82,6 +82,10 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
     cpu->pc = (uint16_t)(pc + 1u);
     if (pc >= 0x8000u) {
         off = (uint32_t)(pc - 0x8000u);
+        uint32_t mask = nes->prg_fetch_mask;
+        if (__builtin_expect(mask != 0u, 1)) {
+            return nes->prg_bank_lo[off & mask];
+        }
         if (off < 0x4000u) {
             return nes->prg_bank_lo[off];
         }
@@ -106,14 +110,20 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
     uint32_t hi_off;
 
     if (pc >= 0x8000u && (uint16_t)(pc + 1u) >= 0x8000u) {
+        uint32_t mask = nes->prg_fetch_mask;
         lo_off = (uint32_t)(pc - 0x8000u);
         hi_off = (uint32_t)((uint16_t)(pc + 1u) - 0x8000u);
-        lo = (lo_off < 0x4000u)
-            ? nes->prg_bank_lo[lo_off]
-            : nes->prg_bank_hi[lo_off - 0x4000u];
-        hi = (hi_off < 0x4000u)
-            ? nes->prg_bank_lo[hi_off]
-            : nes->prg_bank_hi[hi_off - 0x4000u];
+        if (__builtin_expect(mask != 0u, 1)) {
+            lo = nes->prg_bank_lo[lo_off & mask];
+            hi = nes->prg_bank_lo[hi_off & mask];
+        } else {
+            lo = (lo_off < 0x4000u)
+                ? nes->prg_bank_lo[lo_off]
+                : nes->prg_bank_hi[lo_off - 0x4000u];
+            hi = (hi_off < 0x4000u)
+                ? nes->prg_bank_lo[hi_off]
+                : nes->prg_bank_hi[hi_off - 0x4000u];
+        }
         cpu->pc = (uint16_t)(pc + 2u);
     } else {
         lo = cpu_fetch8(cpu, nes);
