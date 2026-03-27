@@ -82,6 +82,10 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
     cpu->pc = (uint16_t)(pc + 1u);
     if (pc >= 0x8000u) {
         off = (uint32_t)(pc - 0x8000u);
+        uint32_t mask = nes->prg_fetch_mask;
+        if (__builtin_expect(mask != 0u, 1)) {
+            return nes->prg_bank_lo[off & mask];
+        }
         if (off < 0x4000u) {
             return nes->prg_bank_lo[off];
         }
@@ -106,14 +110,20 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
     uint32_t hi_off;
 
     if (pc >= 0x8000u && (uint16_t)(pc + 1u) >= 0x8000u) {
+        uint32_t mask = nes->prg_fetch_mask;
         lo_off = (uint32_t)(pc - 0x8000u);
         hi_off = (uint32_t)((uint16_t)(pc + 1u) - 0x8000u);
-        lo = (lo_off < 0x4000u)
-            ? nes->prg_bank_lo[lo_off]
-            : nes->prg_bank_hi[lo_off - 0x4000u];
-        hi = (hi_off < 0x4000u)
-            ? nes->prg_bank_lo[hi_off]
-            : nes->prg_bank_hi[hi_off - 0x4000u];
+        if (__builtin_expect(mask != 0u, 1)) {
+            lo = nes->prg_bank_lo[lo_off & mask];
+            hi = nes->prg_bank_lo[hi_off & mask];
+        } else {
+            lo = (lo_off < 0x4000u)
+                ? nes->prg_bank_lo[lo_off]
+                : nes->prg_bank_hi[lo_off - 0x4000u];
+            hi = (hi_off < 0x4000u)
+                ? nes->prg_bank_lo[hi_off]
+                : nes->prg_bank_hi[hi_off - 0x4000u];
+        }
         cpu->pc = (uint16_t)(pc + 2u);
     } else {
         lo = cpu_fetch8(cpu, nes);
@@ -1355,7 +1365,9 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     cpu_started_us = nes_profile_now_us(nes);
 #endif
     cpu_started_cycles = micrones_profile_now_cycles();
-    ppu_step_cycles_fast(&nes->ppu, &nes->cartridge, cycles * 3u);
+    if (!ppu_step_cycles_try_fast(&nes->ppu, cycles * 3u)) {
+        ppu_step_cycles(&nes->ppu, &nes->cartridge, cycles * 3u);
+    }
 #if MICRONES_ENABLE_STEP_PROFILING
     nes->step_profile.ppu_step_us_total += nes_profile_now_us(nes) - cpu_started_us;
 #endif
@@ -1363,5 +1375,35 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
         nes->step_profile.ppu_step_cycles_total +=
             (uint32_t)(micrones_profile_now_cycles() - cpu_started_cycles);
     }
+    return true;
+}
+
+/* Run the CPU until the PPU signals a new scanline has completed.
+ *
+ * This function lives in the same translation unit as cpu6502_step so that
+ * __attribute__((flatten)) can inline cpu6502_step directly into the loop
+ * body, eliminating the CALL8 + ENTRY + RETW overhead (~8–11 cycles) that
+ * would otherwise be paid on every one of the ~27,360 instructions per frame.
+ *
+ * APU cycle flushing and profiling are left to the caller (nes_step_scanline)
+ * so this function stays focused on the tight CPU dispatch loop. */
+bool MICRONES_HOT_FUNC(cpu6502_run_scanline)(Cpu6502 *cpu, Nes *nes) {
+    /* Snapshot the frame/scanline identity so we can distinguish a
+     * scanline_ready flag that was already set from a genuinely new one. */
+    uint64_t frame_before = nes->ppu.frame_count;
+    uint64_t token = ((uint64_t)frame_before << 16) |
+                     (uint16_t)(nes->ppu.scanline_buffer.y & 0xffffu);
+
+    nes->ppu.scanline_ready = false;
+    nes->ppu.scanline_buffer.ready = false;
+
+    do {
+        if (!cpu6502_step(cpu, nes)) {
+            return false;
+        }
+    } while (!nes->ppu.scanline_ready ||
+             ((((uint64_t)nes->ppu.scanline_buffer.frame_index << 16) |
+               nes->ppu.scanline_buffer.y) == token));
+
     return true;
 }

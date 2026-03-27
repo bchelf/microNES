@@ -183,28 +183,32 @@ typedef struct {
      * oam/nametable/palette arrays), requiring an ADDMI+L32I two-instruction
      * sequence.  Moving them here cuts that to a single L32I. */
     int scanline;                        /* Ppu+0:  updated every ppu_step_cycles call */
-    int cycle;                           /* Ppu+4:  3× per CPU instruction (ppu_step_cycles_fast) */
-    bool frame_ready;                    /* Ppu+8  */
-    bool scanline_ready;                 /* Ppu+9:  tested every CPU instruction (nes_step_scanline) */
-    bool nmi_pending;                    /* Ppu+10 */
-    bool completed_frame_ready;          /* Ppu+11 */
-    uint8_t ctrl;                        /* Ppu+12 */
-    uint8_t mask;                        /* Ppu+13 */
-    uint8_t status;                      /* Ppu+14 */
-    uint8_t oam_addr;                    /* Ppu+15 */
-    uint8_t read_buffer;                 /* Ppu+16 */
-    uint8_t fine_x;                      /* Ppu+17 */
-    bool write_toggle;                   /* Ppu+18 */
-    uint8_t scroll_x;                    /* Ppu+19 */
-    uint8_t scroll_y;                    /* Ppu+20 */
-    uint8_t render_fine_x;               /* Ppu+21 */
-    uint8_t render_scroll_x;             /* Ppu+22 */
-    uint8_t render_scroll_y;             /* Ppu+23 */
-    uint8_t render_base_nametable;       /* Ppu+24 */
-    bool sprite0_hit_ever;               /* Ppu+25 */
-    uint8_t max_scanline_sprite_count;   /* Ppu+26 */
-    uint8_t visible_write_diag_count;    /* Ppu+27 */
-    uint8_t last_completed_visible_write_diag_count; /* Ppu+28 */
+    int cycle;                           /* Ppu+4:  maintained by slow path; stale in fast path */
+    /* cycles_remaining = 341 - cycle when cycle > 0, else 0.  Maintained by
+     * ppu_step_cycles_try_fast (hot path) and ppu_step_cycles (slow path).
+     * Replaces the per-call "advance = 341 - cycle" subtraction in try_fast. */
+    int32_t cycles_remaining;            /* Ppu+8:  countdown to next scanline boundary */
+    bool frame_ready;                    /* Ppu+12 */
+    bool scanline_ready;                 /* Ppu+13: tested every CPU instruction */
+    bool nmi_pending;                    /* Ppu+14 */
+    bool completed_frame_ready;          /* Ppu+15 */
+    uint8_t ctrl;                        /* Ppu+16 */
+    uint8_t mask;                        /* Ppu+17 */
+    uint8_t status;                      /* Ppu+18 */
+    uint8_t oam_addr;                    /* Ppu+19 */
+    uint8_t read_buffer;                 /* Ppu+20 */
+    uint8_t fine_x;                      /* Ppu+21 */
+    bool write_toggle;                   /* Ppu+22 */
+    uint8_t scroll_x;                    /* Ppu+23 */
+    uint8_t scroll_y;                    /* Ppu+24 */
+    uint8_t render_fine_x;               /* Ppu+25 */
+    uint8_t render_scroll_x;             /* Ppu+26 */
+    uint8_t render_scroll_y;             /* Ppu+27 */
+    uint8_t render_base_nametable;       /* Ppu+28 */
+    bool sprite0_hit_ever;               /* Ppu+29 */
+    uint8_t max_scanline_sprite_count;   /* Ppu+30 */
+    uint8_t visible_write_diag_count;    /* Ppu+31 */
+    uint8_t last_completed_visible_write_diag_count; /* Ppu+32 */
     /* 1 byte implicit pad → */
     uint16_t vram_addr;                  /* Ppu+30 */
     uint16_t temp_addr;                  /* Ppu+32 */
@@ -252,19 +256,19 @@ void ppu_set_render_target(Ppu *ppu, NesFrameBuffer *fb);
 void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_end);
 void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles);
 
-// Inline fast path for ppu_step_cycles.  The hot loop in cpu6502_step calls
-// this ~29,780 times per frame; ~98 % of those calls advance within a single
-// scanline and take the three-instruction fast path here.  The remaining ~2 %
-// fall through to the out-of-line slow path (scanline boundary / cycle==0).
-static inline void ppu_step_cycles_fast(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
-    if (__builtin_expect(ppu->cycle != 0, 1)) {
-        uint32_t advance = 341u - (uint32_t)ppu->cycle;
-        if (__builtin_expect(advance > cycles, 1)) {
-            ppu->cycle += (int)cycles;
-            return;
-        }
+// Inline fast path for ppu_step_cycles.  Returns true if the scanline did not
+// end (~98 % of calls).  Uses the pre-computed cycles_remaining countdown so
+// the hot path is: L32I rem / BLTU / SUB / S32I (4 instructions) rather than
+// the 7-instruction "load cycle, compute 341-cycle, compare, add, store" sequence.
+// When false the caller must call ppu_step_cycles() – which reconstructs
+// ppu->cycle from cycles_remaining before running the slow-path logic.
+static inline bool ppu_step_cycles_try_fast(Ppu *ppu, uint32_t cycles) {
+    uint32_t rem = (uint32_t)ppu->cycles_remaining;
+    if (__builtin_expect(rem > cycles, 1)) {
+        ppu->cycles_remaining = (int32_t)(rem - cycles);
+        return true;
     }
-    ppu_step_cycles(ppu, cartridge, cycles);
+    return false;
 }
 uint8_t ppu_cpu_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr);
 void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t value);

@@ -35,6 +35,7 @@ static bool nes_has_cartridge(const Nes *nes) {
 
 void nes_init(Nes *nes) {
     memset(nes, 0, sizeof(*nes));
+    nes->cpu_ram_base = nes->cpu_ram;  /* cache address of embedded cpu_ram array */
     cpu6502_init(&nes->cpu);
     ppu_init(&nes->ppu);
     apu_init(&nes->apu);
@@ -134,21 +135,17 @@ bool MICRONES_HOT_FUNC(nes_step_instruction)(Nes *nes) {
 }
 
 bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
-    uint64_t frame_before = nes->ppu.frame_count;
-    uint64_t token = ((uint64_t)frame_before << 16) | (uint16_t)(nes->ppu.scanline_buffer.y & 0xffff);
     uint64_t scanline_started_us = nes_profile_now_us(nes);
     uint32_t scanline_started_cycles = micrones_profile_now_cycles();
 
-    nes->ppu.scanline_ready = false;
-    nes->ppu.scanline_buffer.ready = false;
-
-    do {
-        if (!cpu6502_step(&nes->cpu, nes)) {
-            return false;
-        }
-    } while (!nes->ppu.scanline_ready ||
-             ((((uint64_t)nes->ppu.scanline_buffer.frame_index << 16) |
-               nes->ppu.scanline_buffer.y) == token));
+    /* Delegate the tight CPU dispatch loop to cpu6502_run_scanline, which
+     * lives in the same TU as cpu6502_step.  The __attribute__((flatten))
+     * there lets the compiler inline cpu6502_step into the loop body,
+     * eliminating the CALL8+ENTRY+RETW overhead (~8-11 cycles) on every one
+     * of the ~27,360 CPU instructions executed per frame. */
+    if (!cpu6502_run_scanline(&nes->cpu, nes)) {
+        return false;
+    }
 
     /* Flush APU cycles accumulated across all instructions in this scanline.
      * Batching here (240×/frame) instead of per-instruction (~9828×/frame)

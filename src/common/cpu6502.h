@@ -49,5 +49,10 @@ typedef struct {
 void cpu6502_init(Cpu6502 *cpu);
 void cpu6502_reset(Cpu6502 *cpu, struct Nes *nes);
 bool cpu6502_step(Cpu6502 *cpu, struct Nes *nes);
+/* Runs cpu6502_step in a loop until the PPU signals a completed scanline.
+ * Lives in the same TU as cpu6502_step so the compiler can inline the step
+ * function into the loop body (eliminating per-instruction call overhead).
+ * Does NOT flush pending_apu_cycles – that is the caller's responsibility. */
+bool cpu6502_run_scanline(Cpu6502 *cpu, struct Nes *nes);
 
 #endif

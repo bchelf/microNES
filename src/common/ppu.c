@@ -1316,6 +1316,7 @@ void ppu_reset(Ppu *ppu) {
     ppu->render_base_nametable = 0;
     ppu->scanline = 261;
     ppu->cycle = 0;
+    ppu->cycles_remaining = 0;
     ppu->frame_count = 0;
     ppu->frame_ready = false;
     ppu->scanline_ready = false;
@@ -1479,12 +1480,20 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
 }
 
 void MICRONES_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles) {
+    /* ppu_step_cycles_try_fast only maintains cycles_remaining; reconstruct
+     * ppu->cycle so the slow-path loop and all rendering/diagnostic code
+     * see the correct absolute scanline position. */
+    ppu->cycle = (ppu->cycles_remaining != 0)
+        ? (int)(341u - (uint32_t)ppu->cycles_remaining)
+        : 0;
+
     // Fast path: the vast majority of calls don't cross a scanline boundary.
     // Avoid loop and branch overhead by returning immediately for the common case.
     if (ppu->cycle != 0) {
         uint32_t advance = 341u - (uint32_t)ppu->cycle;
         if (advance > cycles) {
             ppu->cycle += (int)cycles;
+            ppu->cycles_remaining = (int32_t)(341u - (uint32_t)ppu->cycle);
             return;
         }
     }
@@ -1513,6 +1522,10 @@ void MICRONES_HOT_FUNC(ppu_step_cycles)(Ppu *ppu, NesCartridge *cartridge, uint3
         ppu->cycle = 0;
         ppu_finish_scanline(ppu, cartridge);
     }
+
+    ppu->cycles_remaining = (ppu->cycle != 0)
+        ? (int32_t)(341u - (uint32_t)ppu->cycle)
+        : 0;
 }
 
 uint8_t ppu_cpu_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr) {
