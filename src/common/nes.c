@@ -35,6 +35,7 @@ static bool nes_has_cartridge(const Nes *nes) {
 
 void nes_init(Nes *nes) {
     memset(nes, 0, sizeof(*nes));
+    nes->cpu_ram_base = nes->cpu_ram;  /* cache address of embedded cpu_ram array */
     cpu6502_init(&nes->cpu);
     ppu_init(&nes->ppu);
     apu_init(&nes->apu);

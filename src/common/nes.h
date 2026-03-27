@@ -77,7 +77,11 @@ typedef struct Nes {
      * select in cpu_fetch8/16.  0x3FFF = NROM-128 (16 KiB mirror), 0x7FFF =
      * NROM-256 (32 KiB flat).  0 = any other mapper → use two-pointer path. */
     uint32_t prg_fetch_mask;      /* offset 36 */
-    Ppu ppu;                      /* offset 40 */
+    /* cpu_ram[] is embedded at a ~74 KB offset in the Nes struct; caching its
+     * base address here lets nes_cpu_bus_read/write_fast reach it with a single
+     * small-immediate L32I instead of an L32R+ADD through the large offset. */
+    uint8_t *cpu_ram_base;        /* offset 40 */
+    Ppu ppu;                      /* offset 44 */
     Apu apu;
     NesCartridge cartridge;
     NesController controllers[2];
@@ -165,7 +169,7 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
         return nes->prg_bank_hi[off - 0x4000u];
     }
     if (addr < 0x2000u) {
-        return nes->cpu_ram[addr & 0x07ffu];
+        return nes->cpu_ram_base[addr & 0x07ffu];
     }
     if (addr < 0x4000u) {
         return ppu_cpu_read(&nes->ppu, &nes->cartridge, (uint16_t)(0x2000u + (addr & 0x0007u)));
@@ -190,7 +194,7 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
     ++nes->step_profile.bus_write_count;
 #endif
     if (addr < 0x2000u) {
-        nes->cpu_ram[addr & 0x07ffu] = value;
+        nes->cpu_ram_base[addr & 0x07ffu] = value;
         return;
     }
     if (addr < 0x4000u) {
