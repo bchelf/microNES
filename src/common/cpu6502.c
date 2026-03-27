@@ -1365,3 +1365,33 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     }
     return true;
 }
+
+/* Run the CPU until the PPU signals a new scanline has completed.
+ *
+ * This function lives in the same translation unit as cpu6502_step so that
+ * __attribute__((flatten)) can inline cpu6502_step directly into the loop
+ * body, eliminating the CALL8 + ENTRY + RETW overhead (~8–11 cycles) that
+ * would otherwise be paid on every one of the ~27,360 instructions per frame.
+ *
+ * APU cycle flushing and profiling are left to the caller (nes_step_scanline)
+ * so this function stays focused on the tight CPU dispatch loop. */
+bool __attribute__((flatten)) MICRONES_HOT_FUNC(cpu6502_run_scanline)(Cpu6502 *cpu, Nes *nes) {
+    /* Snapshot the frame/scanline identity so we can distinguish a
+     * scanline_ready flag that was already set from a genuinely new one. */
+    uint64_t frame_before = nes->ppu.frame_count;
+    uint64_t token = ((uint64_t)frame_before << 16) |
+                     (uint16_t)(nes->ppu.scanline_buffer.y & 0xffffu);
+
+    nes->ppu.scanline_ready = false;
+    nes->ppu.scanline_buffer.ready = false;
+
+    do {
+        if (!cpu6502_step(cpu, nes)) {
+            return false;
+        }
+    } while (!nes->ppu.scanline_ready ||
+             ((((uint64_t)nes->ppu.scanline_buffer.frame_index << 16) |
+               nes->ppu.scanline_buffer.y) == token));
+
+    return true;
+}
