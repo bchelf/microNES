@@ -1377,7 +1377,7 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
  *
  * APU cycle flushing and profiling are left to the caller (nes_step_scanline)
  * so this function stays focused on the tight CPU dispatch loop. */
-bool __attribute__((flatten)) MICRONES_HOT_FUNC(cpu6502_run_scanline)(Cpu6502 *cpu, Nes *nes) {
+bool MICRONES_HOT_FUNC(cpu6502_run_scanline)(Cpu6502 *cpu, Nes *nes) {
     /* Snapshot the frame/scanline identity so we can distinguish a
      * scanline_ready flag that was already set from a genuinely new one. */
     uint64_t frame_before = nes->ppu.frame_count;
