@@ -52,6 +52,7 @@
 #include "pico/stdlib.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -354,12 +355,15 @@ static void __isr dma_irq0_handler(void) {
 /* =========================================================================
  * Core 1  DMA IRQ_1  handler  (emulator render loop)
  * ========================================================================= */
+static volatile uint32_t s_irq1_fire_count = 0;
+
 static void __isr dma_irq1_handler(void) {
     /*
      * The DMA chain has already started the next channel.  Raise GP4
      * immediately for the new line's horizontal sync pulse.
      * IRQ latency on Cortex-M33 ≈ 12 cycles; error < 1 sample (22 cycles).
      */
+    s_irq1_fire_count++;
     gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
 
     uint32_t mask   = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
@@ -472,15 +476,20 @@ void video_ntsc_perf_get(MicronesVideoNtscPerfStats *out) {
 void video_ntsc_core1_entry(void) {
     uint32_t ch_mask = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
 
+    printf("[c1] entry: chan0=%u chan1=%u ch_mask=0x%08x\n",
+           s_dma_chan[0], s_dma_chan[1], (unsigned)ch_mask);
+
     /*
      * Hand DMA IRQ ownership to Core 1:
      *   • Disable IRQ_0 for our channels (Core 0 handler stops firing).
      *   • Register and enable IRQ_1 on Core 1's NVIC.
      */
     dma_set_irq0_channel_mask_enabled(ch_mask, false);
+    printf("[c1] irq0 disabled for our channels\n");
 
     irq_set_exclusive_handler(DMA_IRQ_1, dma_irq1_handler);
     irq_set_enabled(DMA_IRQ_1, true);
+    printf("[c1] irq1 registered and enabled\n");
 
     ScanlineQueue *queue = core1_video_get_queue();
 
@@ -513,6 +522,11 @@ void video_ntsc_core1_entry(void) {
     gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
     dma_channel_start(s_dma_chan[0]);
 
+    printf("[c1] dma started: chan0_busy=%d chan1_busy=%d ints1=0x%08x\n",
+           (int)dma_channel_is_busy(s_dma_chan[0]),
+           (int)dma_channel_is_busy(s_dma_chan[1]),
+           (unsigned)dma_hw->ints1);
+
     /*
      * Pipeline state after start:
      *   channel A is running buf[0] = line 0
@@ -522,6 +536,7 @@ void video_ntsc_core1_entry(void) {
      */
     int display_line = 1;
     int render_line  = 2;
+    uint32_t irq_count = 0;
 
     while (true) {
         /* ---- Wait for DMA IRQ_1 (fires when a channel completes) ---- */
@@ -529,6 +544,12 @@ void video_ntsc_core1_entry(void) {
             __wfe();
         }
         s_dma_irq1_pending = false;
+
+        irq_count++;
+        if (irq_count <= 5 || (irq_count % 1000) == 0) {
+            printf("[c1] irq#%lu display_line=%d idle_buf=%d\n",
+                   (unsigned long)irq_count, display_line, s_idle_buf);
+        }
 
         /*
          * At this point:
@@ -539,7 +560,7 @@ void video_ntsc_core1_entry(void) {
          * GP4 management:
          *   Vsync lines (0-8): leave GP4 HIGH the entire line (continuous sync).
          *   All other lines: drop GP4 after ~47 sync samples.
-         *     Target: 47 × 22 = 1034 cycles HIGH from the line start.
+         *     Target: 47 × 22 = 1034 cycles HIGH from line start (at 315 MHz).
          *     IRQ latency + wakeup ≈ 20-30 cycles; we wait 1000 cycles so
          *     total ≈ 1020-1030 cycles  (error < 1 sample = 22 cycles). ✓
          */

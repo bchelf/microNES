@@ -44,7 +44,9 @@ int main(void) {
      * VCO = 1260 MHz, post_div1 = 2, post_div2 = 2
      * → sys_clk = 1260 / (2 × 2) = 315 MHz
      * This is load-bearing: composite video timing requires exactly
-     * 315 MHz / 22 = 14.318182 MHz sample rate (NTSC subcarrier × 4). */
+     * 315 MHz / 22 = 14.318182 MHz sample rate (NTSC subcarrier × 4).
+     * render_scanline_composite takes ~15k-20k cycles; budget at 315 MHz is
+     * 20,064 cycles/scanline — half-speed would break the DMA chain. */
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(10);
     set_sys_clock_pll(1260000000, 2, 2);   /* → 315 MHz */
