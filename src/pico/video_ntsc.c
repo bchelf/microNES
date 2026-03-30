@@ -102,6 +102,10 @@ void build_chroma_lut(void) {
  * ========================================================================= */
 static uint8_t s_dac_lut[64][4];
 
+/* Set to 0 to strip chroma from all pixels (luma-only / greyscale output).
+ * Rebuild + reflash to toggle; no other files need changing. */
+#define MICRONES_CHROMA_ENABLED 0
+
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
     for (int c = 0; c < 64; c++) {
         int luma     = (c < palette_size) ? (int)palette_to_luma[c] : 0;
@@ -109,7 +113,11 @@ void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_s
         int hue      = c & 0x0F;
         if (hue > 12) hue = 0;
         for (int phase = 0; phase < 4; phase++) {
+#if MICRONES_CHROMA_ENABLED
             int dac = dac_base + (int)chroma_lut[hue][phase];
+#else
+            int dac = dac_base;   /* chroma disabled — luma only */
+#endif
             if (dac < 0)  dac = 0;
             if (dac > 15) dac = 15;
             s_dac_lut[c][phase] = (uint8_t)dac;
