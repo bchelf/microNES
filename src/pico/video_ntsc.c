@@ -104,7 +104,7 @@ static uint8_t s_dac_lut[64][4];
 
 /* Set to 0 to strip chroma from all pixels (luma-only / greyscale output).
  * Rebuild + reflash to toggle; no other files need changing. */
-#define MICRONES_CHROMA_ENABLED 0
+#define MICRONES_CHROMA_ENABLED 1
 
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
     for (int c = 0; c < 64; c++) {
