@@ -39,6 +39,7 @@
  *   (target = 47 × 22 = 1034 cycles; error < 1 sample = 22 cycles).
  */
 
+#include "clock_config.h"
 #include "video_ntsc.h"
 #include "video_ntsc.pio.h"
 #include "core1_video.h"
@@ -392,7 +393,8 @@ void video_ntsc_init(void) {
     s_pio        = pio0;
     s_sm         = 0;
     s_pio_offset = pio_add_program(s_pio, &video_ntsc_program);
-    video_ntsc_program_init(s_pio, s_sm, s_pio_offset, MICRONES_VIDEO_PIN_BASE);
+    video_ntsc_program_init(s_pio, s_sm, s_pio_offset, MICRONES_VIDEO_PIN_BASE,
+                            MICRONES_PIO_CLKDIV);
 
     /* Claim and configure DMA channels */
     setup_dma();

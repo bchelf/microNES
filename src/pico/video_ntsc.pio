@@ -14,11 +14,12 @@
 ;   Code 13: 0.998 V  — white luma
 ;   Code 15: 1.151 V  — peak chroma headroom
 ;
-; Sample rate: 315 MHz sys_clk ÷ 22 cycles/instruction = 14.318182 MHz
-;   315,000,000 / 14,318,180 = 22.000 exactly
+; Sample rate: sys_clk / (clkdiv × 11) = 14.318182 MHz
+;   315 MHz, clkdiv=2.0 → 315,000,000 / (2 × 11) = 14.318182 MHz  ✓
+;   157.5 MHz, clkdiv=1.0 → 157,500,000 / (1 × 11) = 14.318182 MHz  ✓
 ;
-; Each 'out pins, 4 [21]' = 1 execution cycle + 21 delay = 22 sys_clk cycles.
-; PIO clock divider MUST be 1.0 (no division).
+; Each 'out pins, 4 [10]' = 1 execution cycle + 10 delay = 11 sys_clk cycles.
+; clkdiv is set in clock_config.h and passed to video_ntsc_program_init().
 ;
 ; FIFO packing: 8 nibbles per 32-bit word, MSB-first (shift-left, autopull at 32).
 ;   Word bits [31:28] = nibble 0 (first sample), [3:0] = nibble 7 (eighth sample).
@@ -27,7 +28,7 @@
 .program video_ntsc
 
 .wrap_target
-    out pins, 4  [10]   ; emit 4-bit DAC code on GP0-GP3, hold 11 sys_clk cycles
+    out pins, 4  [10]   ; emit 4-bit DAC code on GP0-GP3; 11 cycles × clkdiv = 14.318 MHz
 .wrap
 
 % c-sdk {
@@ -35,10 +36,11 @@
 #include "hardware/gpio.h"
 
 static inline void video_ntsc_program_init(
-    PIO  pio,
-    uint sm,
-    uint offset,
-    uint pin_base       // GP0 — must be 0 to match resistor-DAC wiring
+    PIO   pio,
+    uint  sm,
+    uint  offset,
+    uint  pin_base,     // GP0 — must be 0 to match resistor-DAC wiring
+    float clk_div       // from clock_config.h: 2.0 @ 315 MHz, 1.0 @ 157.5 MHz
 ) {
     pio_sm_config c = video_ntsc_program_get_default_config(offset);
 
@@ -51,8 +53,8 @@ static inline void video_ntsc_program_init(
     // Join TX FIFOs → 8-entry deep TX FIFO reduces DMA pressure
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
 
-    // Run at full sys_clk (315 MHz). The [21] delay gives the 22-cycle sample period.
-    sm_config_set_clkdiv(&c, 1.0f);
+    // clk_div × 11 cycles = 14.318182 MHz NTSC sample rate
+    sm_config_set_clkdiv(&c, clk_div);
 
     // Claim and configure GPIO pins
     for (uint i = 0; i < 4; i++) {

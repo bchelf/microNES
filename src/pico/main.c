@@ -1,4 +1,5 @@
 #include "audio_pwm.h"
+#include "clock_config.h"
 #include "core1_video.h"
 #include "emulator_video_adapter.h"
 #include "hardware/clocks.h"
@@ -40,13 +41,13 @@ int main(void) {
     bool     report_saw_nonzero_sample = false;
 #endif
 
-    /* Set system clock to 157.5 MHz (315 MHz / 2):
-     * VCO = 1260 MHz, post_div1 = 4, post_div2 = 2
-     * → sys_clk = 1260 / (4 × 2) = 157.5 MHz
-     * PIO runs [10] delay → 11 cycles/sample = 14.318182 MHz NTSC sample rate. */
-    vreg_set_voltage(VREG_VOLTAGE_1_10);
-    sleep_ms(10);
-    set_sys_clock_pll(1260000000, 4, 2);   /* → 157.5 MHz */
+    /* System clock — speed controlled by MICRONES_SYS_CLK_MHZ in clock_config.h.
+     * PIO is fixed at 'out pins, 4 [10]' (11 cycles); clkdiv scales to 14.318182 MHz.
+     *   315 MHz: PLL 1260/(2×2), VREG 1.20 V, clkdiv=2.0 → 315M/22 = 14.318 MHz
+     *   157.5 MHz: PLL 1260/(4×2), VREG 1.10 V, clkdiv=1.0 → 157.5M/11 = 14.318 MHz */
+    vreg_set_voltage(MICRONES_VREG);
+    sleep_ms(MICRONES_VREG_SETTLE_MS);
+    set_sys_clock_pll(MICRONES_PLL_VCO_HZ, MICRONES_PLL_DIV1, MICRONES_PLL_DIV2);
 
     stdio_init_all();
     printf("sys clock: %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));

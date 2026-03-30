@@ -30,6 +30,7 @@
  */
 
 #include "audio_pwm.h"
+#include "clock_config.h"
 
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
@@ -40,11 +41,13 @@
  * ========================================================================= */
 
 /*
- * wrap = 3570  →  f_pwm = 157.5 MHz / 3571 = 44,106 Hz
+ * MICRONES_AUDIO_PWM_WRAP is derived from MICRONES_SYS_CLK_MHZ in clock_config.h:
+ *   315 MHz → wrap=7142 → f = 315,000,000 / 7143 = 44,103 Hz  (75 ppm)
+ *   157.5 MHz → wrap=3570 → f = 157,500,000 / 3571 = 44,106 Hz (136 ppm)
  * The interrupt fires once per PWM period (on wrap).
  */
 enum {
-    AUDIO_PWM_WRAP  = 3570,
+    AUDIO_PWM_WRAP  = MICRONES_AUDIO_PWM_WRAP,
     AUDIO_BUF_SIZE  = 2048,    /* ~46 ms at 44.1 kHz; power-of-2 for cheap modulo */
 };
 
