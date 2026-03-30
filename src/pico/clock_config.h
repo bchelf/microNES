@@ -4,19 +4,23 @@
 /*
  * clock_config.h — single toggle for system clock speed.
  *
- * Set MICRONES_SYS_CLK_MHZ to 315 or 157.
+ * Set MICRONES_SYS_CLK_MHZ to 315, 250, or 157.
  *
  *   315 MHz  — full speed, 60 fps.  Requires VREG 1.20 V.
  *              USB enumeration may be marginal on some boards; if it fails,
  *              plug the USB cable in after the board is already powered via VSYS,
  *              or switch to 157.
  *
+ *   250 MHz  — stability experiment only.  VREG 1.20 V.
+ *              250 does not divide evenly into 14.318182 MHz, so NTSC color
+ *              will be wrong/absent.  Use this only to test CPU stability.
+ *
  *   157      — 157.5 MHz (315/2).  Stable USB enumeration, VREG 1.10 V.
  *              Achieves ~40 fps with current optimisations; useful for debugging.
  *
  * All timing-dependent values are derived below — no other files need editing.
  */
-#define MICRONES_SYS_CLK_MHZ  315
+#define MICRONES_SYS_CLK_MHZ 315
 
 /* -------------------------------------------------------------------------
  * Derived values — do not edit below this line.
@@ -68,8 +72,33 @@
  */
 #  define MICRONES_AUDIO_PWM_WRAP   3570u
 
+#elif MICRONES_SYS_CLK_MHZ == 250
+
+/*
+ * 250 MHz  —  PLL: VCO=1000 MHz, post_div1=4, post_div2=1
+ *   sys_clk = 1000 / (4×1) = 250 MHz
+ *   NOTE: 250 does not divide evenly into 14.318182 MHz (250/11 = 22.73 MHz,
+ *   250/17 = 14.706 MHz). NTSC color will not work. CPU stability test only.
+ */
+#  define MICRONES_PLL_VCO_HZ       1000000000u
+#  define MICRONES_PLL_DIV1         4u
+#  define MICRONES_PLL_DIV2         1u
+#  define MICRONES_VREG             VREG_VOLTAGE_1_20
+#  define MICRONES_VREG_SETTLE_MS   20u
+
+/*
+ * PIO: clkdiv=2.0 gives 250/(2×11) = 11.364 MHz — incorrect for NTSC color,
+ * but the PIO will run and sync pulses will be approximately timed.
+ */
+#  define MICRONES_PIO_CLKDIV       2.0f
+
+/*
+ * Audio PWM: wrap=5669 → f = 250,000,000 / 5670 = 44,092 Hz  (182 ppm from 44,100 Hz)
+ */
+#  define MICRONES_AUDIO_PWM_WRAP   5669u
+
 #else
-#  error "MICRONES_SYS_CLK_MHZ must be 315 or 157"
+#  error "MICRONES_SYS_CLK_MHZ must be 315, 250, or 157"
 #endif
 
 #endif /* MICRONES_CLOCK_CONFIG_H */
