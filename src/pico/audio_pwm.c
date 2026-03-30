@@ -40,11 +40,11 @@
  * ========================================================================= */
 
 /*
- * wrap = 7142  →  f_pwm = 315 MHz / 7143 = 44,103 Hz
+ * wrap = 3570  →  f_pwm = 157.5 MHz / 3571 = 44,106 Hz
  * The interrupt fires once per PWM period (on wrap).
  */
 enum {
-    AUDIO_PWM_WRAP  = 7142,
+    AUDIO_PWM_WRAP  = 3570,
     AUDIO_BUF_SIZE  = 2048,    /* ~46 ms at 44.1 kHz; power-of-2 for cheap modulo */
 };
 

@@ -90,14 +90,30 @@ void build_chroma_lut(void) {
 }
 
 /* =========================================================================
- * Luma lookup table (stored from video_ntsc_precompute_palette)
+ * Precomputed DAC LUT: dac_lut[color][phase] — built at palette load time.
+ *
+ * Eliminates per-pixel multiply, divide-by-7, hue bounds-check, and two
+ * separate table lookups from the inner render loop.
+ *
+ * color  : NES palette index 0-63 (bits [5:0] of pixel byte)
+ * phase  : subcarrier phase = sample_index & 3  (VIDEO_ACTIVE_START=116, 116%4=0)
+ * value  : clamped DAC code [0..15]
  * ========================================================================= */
-static const uint8_t *s_nes_luma      = NULL;
-static int            s_luma_pal_size = 0;
+static uint8_t s_dac_lut[64][4];
 
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
-    s_nes_luma      = palette_to_luma;
-    s_luma_pal_size = palette_size;
+    for (int c = 0; c < 64; c++) {
+        int luma     = (c < palette_size) ? (int)palette_to_luma[c] : 0;
+        int dac_base = (int)VIDEO_DAC_BLANK + (luma * (int)VIDEO_LUMA_SCALE) / 7;
+        int hue      = c & 0x0F;
+        if (hue > 12) hue = 0;
+        for (int phase = 0; phase < 4; phase++) {
+            int dac = dac_base + (int)chroma_lut[hue][phase];
+            if (dac < 0)  dac = 0;
+            if (dac > 15) dac = 15;
+            s_dac_lut[c][phase] = (uint8_t)dac;
+        }
+    }
 }
 
 /* =========================================================================
@@ -171,11 +187,13 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
         EMIT(VIDEO_DAC_BLANK);
 
     /* Active video (116-873): 758 samples */
-    if (active && pixels != NULL && s_nes_luma != NULL) {
+    if (active && pixels != NULL) {
         /*
          * Map 256 NES pixels across 758 active samples using fixed-point
-         * integer scaling.
+         * integer scaling.  DAC code looked up directly from s_dac_lut,
+         * which was precomputed to include luma, chroma, and clamping.
          *   pixel_inc = (256 << 16) / 758 = 17644  (≈256/758, 16.16 fixed)
+         * Phase: (VIDEO_ACTIVE_START + s) & 3 = s & 3 (since 116 % 4 == 0).
          */
         uint32_t       pixel_fp  = 0u;
         const uint32_t pixel_inc = (256u << 16u) / VIDEO_ACTIVE_SAMPLES;
@@ -184,24 +202,7 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
             uint pixel_idx = pixel_fp >> 16u;
             if (pixel_idx >= 256u) pixel_idx = 255u;
             pixel_fp += pixel_inc;
-
-            uint8_t color = pixels[pixel_idx] & 0x3Fu;
-
-            /* Luma → DAC code: dac = blank + (luma × 9) / 7 */
-            int luma = (color < (uint8_t)s_luma_pal_size) ?
-                       (int)s_nes_luma[color] : 0;
-            int dac  = (int)VIDEO_DAC_BLANK + (luma * (int)VIDEO_LUMA_SCALE) / 7;
-
-            /* Chroma offset from LUT */
-            uint hue = (uint)color & 0x0Fu;
-            if (hue > 12u) hue = 0u;
-            dac += (int)chroma_lut[hue][(VIDEO_ACTIVE_START + s) & 3u];
-
-            /* Clamp to 0-15 */
-            if (dac < 0)  dac = 0;
-            if (dac > 15) dac = 15;
-
-            EMIT((uint)dac);
+            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu][s & 3u]);
         }
     } else {
         for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++)
@@ -490,9 +491,6 @@ void video_ntsc_core1_entry(void) {
     irq_set_exclusive_handler(DMA_IRQ_1, dma_irq1_handler);
     irq_set_enabled(DMA_IRQ_1, true);
     printf("[c1] irq1 registered and enabled\n");
-
-    irq_set_exclusive_handler(DMA_IRQ_1, dma_irq1_handler);
-    irq_set_enabled(DMA_IRQ_1, true);
 
     ScanlineQueue *queue = core1_video_get_queue();
 

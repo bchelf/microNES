@@ -40,17 +40,13 @@ int main(void) {
     bool     report_saw_nonzero_sample = false;
 #endif
 
-    /* Set system clock to exactly 315 MHz using PLL:
-     * VCO = 1260 MHz, post_div1 = 2, post_div2 = 2
-     * → sys_clk = 1260 / (2 × 2) = 315 MHz
-     * This is load-bearing: composite video timing requires exactly
-     * 315 MHz / 22 = 14.318182 MHz sample rate (NTSC subcarrier × 4).
-     * render_scanline_composite takes ~15k-20k cycles; budget at 315 MHz is
-     * 20,064 cycles/scanline — half-speed would break the DMA chain. */
-     * 315 MHz / 22 = 14.318182 MHz sample rate (NTSC subcarrier × 4). */
-    vreg_set_voltage(VREG_VOLTAGE_1_20);
+    /* Set system clock to 157.5 MHz (315 MHz / 2):
+     * VCO = 1260 MHz, post_div1 = 4, post_div2 = 2
+     * → sys_clk = 1260 / (4 × 2) = 157.5 MHz
+     * PIO runs [10] delay → 11 cycles/sample = 14.318182 MHz NTSC sample rate. */
+    vreg_set_voltage(VREG_VOLTAGE_1_10);
     sleep_ms(10);
-    set_sys_clock_pll(1260000000, 2, 2);   /* → 315 MHz */
+    set_sys_clock_pll(1260000000, 4, 2);   /* → 157.5 MHz */
 
     stdio_init_all();
     printf("sys clock: %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));

@@ -27,7 +27,7 @@
 .program video_ntsc
 
 .wrap_target
-    out pins, 4  [21]   ; emit 4-bit DAC code on GP0-GP3, hold 22 sys_clk cycles
+    out pins, 4  [10]   ; emit 4-bit DAC code on GP0-GP3, hold 11 sys_clk cycles
 .wrap
 
 % c-sdk {
