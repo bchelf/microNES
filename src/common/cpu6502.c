@@ -1316,6 +1316,22 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     case 0xfb: cpu_isb(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed)); cycles = 7; break;
     case 0xff: cpu_isb(cpu, nes, cpu_addr_absx(cpu, nes, &page_crossed)); cycles = 7; break;
 
+    /* SHA/TAS/SHY/SHX/LAS: unstable illegals — treat as 1-cycle NOP to avoid halting */
+    case 0x93: cycles = 1; break;
+    case 0x9b: cycles = 1; break;
+    case 0x9c: cycles = 1; break;
+    case 0x9e: cycles = 1; break;
+    case 0x9f: cycles = 1; break;
+    case 0xbb: cycles = 1; break;
+    case 0x0b: cycles = 1; break;
+    case 0x2b: cycles = 1; break;
+    case 0x4b: cycles = 1; break;
+    case 0x6b: cycles = 1; break;
+    case 0x8b: cycles = 1; break;
+    case 0xab: cycles = 1; break;
+    case 0xcb: cycles = 1; break;
+    case 0xeb: cycles = 1; break;
+
     default: {
         const Cpu6502OpcodeInfo *opcode_info = cpu6502_opcode_info(cpu->last_opcode);
         if (nes->stop_info.reason == NES_STOP_NONE) {
