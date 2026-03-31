@@ -1,18 +1,18 @@
 #include "audio_pwm.h"
+#include "clock_config.h"
 #include "core1_video.h"
 #include "emulator_video_adapter.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
+#include "pico/multicore.h"
 #include "pico/time.h"
 #include "pico_input.h"
+#include "scanline_queue.h"
 #include "video_ntsc.h"
 
 #include "pico/stdlib.h"
 
 #include <stdio.h>
-
-#define MICRONES_PICO_OVERCLOCK_KHZ 252000u
-#define MICRONES_PICO_OVERCLOCK_VREG VREG_VOLTAGE_1_20
 
 int main(void) {
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
@@ -41,18 +41,20 @@ int main(void) {
     bool     report_saw_nonzero_sample = false;
 #endif
 
-    vreg_set_voltage(MICRONES_PICO_OVERCLOCK_VREG);
-    sleep_ms(10);
-    if (!set_sys_clock_khz(MICRONES_PICO_OVERCLOCK_KHZ, true)) {
-        panic("failed to set sys clock to %u kHz", MICRONES_PICO_OVERCLOCK_KHZ);
-    }
+    /* System clock — speed controlled by MICRONES_SYS_CLK_MHZ in clock_config.h.
+     * PIO is fixed at 'out pins, 4 [10]' (11 cycles); clkdiv scales to 14.318182 MHz.
+     *   315 MHz: PLL 1260/(2×2), VREG 1.20 V, clkdiv=2.0 → 315M/22 = 14.318 MHz
+     *   157.5 MHz: PLL 1260/(4×2), VREG 1.10 V, clkdiv=1.0 → 157.5M/11 = 14.318 MHz */
+    vreg_set_voltage(MICRONES_VREG);
+    sleep_ms(MICRONES_VREG_SETTLE_MS);
+    set_sys_clock_pll(MICRONES_PLL_VCO_HZ, MICRONES_PLL_DIV1, MICRONES_PLL_DIV2);
 
     stdio_init_all();
     printf("sys clock: %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));
 
     pico_input_init();
     video_ntsc_init();
-    audio_pwm_init(48000);
+    audio_pwm_init(44100);
 
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
     if (emulator_video_adapter_init(
@@ -61,14 +63,13 @@ int main(void) {
             (size_t)micrones_pico_embedded_rom_len)) {
         printf("video mode: emulator (dual-core)\n");
 
-        // Seed the DMA with a blank frame, start scanout, then launch core 1.
-        // Core 1 will begin_frame (returns immediately, video_started=true from
-        // this point) and wait on the scanline queue.
-        video_ntsc_begin_frame();
-        video_ntsc_present();
+        // Store the palette-to-luma table, initialise the scanline queue, start
+        // the PIO + DMA with blank data, then launch Core 1.  Core 1 takes over
+        // the DMA IRQ, pre-renders vsync lines, and enters the render loop.
+        video_ntsc_precompute_palette(k_emulator_video_palette_to_gray, 64);
+        scanline_queue_init(core1_video_get_queue());
         video_ntsc_start();
-
-        core1_video_launch(k_emulator_video_palette_to_gray, 64);
+        multicore_launch_core1(video_ntsc_core1_entry);
 
         report_started_us = time_us_64();
 
@@ -249,7 +250,7 @@ int main(void) {
     {
         static int16_t s_tone_sample;
         uint32_t tone_phase = 0;
-        const uint32_t tone_step = (uint32_t)((440ull << 32) / 48000u);
+        const uint32_t tone_step = (uint32_t)((440ull << 32) / 44100u);
         while (true) {
             s_tone_sample = (tone_phase & 0x80000000u) ? 16384 : -16384;
             if (audio_pwm_push_samples(&s_tone_sample, 1) == 1) {

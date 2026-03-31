@@ -1,453 +1,601 @@
-#include "video_ntsc.h"
+/*
+ * video_ntsc.c  —  4-bit binary-weighted composite NTSC video output
+ *
+ * System clock : 315 MHz  (set by main() via set_sys_clock_pll before calling
+ *                           video_ntsc_init)
+ * Sample rate  : 315 MHz / 22 = 14.318182 MHz  (NTSC subcarrier × 4)
+ * Frame rate   : 910 samp/line × 22 cyc/samp × 262 lines = 5,245,240 cyc/frame
+ *                315,000,000 / 5,245,240 = 60.054 Hz  ✓
+ *
+ * Analytically derived DAC codes
+ * (R0=1000Ω, R1=485Ω, R2=242Ω, R3=120Ω, R_series=75.5Ω, R_load=75Ω,
+ *  no R_bias at summing node):
+ *
+ *   G_total = 1/1000 + 1/485 + 1/242 + 1/120 + 1/150.5 = 0.022172 S
+ *   V_at_TV(code N) = 3.3 × Σ(bit_i × G_i) / G_total × 75/150.5
+ *
+ *   code  4 (0100): 0.306 V  →  blank_code = 4   (NTSC blank ≈ 0.286 V)
+ *   code 13 (1101): 0.998 V  →  white_code = 13  (NTSC white ≈ 1.000 V)
+ *   luma_scale = 9  →  dac = 4 + (luma × 9) / 7,  luma ∈ [0..7]
+ *   effective LSB ≈ 74 mV/code
+ *
+ * Line structure (910 samples at 14.318 MHz = 63.56 µs):
+ *   Sync tip         : samples   0–46   (47 samp, DAC=0, GP4=HIGH)
+ *   Back porch       : samples  47–71   (25 samp, DAC=blank)
+ *   Colorburst       : samples  72–111  (40 samp, 180° cosine ±2 around blank)
+ *   Remaining porch  : samples 112–115  ( 4 samp, DAC=blank)
+ *   Active video     : samples 116–873  (758 samp, luma+chroma)
+ *   Front porch      : samples 874–909  (36 samp, DAC=blank)
+ *   Padding          : 2 extra nibbles  (fill to 912 = 114 words × 8 nibbles)
+ *   Total valid      : 910 samples  ✓
+ *
+ * DMA ping-pong: channels A and B, each 114 words (= one scanline buffer).
+ *   A chains→B, B chains→A.
+ *   Core 0 IRQ_0: lightweight re-arm for test-pattern / fallback mode.
+ *   Core 1 IRQ_1: full render-and-re-arm for emulator mode.
+ *
+ * GP4 (sync clamp MOSFET): raised by IRQ1 handler at each line transition;
+ *   lowered by Core 1 after busy_wait_at_least_cycles(1000) ≈ 3.18 µs
+ *   (target = 47 × 22 = 1034 cycles; error < 1 sample = 22 cycles).
+ */
 
-#include "hardware/clocks.h"
-#include "hardware/dma.h"
-#include "hardware/irq.h"
+#include "clock_config.h"
+#include "video_ntsc.h"
+#include "video_ntsc.pio.h"
+#include "core1_video.h"
+#include "scanline_queue.h"
+
 #include "hardware/pio.h"
+#include "hardware/dma.h"
+#include "hardware/gpio.h"
+#include "hardware/irq.h"
+#include "hardware/sync.h"
 #include "pico/stdlib.h"
 
-#include "video_ntsc.pio.h"
-
-#include <stdbool.h>
+#include <math.h>
+#include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
 
-// This is a simplified 240p-style NTSC cadence for bring-up:
-// 262 total lines, 512 timed samples per line, and a broad-sync vertical region.
-// It is intentionally not full interlaced broadcast timing; the goal is a stable
-// monochrome lock on real composite displays with the two-resistor DAC.
-enum {
-    VIDEO_VSYNC_LINES = 3,
-    VIDEO_TOP_BLANK_LINES = 16,
-    VIDEO_VISIBLE_LINES = MICRONES_VIDEO_VISIBLE_HEIGHT,
-    VIDEO_BOTTOM_BLANK_LINES = 3,
-    VIDEO_LINES_PER_FRAME = VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES +
-                            VIDEO_VISIBLE_LINES + VIDEO_BOTTOM_BLANK_LINES,
-    VIDEO_SAMPLES_PER_LINE = 512,
-    VIDEO_WORDS_PER_LINE = VIDEO_SAMPLES_PER_LINE / 16,
-    VIDEO_FRAME_WORDS = VIDEO_LINES_PER_FRAME * VIDEO_WORDS_PER_LINE,
-    VIDEO_HSYNC_SAMPLES = 38,
-    VIDEO_BACK_PORCH_SAMPLES = 38,
-    VIDEO_FRONT_PORCH_SAMPLES = 12,
-    VIDEO_ACTIVE_SAMPLES = VIDEO_SAMPLES_PER_LINE - VIDEO_HSYNC_SAMPLES -
-                           VIDEO_BACK_PORCH_SAMPLES - VIDEO_FRONT_PORCH_SAMPLES,
-    VIDEO_ACTIVE_START = VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES,
-    VIDEO_ACTIVE_WORD_START = VIDEO_ACTIVE_START / 16,
-    VIDEO_ACTIVE_WORD_END = (VIDEO_ACTIVE_START + VIDEO_ACTIVE_SAMPLES - 1) / 16,
-    VIDEO_ACTIVE_WORD_COUNT = VIDEO_ACTIVE_WORD_END - VIDEO_ACTIVE_WORD_START + 1,
-    VIDEO_SAMPLE_RATE_HZ = 8056010,
-    VIDEO_BORDER_X = 10,
-    VIDEO_BORDER_Y = 8,
-    VIDEO_BUFFER_COUNT = 2,
-};
+/* =========================================================================
+ * Colorburst pattern
+ *
+ * 180° cosine, amplitude ±2 DAC codes around blank (code 4):
+ *   Phase 0 (0°)  : cos(0°+180°)  = −1 → 4−2 = 2
+ *   Phase 1 (90°) : cos(90°+180°) =  0 → 4
+ *   Phase 2 (180°): cos(180°+180°)= +1 → 4+2 = 6
+ *   Phase 3 (270°): cos(270°+180°)=  0 → 4
+ *
+ * Index by (absolute_sample_index & 3).  Burst begins at sample 72;
+ * 72 & 3 = 0 → first burst sample = code 2 (peak-negative). ✓
+ * ========================================================================= */
+static const uint8_t k_burst_pattern[4] = { 2, 4, 6, 4 };
 
-typedef enum {
-    VIDEO_LEVEL_SYNC = 0x0,
-    VIDEO_LEVEL_BLACK = 0x1,
-    VIDEO_LEVEL_GRAY = 0x2,
-    VIDEO_LEVEL_WHITE = 0x3,
-} video_level_t;
+/* =========================================================================
+ * Chroma LUT  [hue 0-12][subcarrier phase 0-3]
+ *
+ * value = roundf(2.5 × cos(s × π/2 + (hue-1) × 30° × π/180))
+ * ========================================================================= */
+static int8_t chroma_lut[13][4];
 
-// The RP2350 composite path only has a few physical output levels, so we map
-// NES palette entries to 8 logical grayscale levels first, then convert those
-// to luma bytes and finally to a tiny ordered-dither pattern over the physical
-// black/gray/white levels. This preserves timing and keeps the hot path to
-// table lookups and assignments only.
-static const uint8_t k_video_gray_to_luma[8] = {
-    0, 32, 64, 96, 128, 160, 192, 224,
-};
-
-static const uint8_t k_video_gray_phase_to_level[8][4] = {
-    { VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK },
-    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK },
-    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_BLACK, VIDEO_LEVEL_BLACK },
-    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY  },
-    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY  },
-    { VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY  },
-    { VIDEO_LEVEL_WHITE, VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY,  VIDEO_LEVEL_GRAY  },
-    { VIDEO_LEVEL_WHITE, VIDEO_LEVEL_WHITE, VIDEO_LEVEL_WHITE, VIDEO_LEVEL_WHITE },
-};
-
-static uint32_t blank_frame_words[VIDEO_FRAME_WORDS];
-static uint32_t frame_words[VIDEO_BUFFER_COUNT][VIDEO_FRAME_WORDS];
-static uint8_t video_active_sample_src_x[VIDEO_ACTIVE_SAMPLES];
-static uint8_t video_active_sample_word_slot[VIDEO_ACTIVE_SAMPLES];
-static uint8_t video_active_sample_shift[VIDEO_ACTIVE_SAMPLES];
-static uint32_t video_active_word_mask[VIDEO_ACTIVE_WORD_COUNT];
-static int video_sm;
-static int video_dma_data;
-static volatile uint8_t video_scanout_buffer_index;
-static volatile uint8_t video_build_buffer_index;
-static volatile bool video_swap_pending;
-static volatile bool video_started;
-static MicronesVideoNtscPerfStats video_perf_stats;
-
-// Precomputed table: for each (6-bit NES palette index, 2-bit dither phase),
-// the final 2-bit composite output level. Built by video_ntsc_precompute_palette().
-// Collapses palette_to_luma + gray_to_luma + phase_to_level into one lookup.
-// 64 * 4 = 256 bytes, fits comfortably in cache.
-static uint8_t video_precomputed_level[64][4];
-static bool video_palette_precomputed = false;
-
-static inline uint32_t *video_buffer_line_ptr(uint8_t buffer_index, int line) {
-    return &frame_words[buffer_index][line * VIDEO_WORDS_PER_LINE];
-}
-
-static inline video_level_t video_gray_level_to_output_level(uint8_t gray_level, int phase) {
-    uint8_t luma;
-    uint8_t bucket;
-
-    if (gray_level > MICRONES_VIDEO_LUMA_WHITE) {
-        gray_level = MICRONES_VIDEO_LUMA_WHITE;
-    }
-
-    luma = k_video_gray_to_luma[gray_level];
-    bucket = (uint8_t)(luma >> 5);
-    if (bucket > MICRONES_VIDEO_LUMA_WHITE) {
-        bucket = MICRONES_VIDEO_LUMA_WHITE;
-    }
-    return (video_level_t)k_video_gray_phase_to_level[bucket][phase & 0x03];
-}
-
-static void video_put_sample(uint32_t *line_words, int sample_index, video_level_t level) {
-    uint word_index = (uint)sample_index >> 4;
-    uint bit_index = ((uint)sample_index & 0xfu) * 2u;
-    uint32_t mask = 0x3u << bit_index;
-    line_words[word_index] = (line_words[word_index] & ~mask) | ((uint32_t)level << bit_index);
-}
-
-static void video_fill_range(uint32_t *line_words, int start, int count, video_level_t level) {
-    for (int sample = start; sample < start + count; ++sample) {
-        video_put_sample(line_words, sample, level);
-    }
-}
-
-static bool video_pattern_pixel(int x, int y) {
-    if (x < VIDEO_BORDER_X || x >= VIDEO_ACTIVE_SAMPLES - VIDEO_BORDER_X ||
-        y < VIDEO_BORDER_Y || y >= VIDEO_VISIBLE_LINES - VIDEO_BORDER_Y) {
-        return true;
-    }
-
-    if ((x >= VIDEO_ACTIVE_SAMPLES / 2 - 2 && x <= VIDEO_ACTIVE_SAMPLES / 2 + 2) ||
-        (y >= VIDEO_VISIBLE_LINES / 2 - 2 && y <= VIDEO_VISIBLE_LINES / 2 + 2)) {
-        return true;
-    }
-
-    if (y >= 24 && y < 96) {
-        int local_x = x - 24;
-        if (local_x >= 0) {
-            int bar = (local_x / 34) & 1;
-            if (bar == 0 && x < VIDEO_ACTIVE_SAMPLES - 24) {
-                return true;
-            }
+void build_chroma_lut(void) {
+    memset(chroma_lut[0], 0, sizeof(chroma_lut[0]));  /* hue 0 = greyscale */
+    for (int hue = 1; hue < 13; hue++) {
+        float phase_rad = (float)(hue - 1) * 30.0f * (float)M_PI / 180.0f;
+        for (int s = 0; s < 4; s++) {
+            float sc = (float)s * (float)M_PI / 2.0f;
+            chroma_lut[hue][s] = (int8_t)roundf(2.5f * cosf(sc + phase_rad));
         }
     }
+}
 
-    if (x >= 280 && x < 376) {
-        int local_y = y - 32;
-        if (local_y >= 0 && local_y < 144) {
-            int bar = (local_y / 18) & 1;
-            if (bar == 0) {
-                return true;
-            }
+/* =========================================================================
+ * Precomputed DAC LUT: dac_lut[color][phase] — built at palette load time.
+ *
+ * Eliminates per-pixel multiply, divide-by-7, hue bounds-check, and two
+ * separate table lookups from the inner render loop.
+ *
+ * color  : NES palette index 0-63 (bits [5:0] of pixel byte)
+ * phase  : subcarrier phase = sample_index & 3  (VIDEO_ACTIVE_START=116, 116%4=0)
+ * value  : clamped DAC code [0..15]
+ * ========================================================================= */
+static uint8_t s_dac_lut[64][4];
+
+/* Set to 0 to strip chroma from all pixels (luma-only / greyscale output).
+ * Rebuild + reflash to toggle; no other files need changing. */
+#define MICRONES_CHROMA_ENABLED 1
+
+void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
+    for (int c = 0; c < 64; c++) {
+        int luma     = (c < palette_size) ? (int)palette_to_luma[c] : 0;
+        int dac_base = (int)VIDEO_DAC_BLANK + (luma * (int)VIDEO_LUMA_SCALE) / 7;
+        int hue      = c & 0x0F;
+        if (hue > 12) hue = 0;
+        for (int phase = 0; phase < 4; phase++) {
+#if MICRONES_CHROMA_ENABLED
+            int dac = dac_base + (int)chroma_lut[hue][phase];
+#else
+            int dac = dac_base;   /* chroma disabled — luma only */
+#endif
+            if (dac < 0)  dac = 0;
+            if (dac > 15) dac = 15;
+            s_dac_lut[c][phase] = (uint8_t)dac;
         }
     }
-
-    return false;
 }
 
-static void video_build_blank_line(uint32_t *line_words, int frame_line) {
-    memset(line_words, 0, VIDEO_WORDS_PER_LINE * sizeof(uint32_t));
+/* =========================================================================
+ * Scanline buffers — fixed ping-pong assignment:
+ *   DMA channel 0 (A) always reads from scanline_buf[0]
+ *   DMA channel 1 (B) always reads from scanline_buf[1]
+ * ========================================================================= */
+static uint32_t __attribute__((aligned(4))) scanline_buf[2][VIDEO_WORDS_PER_LINE];
 
-    if (frame_line < VIDEO_VSYNC_LINES) {
-        video_fill_range(line_words, 0, VIDEO_SAMPLES_PER_LINE, VIDEO_LEVEL_SYNC);
-        return;
+/* =========================================================================
+ * PIO / DMA
+ * ========================================================================= */
+static PIO  s_pio;
+static uint s_sm;
+static uint s_pio_offset;
+static uint s_dma_chan[2];
+static dma_channel_config s_dma_cfg[2];
+
+/* =========================================================================
+ * State shared between IRQ handler and Core 1 loop
+ * ========================================================================= */
+static volatile bool s_dma_irq1_pending = false;
+static volatile int  s_idle_buf         = 0;
+
+/* =========================================================================
+ * Performance counters
+ * ========================================================================= */
+static volatile uint64_t s_frames_rendered    = 0;
+static volatile uint64_t s_swap_wait_us_total = 0;
+static volatile uint64_t s_swap_wait_us_max   = 0;
+
+/* =========================================================================
+ * Test-pattern flag (set by video_ntsc_build_test_pattern_frame)
+ * ========================================================================= */
+static bool s_test_pattern_filled = false;
+
+/* =========================================================================
+ * render_scanline_composite()
+ *
+ * Packs 910 NTSC samples + 2 padding nibbles into 114 uint32_t words.
+ * 8 nibbles per word, MSB first: nibble 0 → bits[31:28], nibble 7 → bits[3:0].
+ * ========================================================================= */
+void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active) {
+    uint32_t word      = 0;
+    int      nib_count = 0;
+
+#define EMIT(code)                                           \
+    do {                                                     \
+        word = (word << 4) | ((uint32_t)(code) & 0xFu);     \
+        if (++nib_count == 8) {                              \
+            *buf++ = word;                                   \
+            word = 0; nib_count = 0;                         \
+        }                                                    \
+    } while (0)
+
+    /* Sync (0-46): 47 samples at code 0 */
+    for (uint i = 0; i < VIDEO_SYNC_SAMPLES; i++)
+        EMIT(VIDEO_DAC_SYNC);
+
+    /* Back porch before burst (47-71): 25 samples blank */
+    for (uint i = VIDEO_SYNC_SAMPLES; i < VIDEO_BURST_START; i++)
+        EMIT(VIDEO_DAC_BLANK);
+
+    /* Colorburst (72-111): 40 samples, 180° cosine ±2 around blank */
+    for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++)
+        EMIT(k_burst_pattern[(VIDEO_BURST_START + i) & 3u]);
+
+    /* Remaining back porch (112-115): 4 samples blank */
+    for (uint abs_s = VIDEO_BURST_START + VIDEO_BURST_SAMPLES;
+         abs_s < VIDEO_ACTIVE_START; abs_s++)
+        EMIT(VIDEO_DAC_BLANK);
+
+    /* Active video (116-873): 758 samples */
+    if (active && pixels != NULL) {
+        /*
+         * Map 256 NES pixels across 758 active samples using fixed-point
+         * integer scaling.  DAC code looked up directly from s_dac_lut,
+         * which was precomputed to include luma, chroma, and clamping.
+         *   pixel_inc = (256 << 16) / 758 = 17644  (≈256/758, 16.16 fixed)
+         * Phase: (VIDEO_ACTIVE_START + s) & 3 = s & 3 (since 116 % 4 == 0).
+         */
+        uint32_t       pixel_fp  = 0u;
+        const uint32_t pixel_inc = (256u << 16u) / VIDEO_ACTIVE_SAMPLES;
+
+        for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++) {
+            uint pixel_idx = pixel_fp >> 16u;
+            if (pixel_idx >= 256u) pixel_idx = 255u;
+            pixel_fp += pixel_inc;
+            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu][s & 3u]);
+        }
+    } else {
+        for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++)
+            EMIT(VIDEO_DAC_BLANK);
     }
 
-    video_fill_range(line_words, 0, VIDEO_HSYNC_SAMPLES, VIDEO_LEVEL_SYNC);
-    video_fill_range(line_words, VIDEO_HSYNC_SAMPLES, VIDEO_BACK_PORCH_SAMPLES, VIDEO_LEVEL_BLACK);
-    video_fill_range(
-        line_words,
-        VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES,
-        VIDEO_ACTIVE_SAMPLES,
-        VIDEO_LEVEL_BLACK
+    /* Front porch (874-909): 36 samples blank */
+    for (uint i = 0; i < 36u; i++)
+        EMIT(VIDEO_DAC_BLANK);
+
+    /* Padding nibbles 910-911: fill last word to 114 × 8 = 912 nibbles */
+    EMIT(VIDEO_DAC_BLANK);
+    EMIT(VIDEO_DAC_BLANK);
+
+#undef EMIT
+}
+
+/* =========================================================================
+ * Private scanline renderers
+ * ========================================================================= */
+
+static void render_vsync_line(uint32_t *buf) {
+    /* All-sync: DAC code 0 for entire line.  GP4 stays HIGH (Core 1). */
+    memset(buf, 0, VIDEO_WORDS_PER_LINE * sizeof(uint32_t));
+}
+
+static void render_blank_line(uint32_t *buf) {
+    render_scanline_composite(buf, NULL, false);
+}
+
+static void render_test_scanline(uint32_t *buf) {
+    /* 8 luma bars across the active region — no Core 1 needed */
+    static const uint8_t bar_codes[8] = { 13, 11, 9, 7, 6, 5, 4, 4 };
+
+    uint32_t word      = 0;
+    int      nib_count = 0;
+
+#define EMIT_T(c) \
+    do { \
+        word = (word << 4) | ((uint32_t)(c) & 0xFu); \
+        if (++nib_count == 8) { *buf++ = word; word = 0; nib_count = 0; } \
+    } while (0)
+
+    for (uint i = 0; i < VIDEO_SYNC_SAMPLES; i++)
+        EMIT_T(VIDEO_DAC_SYNC);
+    for (uint i = VIDEO_SYNC_SAMPLES; i < VIDEO_BURST_START; i++)
+        EMIT_T(VIDEO_DAC_BLANK);
+    for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++)
+        EMIT_T(k_burst_pattern[(VIDEO_BURST_START + i) & 3u]);
+    for (uint abs_s = VIDEO_BURST_START + VIDEO_BURST_SAMPLES;
+         abs_s < VIDEO_ACTIVE_START; abs_s++)
+        EMIT_T(VIDEO_DAC_BLANK);
+    for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++) {
+        uint bar = (s * 8u) / VIDEO_ACTIVE_SAMPLES;
+        EMIT_T(bar_codes[bar]);
+    }
+    for (uint i = 0; i < 38u; i++)  /* 36 front porch + 2 padding */
+        EMIT_T(VIDEO_DAC_BLANK);
+
+#undef EMIT_T
+}
+
+static void render_ntsc_line(int ntsc_line, uint32_t *buf, ScanlineQueue *queue) {
+    if (ntsc_line < (int)VIDEO_VSYNC_LINES) {
+        render_vsync_line(buf);
+    } else if (ntsc_line < (int)(VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES) ||
+               ntsc_line >= (int)VIDEO_ACTIVE_END_LINE) {
+        render_blank_line(buf);
+    } else {
+        int active_y = ntsc_line - (int)VIDEO_ACTIVE_START_LINE;
+        ScanlineQueueSlot slot;
+        scanline_queue_pop_blocking(queue, &slot);
+        render_scanline_composite(buf, slot.pixels, true);
+        if (active_y == (int)VIDEO_ACTIVE_LINES - 1) {
+            s_frames_rendered++;
+        }
+    }
+}
+
+/* =========================================================================
+ * DMA helpers
+ * ========================================================================= */
+
+static void dma_rearm(int buf_idx) {
+    /*
+     * Reset READ_ADDR and TRANS_COUNT without triggering.  The channel will
+     * be triggered automatically when the other channel chains to it.
+     */
+    dma_channel_configure(
+        s_dma_chan[buf_idx],
+        &s_dma_cfg[buf_idx],
+        &s_pio->txf[s_sm],       /* write addr: PIO TX FIFO        */
+        scanline_buf[buf_idx],   /* read addr:  start of this buf  */
+        VIDEO_WORDS_PER_LINE,    /* transfer count                 */
+        false                    /* do not trigger                 */
     );
-    video_fill_range(
-        line_words,
-        VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES + VIDEO_ACTIVE_SAMPLES,
-        VIDEO_FRONT_PORCH_SAMPLES,
-        VIDEO_LEVEL_BLACK
-    );
 }
 
-static void video_build_blank_template(void) {
-    for (int line = 0; line < VIDEO_LINES_PER_FRAME; ++line) {
-        video_build_blank_line(&blank_frame_words[line * VIDEO_WORDS_PER_LINE], line);
-    }
+static void setup_dma(void) {
+    s_dma_chan[0] = dma_claim_unused_channel(true);
+    s_dma_chan[1] = dma_claim_unused_channel(true);
+
+    uint dreq = pio_get_dreq(s_pio, s_sm, /*is_tx=*/true);
+
+    /* ---- Channel A: buf[0] → PIO FIFO, chain → B ---- */
+    s_dma_cfg[0] = dma_channel_get_default_config(s_dma_chan[0]);
+    channel_config_set_transfer_data_size(&s_dma_cfg[0], DMA_SIZE_32);
+    channel_config_set_read_increment(&s_dma_cfg[0],  true);
+    channel_config_set_write_increment(&s_dma_cfg[0], false);
+    channel_config_set_dreq(&s_dma_cfg[0], dreq);
+    channel_config_set_chain_to(&s_dma_cfg[0], s_dma_chan[1]);
+    channel_config_set_irq_quiet(&s_dma_cfg[0], false);
+
+    dma_channel_configure(s_dma_chan[0], &s_dma_cfg[0],
+        &s_pio->txf[s_sm], scanline_buf[0], VIDEO_WORDS_PER_LINE, false);
+
+    /* ---- Channel B: buf[1] → PIO FIFO, chain → A ---- */
+    s_dma_cfg[1] = dma_channel_get_default_config(s_dma_chan[1]);
+    channel_config_set_transfer_data_size(&s_dma_cfg[1], DMA_SIZE_32);
+    channel_config_set_read_increment(&s_dma_cfg[1],  true);
+    channel_config_set_write_increment(&s_dma_cfg[1], false);
+    channel_config_set_dreq(&s_dma_cfg[1], dreq);
+    channel_config_set_chain_to(&s_dma_cfg[1], s_dma_chan[0]);
+    channel_config_set_irq_quiet(&s_dma_cfg[1], false);
+
+    dma_channel_configure(s_dma_chan[1], &s_dma_cfg[1],
+        &s_pio->txf[s_sm], scanline_buf[1], VIDEO_WORDS_PER_LINE, false);
+
+    /*
+     * Enable both IRQ lines for both channels:
+     *   DMA_IRQ_0 → Core 0 handler (lightweight test-pattern re-arm)
+     *   DMA_IRQ_1 → Core 1 handler (full render loop)
+     * Core 1 entry will disable IRQ_0 for these channels once it takes over.
+     */
+    uint32_t mask = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
+    dma_set_irq0_channel_mask_enabled(mask, true);
+    dma_set_irq1_channel_mask_enabled(mask, true);
 }
 
-static void video_build_active_mapping(void) {
-    for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
-        int line_sample = VIDEO_ACTIVE_START + sample;
-        int word_index = line_sample >> 4;
-        int word_slot = word_index - VIDEO_ACTIVE_WORD_START;
-        int bit_index = (line_sample & 0x0f) * 2;
-
-        video_active_sample_src_x[sample] =
-            (uint8_t)((sample * MICRONES_VIDEO_VISIBLE_WIDTH) / VIDEO_ACTIVE_SAMPLES);
-        video_active_sample_word_slot[sample] = (uint8_t)word_slot;
-        video_active_sample_shift[sample] = (uint8_t)bit_index;
-        video_active_word_mask[word_slot] |= 0x3u << bit_index;
-    }
+/* =========================================================================
+ * Core 0  DMA IRQ_0  handler  (test-pattern / fallback re-arm)
+ * ========================================================================= */
+static void __isr dma_irq0_handler(void) {
+    uint32_t mask   = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
+    uint32_t status = dma_hw->ints0 & mask;
+    dma_hw->ints0   = status;   /* clear all triggered bits in one write */
+    if (status & (1u << s_dma_chan[0])) dma_rearm(0);
+    if (status & (1u << s_dma_chan[1])) dma_rearm(1);
 }
 
-static void video_copy_blank_template(uint8_t buffer_index) {
-    memcpy(frame_words[buffer_index], blank_frame_words, sizeof(blank_frame_words));
+/* =========================================================================
+ * Core 1  DMA IRQ_1  handler  (emulator render loop)
+ * ========================================================================= */
+static volatile uint32_t s_irq1_fire_count = 0;
+
+static void __isr dma_irq1_handler(void) {
+    /*
+     * The DMA chain has already started the next channel.  Raise GP4
+     * immediately for the new line's horizontal sync pulse.
+     * IRQ latency on Cortex-M33 ≈ 12 cycles; error < 1 sample (22 cycles).
+     */
+    s_irq1_fire_count++;
+    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
+
+    uint32_t mask   = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
+    uint32_t status = dma_hw->ints1 & mask;
+    dma_hw->ints1   = status;
+
+    s_idle_buf         = (status & (1u << s_dma_chan[0])) ? 0 : 1;
+    s_dma_irq1_pending = true;
+    /* Core 1 wakes from __wfe() automatically on IRQ return. */
 }
 
-static inline uint32_t *video_visible_line_ptr(uint8_t buffer_index, int visible_y) {
-    int frame_line = VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES + visible_y;
-    return video_buffer_line_ptr(buffer_index, frame_line);
-}
-
-static void video_restart_dma(void) {
-    dma_channel_set_read_addr(video_dma_data, frame_words[video_scanout_buffer_index], false);
-    dma_channel_set_trans_count(video_dma_data, VIDEO_FRAME_WORDS, true);
-}
-
-static void video_dma_handler(void) {
-    dma_hw->ints0 = 1u << video_dma_data;
-
-    if (video_swap_pending) {
-        video_scanout_buffer_index = video_build_buffer_index;
-        video_build_buffer_index = (uint8_t)(video_scanout_buffer_index ^ 1u);
-        video_swap_pending = false;
-    }
-
-    video_restart_dma();
-}
+/* =========================================================================
+ * Public init / control
+ * ========================================================================= */
 
 void video_ntsc_init(void) {
-    PIO pio = pio0;
-    uint offset = pio_add_program(pio, &video_ntsc_program);
-    pio_sm_config config;
-    dma_channel_config data_config;
+    build_chroma_lut();
 
-    video_sm = pio_claim_unused_sm(pio, true);
-    video_scanout_buffer_index = 0;
-    video_build_buffer_index = 1;
-    video_swap_pending = false;
-    video_started = false;
+    /* GP4: sync clamp gate — output, initially LOW (MOSFET off) */
+    gpio_init(MICRONES_VIDEO_SYNC_GPIO);
+    gpio_set_dir(MICRONES_VIDEO_SYNC_GPIO, GPIO_OUT);
+    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
 
-    for (uint pin = MICRONES_VIDEO_PIN_BASE; pin < MICRONES_VIDEO_PIN_BASE + MICRONES_VIDEO_PIN_COUNT; ++pin) {
-        pio_gpio_init(pio, pin);
-    }
+    /* Load PIO program and configure state machine */
+    s_pio        = pio0;
+    s_sm         = 0;
+    s_pio_offset = pio_add_program(s_pio, &video_ntsc_program);
+    video_ntsc_program_init(s_pio, s_sm, s_pio_offset, MICRONES_VIDEO_PIN_BASE,
+                            MICRONES_PIO_CLKDIV);
 
-    config = video_ntsc_program_get_default_config(offset);
-    sm_config_set_out_pins(&config, MICRONES_VIDEO_PIN_BASE, MICRONES_VIDEO_PIN_COUNT);
-    sm_config_set_out_shift(&config, true, true, 32);
-    sm_config_set_fifo_join(&config, PIO_FIFO_JOIN_TX);
-    sm_config_set_clkdiv(&config, (float)clock_get_hz(clk_sys) / (float)VIDEO_SAMPLE_RATE_HZ);
+    /* Claim and configure DMA channels */
+    setup_dma();
 
-    pio_sm_set_consecutive_pindirs(pio, video_sm, MICRONES_VIDEO_PIN_BASE, MICRONES_VIDEO_PIN_COUNT, true);
-    pio_sm_init(pio, video_sm, offset, &config);
-
-    video_build_blank_template();
-    video_build_active_mapping();
-    video_copy_blank_template(0);
-    video_copy_blank_template(1);
-
-    video_dma_data = dma_claim_unused_channel(true);
-
-    data_config = dma_channel_get_default_config(video_dma_data);
-    channel_config_set_transfer_data_size(&data_config, DMA_SIZE_32);
-    channel_config_set_read_increment(&data_config, true);
-    channel_config_set_write_increment(&data_config, false);
-    channel_config_set_dreq(&data_config, pio_get_dreq(pio, video_sm, true));
-
-    dma_channel_configure(
-        video_dma_data,
-        &data_config,
-        &pio->txf[video_sm],
-        frame_words[video_scanout_buffer_index],
-        VIDEO_FRAME_WORDS,
-        false
-    );
-
-    dma_channel_set_irq0_enabled(video_dma_data, true);
-    irq_set_exclusive_handler(DMA_IRQ_0, video_dma_handler);
+    /* Register Core 0 IRQ_0 handler for the test-pattern / fallback path */
+    irq_set_exclusive_handler(DMA_IRQ_0, dma_irq0_handler);
     irq_set_enabled(DMA_IRQ_0, true);
 }
 
 void video_ntsc_start(void) {
-    PIO pio = pio0;
-
-    pio_sm_set_enabled(pio, video_sm, true);
-    video_started = true;
-    video_restart_dma();
-}
-
-void video_ntsc_begin_frame(void) {
-    uint64_t wait_started_us = 0;
-
-    ++video_perf_stats.begin_frame_calls;
-    // The emulator can render faster than scanout. If the previous frame has
-    // been queued for display but not yet swapped at the DMA frame boundary,
-    // reusing the build buffer here would erase it before it ever appears.
-    if (video_started && video_swap_pending) {
-        wait_started_us = time_us_64();
-    }
-    while (video_started && video_swap_pending) {
-        tight_loop_contents();
-    }
-    if (wait_started_us != 0) {
-        uint64_t wait_us = time_us_64() - wait_started_us;
-        ++video_perf_stats.swap_wait_events;
-        video_perf_stats.swap_wait_us_total += wait_us;
-        if (wait_us > video_perf_stats.swap_wait_us_max) {
-            video_perf_stats.swap_wait_us_max = wait_us;
-        }
-    }
-}
-
-void video_ntsc_write_visible_scanline_luma(int visible_y, const uint8_t *pixels, int pixel_count) {
-    uint32_t *line_words;
-
-    if (visible_y < 0 || visible_y >= VIDEO_VISIBLE_LINES || pixels == NULL || pixel_count <= 0) {
-        return;
+    /*
+     * If video_ntsc_build_test_pattern_frame() was called, the buffers already
+     * contain the test pattern; otherwise fill them with blank scanlines.
+     */
+    if (!s_test_pattern_filled) {
+        render_blank_line(scanline_buf[0]);
+        render_blank_line(scanline_buf[1]);
     }
 
-    line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
-    if (pixel_count == MICRONES_VIDEO_VISIBLE_WIDTH) {
-        uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
-
-        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
-            packed_words[i] = line_words[VIDEO_ACTIVE_WORD_START + i] & ~video_active_word_mask[i];
-        }
-        for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
-            uint8_t src_x = video_active_sample_src_x[sample];
-            uint8_t word_slot = video_active_sample_word_slot[sample];
-            uint8_t shift = video_active_sample_shift[sample];
-            video_level_t level = video_gray_level_to_output_level(pixels[src_x], sample);
-
-            packed_words[word_slot] |= (uint32_t)level << shift;
-        }
-        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
-            line_words[VIDEO_ACTIVE_WORD_START + i] = packed_words[i];
-        }
-        return;
-    }
-
-    for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
-        int src_x = (x * pixel_count) / VIDEO_ACTIVE_SAMPLES;
-        video_level_t level = video_gray_level_to_output_level(pixels[src_x], x);
-        video_put_sample(line_words, VIDEO_ACTIVE_START + x, level);
-    }
-}
-
-void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
-    if (palette_to_luma == NULL || palette_size <= 0) {
-        return;
-    }
-    for (int pixel = 0; pixel < 64; ++pixel) {
-        uint8_t gray = palette_to_luma[pixel & (palette_size - 1)];
-        for (int phase = 0; phase < 4; ++phase) {
-            video_precomputed_level[pixel][phase] =
-                (uint8_t)video_gray_level_to_output_level(gray, phase);
-        }
-    }
-    video_palette_precomputed = true;
-}
-
-void __not_in_flash_func(video_ntsc_write_visible_scanline_indexed_luma)(
-    int visible_y,
-    const uint8_t *pixels,
-    int pixel_count,
-    const uint8_t *palette_to_luma,
-    int palette_size
-) {
-    uint32_t *line_words;
-
-    if (visible_y < 0 || visible_y >= VIDEO_VISIBLE_LINES ||
-        pixels == NULL || pixel_count <= 0 ||
-        palette_to_luma == NULL || palette_size <= 0) {
-        return;
-    }
-
-    line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
-    if (pixel_count == MICRONES_VIDEO_VISIBLE_WIDTH) {
-        uint32_t packed_words[VIDEO_ACTIVE_WORD_COUNT];
-
-        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
-            packed_words[i] = line_words[VIDEO_ACTIVE_WORD_START + i] & ~video_active_word_mask[i];
-        }
-
-        if (video_palette_precomputed) {
-            // Fast path: single table lookup per sample collapses palette→gray→level.
-            for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
-                uint8_t src_x = video_active_sample_src_x[sample];
-                uint8_t word_slot = video_active_sample_word_slot[sample];
-                uint8_t shift = video_active_sample_shift[sample];
-                uint8_t level = video_precomputed_level[pixels[src_x] & 63u][sample & 3];
-
-                packed_words[word_slot] |= (uint32_t)level << shift;
-            }
-        } else {
-            for (int sample = 0; sample < VIDEO_ACTIVE_SAMPLES; ++sample) {
-                uint8_t src_x = video_active_sample_src_x[sample];
-                uint8_t word_slot = video_active_sample_word_slot[sample];
-                uint8_t shift = video_active_sample_shift[sample];
-                uint8_t pixel = pixels[src_x];
-                uint8_t gray = palette_to_luma[pixel & (uint8_t)(palette_size - 1)];
-                video_level_t level = video_gray_level_to_output_level(gray, sample);
-
-                packed_words[word_slot] |= (uint32_t)level << shift;
-            }
-        }
-
-        for (int i = 0; i < VIDEO_ACTIVE_WORD_COUNT; ++i) {
-            line_words[VIDEO_ACTIVE_WORD_START + i] = packed_words[i];
-        }
-        return;
-    }
-
-    for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
-        int src_x = (x * pixel_count) / VIDEO_ACTIVE_SAMPLES;
-        uint8_t gray = palette_to_luma[pixels[src_x] & (uint8_t)(palette_size - 1)];
-        video_level_t level = video_gray_level_to_output_level(gray, x);
-        video_put_sample(line_words, VIDEO_ACTIVE_START + x, level);
-    }
-}
-
-void video_ntsc_write_visible_scanline_mono(int visible_y, const uint8_t *pixels, int pixel_count) {
-    video_ntsc_write_visible_scanline_luma(visible_y, pixels, pixel_count);
-}
-
-void video_ntsc_present(void) {
-    ++video_perf_stats.present_calls;
-    video_swap_pending = true;
+    pio_sm_set_enabled(s_pio, s_sm, true);
+    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);   /* GP4 LOW for test-pattern mode */
+    dma_channel_start(s_dma_chan[0]);        /* A starts, chains to B, B to A… */
 }
 
 void video_ntsc_build_test_pattern_frame(void) {
-    video_ntsc_begin_frame();
-    video_copy_blank_template(video_build_buffer_index);
-
-    for (int visible_y = 0; visible_y < VIDEO_VISIBLE_LINES; ++visible_y) {
-        uint32_t *line_words = video_visible_line_ptr(video_build_buffer_index, visible_y);
-        int active_start = VIDEO_HSYNC_SAMPLES + VIDEO_BACK_PORCH_SAMPLES;
-
-        for (int x = 0; x < VIDEO_ACTIVE_SAMPLES; ++x) {
-            if (video_pattern_pixel(x, visible_y)) {
-                video_put_sample(line_words, active_start + x, VIDEO_LEVEL_WHITE);
-            }
-        }
-    }
-
-    video_ntsc_present();
+    render_test_scanline(scanline_buf[0]);
+    render_test_scanline(scanline_buf[1]);
+    s_test_pattern_filled = true;
 }
 
-void video_ntsc_perf_get(MicronesVideoNtscPerfStats *stats_out) {
-    if (stats_out == NULL) {
-        return;
+/* =========================================================================
+ * Compatibility stubs  (called by existing core1_video.c — no-ops here)
+ * ========================================================================= */
+
+void video_ntsc_begin_frame(void) {}
+void video_ntsc_present(void)     {}
+
+void video_ntsc_write_visible_scanline_mono(
+    int y, const uint8_t *p, int n)
+{ (void)y; (void)p; (void)n; }
+
+void video_ntsc_write_visible_scanline_luma(
+    int y, const uint8_t *p, int n)
+{ (void)y; (void)p; (void)n; }
+
+void video_ntsc_write_visible_scanline_indexed_luma(
+    int y, const uint8_t *p, int n, const uint8_t *lut, int lsz)
+{ (void)y; (void)p; (void)n; (void)lut; (void)lsz; }
+
+/* =========================================================================
+ * Performance counters
+ * ========================================================================= */
+
+void video_ntsc_perf_get(MicronesVideoNtscPerfStats *out) {
+    if (!out) return;
+    out->begin_frame_calls  = 0;
+    out->present_calls      = 0;
+    out->swap_wait_events   = s_frames_rendered;
+    out->swap_wait_us_total = s_swap_wait_us_total;
+    out->swap_wait_us_max   = s_swap_wait_us_max;
+}
+
+/* =========================================================================
+ * video_ntsc_core1_entry()
+ *
+ * Called via  multicore_launch_core1(video_ntsc_core1_entry).
+ * video_ntsc_init() and video_ntsc_start() must have been called on Core 0
+ * and the scanline queue must have been initialised.
+ *
+ * Responsibilities:
+ *   1. Take over DMA from Core 0 (disable IRQ_0, enable IRQ_1 on Core 1).
+ *   2. Re-seed both scanline buffers with vsync data.
+ *   3. Restart PIO and DMA cleanly.
+ *   4. Loop: on each DMA IRQ, manage GP4 timing, render next NTSC line,
+ *      re-arm the completed DMA channel.
+ *
+ * Pipeline: while DMA outputs line N from buf[K], Core 1 renders line N+1
+ * into buf[1-K].  Render budget at 315 MHz: ~20,000 cycles/scanline;
+ * active-line render takes ~12,000-15,000 cycles (well within budget).
+ * ========================================================================= */
+
+void video_ntsc_core1_entry(void) {
+    uint32_t ch_mask = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
+
+    printf("[c1] entry: chan0=%u chan1=%u ch_mask=0x%08x\n",
+           s_dma_chan[0], s_dma_chan[1], (unsigned)ch_mask);
+
+    /*
+     * Hand DMA IRQ ownership to Core 1:
+     *   • Disable IRQ_0 for our channels (Core 0 handler stops firing).
+     *   • Register and enable IRQ_1 on Core 1's NVIC.
+     */
+    dma_set_irq0_channel_mask_enabled(ch_mask, false);
+    printf("[c1] irq0 disabled for our channels\n");
+
+    irq_set_exclusive_handler(DMA_IRQ_1, dma_irq1_handler);
+    irq_set_enabled(DMA_IRQ_1, true);
+    printf("[c1] irq1 registered and enabled\n");
+
+    ScanlineQueue *queue = core1_video_get_queue();
+
+    /*
+     * Clean restart: stop PIO, drain FIFOs, abort DMA, pre-render vsync
+     * data into both buffers, then restart PIO and DMA together.
+     */
+    pio_sm_set_enabled(s_pio, s_sm, false);
+    pio_sm_clear_fifos(s_pio, s_sm);
+    pio_sm_restart(s_pio, s_sm);
+    pio_sm_exec(s_pio, s_sm, pio_encode_jmp(s_pio_offset));
+
+    dma_channel_abort(s_dma_chan[0]);
+    dma_channel_abort(s_dma_chan[1]);
+
+    /* Render lines 0 and 1 (both vsync: all code 0) */
+    render_vsync_line(scanline_buf[0]);
+    render_vsync_line(scanline_buf[1]);
+
+    /* Re-arm both channels with fresh vsync data */
+    dma_rearm(0);
+    dma_rearm(1);
+
+    /* Clear any stale IRQ_1 flags */
+    dma_hw->ints1      = ch_mask;
+    s_dma_irq1_pending = false;
+
+    /* Start: GP4 HIGH for line 0 sync, then start channel A */
+    pio_sm_set_enabled(s_pio, s_sm, true);
+    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
+    dma_channel_start(s_dma_chan[0]);
+
+    printf("[c1] dma started: chan0_busy=%d chan1_busy=%d ints1=0x%08x\n",
+           (int)dma_channel_is_busy(s_dma_chan[0]),
+           (int)dma_channel_is_busy(s_dma_chan[1]),
+           (unsigned)dma_hw->ints1);
+
+    /*
+     * Pipeline state after start:
+     *   channel A is running buf[0] = line 0
+     *   channel B is pre-armed with buf[1] = line 1
+     *   display_line = 1  (will be output when channel A completes)
+     *   render_line  = 2  (next to render)
+     */
+    int display_line = 1;
+    int render_line  = 2;
+    uint32_t irq_count = 0;
+
+    while (true) {
+        /* ---- Wait for DMA IRQ_1 (fires when a channel completes) ---- */
+        while (!s_dma_irq1_pending) {
+            __wfe();
+        }
+        s_dma_irq1_pending = false;
+
+        irq_count++;
+        if (irq_count <= 5 || (irq_count % 1000) == 0) {
+            printf("[c1] irq#%lu display_line=%d idle_buf=%d\n",
+                   (unsigned long)irq_count, display_line, s_idle_buf);
+        }
+
+        /*
+         * At this point:
+         *   • The ISR has set GP4 HIGH for display_line's sync pulse.
+         *   • s_idle_buf is the buffer whose channel just finished.
+         *   • The other channel is already clocking out display_line.
+         *
+         * GP4 management:
+         *   Vsync lines (0-8): leave GP4 HIGH the entire line (continuous sync).
+         *   All other lines: drop GP4 after ~47 sync samples.
+         *     Target: 47 × 22 = 1034 cycles HIGH from line start (at 315 MHz).
+         *     IRQ latency + wakeup ≈ 20-30 cycles; we wait 1000 cycles so
+         *     total ≈ 1020-1030 cycles  (error < 1 sample = 22 cycles). ✓
+         */
+        bool display_is_vsync = (display_line < (int)VIDEO_VSYNC_LINES);
+        if (!display_is_vsync) {
+            busy_wait_at_least_cycles(1000u);
+            gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
+        }
+
+        /* ---- Render render_line into the now-idle buffer ---- */
+        render_ntsc_line(render_line, scanline_buf[s_idle_buf], queue);
+
+        /*
+         * Re-arm the idle channel.  It will be triggered by chain when the
+         * currently-active channel finishes (~20,000 cycles from now).
+         * We have already rendered the new data, so the chain is safe.
+         */
+        dma_rearm(s_idle_buf);
+
+        /* ---- Advance pipeline counters ---- */
+        display_line++;
+        if (display_line >= (int)VIDEO_LINES_PER_FRAME) display_line = 0;
+
+        render_line++;
+        if (render_line >= (int)VIDEO_LINES_PER_FRAME) render_line = 0;
     }
-    *stats_out = video_perf_stats;
 }
