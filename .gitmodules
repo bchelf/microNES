@@ -1,3 +1,6 @@
 [submodule "tests/test-roms/nes-test-roms"]
 	path = tests/test-roms/nes-test-roms
 	url = https://github.com/christopherpow/nes-test-roms
+[submodule "tests/test-roms/AccuracyCoin"]
+	path = tests/test-roms/AccuracyCoin
+	url = https://github.com/100thCoin/AccuracyCoin
