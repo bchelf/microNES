@@ -12,4 +12,12 @@ bool host_write_png_gray8(
     int stride
 );
 
+bool host_write_png_rgb24(
+    const char *path,
+    const uint8_t *pixels,
+    int width,
+    int height,
+    int stride
+);
+
 #endif

@@ -1,0 +1,2 @@
+# AccuracyCoin - run all tests then navigate pages
+1,START

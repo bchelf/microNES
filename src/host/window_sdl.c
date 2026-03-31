@@ -79,7 +79,7 @@ static void host_convert_palette_to_rgba(uint8_t palette_index, uint8_t *rgba_ou
     rgba_out[3] = 0xffu;
 }
 
-HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color) {
+HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color, bool hidden) {
     HostSdlWindow *window;
 
     host_sdl_set_error(NULL);
@@ -101,7 +101,12 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
 
-    window->window = SDL_CreateWindow(title, NES_FRAME_WIDTH * scale, NES_FRAME_HEIGHT * scale, SDL_WINDOW_RESIZABLE);
+    window->window = SDL_CreateWindow(
+        title,
+        NES_FRAME_WIDTH * scale,
+        NES_FRAME_HEIGHT * scale,
+        SDL_WINDOW_RESIZABLE | (hidden ? SDL_WINDOW_HIDDEN : 0)
+    );
     if (window->window == NULL) {
         host_sdl_set_sdl_error("SDL_CreateWindow failed");
         host_sdl_window_destroy(window);

@@ -181,3 +181,110 @@ cleanup:
     free(filtered);
     return ok;
 }
+
+bool host_write_png_rgb24(
+    const char *path,
+    const uint8_t *pixels,
+    int width,
+    int height,
+    int stride
+) {
+    enum { ZLIB_HEADER_SIZE = 2, ZLIB_TRAILER_SIZE = 4, DEFLATE_MAX_BLOCK = 65535 };
+    static const uint8_t png_signature[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+    FILE *file = NULL;
+    uint8_t ihdr[13];
+    uint8_t *filtered = NULL;
+    uint8_t *zlib_stream = NULL;
+    size_t filtered_size;
+    size_t block_count;
+    size_t zlib_size;
+    size_t filtered_offset = 0;
+    size_t zlib_offset = 0;
+    bool ok = false;
+    int row_bytes = width * 3;
+
+    if (path == NULL || pixels == NULL || width <= 0 || height <= 0 || stride < row_bytes) {
+        return false;
+    }
+
+    filtered_size = (size_t)height * (size_t)(row_bytes + 1);
+    filtered = (uint8_t *)malloc(filtered_size);
+    if (filtered == NULL) {
+        goto cleanup_rgb;
+    }
+
+    for (int y = 0; y < height; ++y) {
+        filtered[y * (size_t)(row_bytes + 1)] = 0;
+        memcpy(
+            &filtered[y * (size_t)(row_bytes + 1) + 1],
+            pixels + (size_t)y * (size_t)stride,
+            (size_t)row_bytes
+        );
+    }
+
+    block_count = (filtered_size + DEFLATE_MAX_BLOCK - 1) / DEFLATE_MAX_BLOCK;
+    zlib_size = ZLIB_HEADER_SIZE + filtered_size + block_count * 5 + ZLIB_TRAILER_SIZE;
+    zlib_stream = (uint8_t *)malloc(zlib_size);
+    if (zlib_stream == NULL) {
+        goto cleanup_rgb;
+    }
+
+    zlib_stream[zlib_offset++] = 0x78;
+    zlib_stream[zlib_offset++] = 0x01;
+
+    while (filtered_offset < filtered_size) {
+        size_t remaining = filtered_size - filtered_offset;
+        uint16_t block_size = (uint16_t)(remaining > DEFLATE_MAX_BLOCK ? DEFLATE_MAX_BLOCK : remaining);
+        uint16_t nlen = (uint16_t)~block_size;
+        bool final_block = (filtered_offset + block_size) == filtered_size;
+
+        zlib_stream[zlib_offset++] = final_block ? 0x01u : 0x00u;
+        zlib_stream[zlib_offset++] = (uint8_t)(block_size & 0xffu);
+        zlib_stream[zlib_offset++] = (uint8_t)(block_size >> 8);
+        zlib_stream[zlib_offset++] = (uint8_t)(nlen & 0xffu);
+        zlib_stream[zlib_offset++] = (uint8_t)(nlen >> 8);
+        memcpy(&zlib_stream[zlib_offset], &filtered[filtered_offset], block_size);
+        zlib_offset += block_size;
+        filtered_offset += block_size;
+    }
+
+    png_write_be32(&zlib_stream[zlib_offset], png_adler32(filtered, filtered_size));
+    zlib_offset += ZLIB_TRAILER_SIZE;
+
+    file = fopen(path, "wb");
+    if (file == NULL) {
+        goto cleanup_rgb;
+    }
+
+    if (fwrite(png_signature, 1, sizeof(png_signature), file) != sizeof(png_signature)) {
+        goto cleanup_rgb;
+    }
+
+    png_write_be32(&ihdr[0], (uint32_t)width);
+    png_write_be32(&ihdr[4], (uint32_t)height);
+    ihdr[8] = 8;
+    ihdr[9] = 2;   /* RGB */
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+
+    if (!png_write_chunk(file, "IHDR", ihdr, sizeof(ihdr))) {
+        goto cleanup_rgb;
+    }
+    if (!png_write_chunk(file, "IDAT", zlib_stream, (uint32_t)zlib_offset)) {
+        goto cleanup_rgb;
+    }
+    if (!png_write_chunk(file, "IEND", NULL, 0)) {
+        goto cleanup_rgb;
+    }
+
+    ok = true;
+
+cleanup_rgb:
+    if (file != NULL) {
+        fclose(file);
+    }
+    free(zlib_stream);
+    free(filtered);
+    return ok;
+}

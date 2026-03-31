@@ -73,6 +73,7 @@ if (MICRONES_PLATFORM STREQUAL "host")
     if (SDL3_FOUND)
         add_executable(micrones
             src/host/audio_sdl.c
+            src/host/png_write.c
             src/host/run_main.c
             src/host/wav_write.c
             src/host/window_sdl.c
