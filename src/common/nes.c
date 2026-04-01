@@ -151,6 +151,10 @@ bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
         uint64_t apu_started_us = nes_profile_now_us(nes);
         uint32_t apu_started_cycles = micrones_profile_now_cycles();
         bool counted_apu_step = false;
+        /* If a DMC DMA was requested by a CPU write during this scanline's
+         * instructions (e.g. write to $4015), service it now before apu_step
+         * so the DMC timer advances normally with the full pending cycle count. */
+        nes_dmc_dma_if_needed(nes);
         apu_step(&nes->apu, nes->pending_apu_cycles);
         if (apu_started_us != 0) {
             nes->step_profile.apu_step_us_total += nes_profile_now_us(nes) - apu_started_us;
@@ -165,6 +169,12 @@ bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
             }
         }
         nes->pending_apu_cycles = 0;
+        /* Perform any pending DMC DMA after the APU has processed all scanline
+         * cycles.  The DMA flag may have been set by the DMC timer emptying the
+         * shift register during apu_step.  At the fastest DMC rate a DMA occurs
+         * roughly every 432 CPU cycles; a scanline is ~113 cycles so at most one
+         * DMA fires per scanline at the fastest rate. */
+        nes_dmc_dma_if_needed(nes);
     }
 
     if (scanline_started_us != 0) {
