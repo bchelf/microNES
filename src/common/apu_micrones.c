@@ -555,16 +555,22 @@ static void apu_dmc_start(ApuDmcChannel *dmc) {
     /* Reset the timer counter to 0 so the first fire occurs on the very
      * next CPU cycle.  On real hardware the DMC timer runs continuously,
      * but since we don't tick it while dmc_active=false the counter is
-     * stale; resetting to 0 gives the closest approximation of the
-     * "timer about to fire" state that sync_dmc_fast leaves behind. */
+     * stale; resetting to 0 gives the closest approximation. */
     dmc->dmc_timer_counter = 0;
-    /* Treat the first byte as pre-loaded into the shift register: consume
-     * one byte from bytes_remaining now so the loop only loads SUBSEQUENT
-     * bytes.  The first timer fire will output the first bit. */
     if (dmc->dmc_bytes_remaining > 0) {
-        --dmc->dmc_bytes_remaining;
-        dmc->dmc_bits_remaining = 8;
         dmc->dmc_active = true;
+        /* Treat the first byte as pre-loaded from DMA into the shift register.
+         * This preserves timing compatibility (8-dmc_rates) and simulates
+         * the hardware behavior where a DMA fetch occurs before playback. */
+        --dmc->dmc_bytes_remaining;
+        dmc->dmc_shift_register = 0;  /* actual byte fetched by DMA */
+        dmc->dmc_bits_remaining = 8;
+        dmc->dmc_sample_buffer_empty = true;
+        dmc->dmc_dma_needed = false;
+        /* If more bytes remain, request an immediate DMA to fill the buffer */
+        if (dmc->dmc_bytes_remaining > 0) {
+            dmc->dmc_dma_needed = true;
+        }
     } else {
         dmc->dmc_bits_remaining = 0;
         dmc->dmc_active = false;
@@ -738,47 +744,69 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
 
     /* --- DMC timer: clocked at CPU rate ---
      * The DMC timer period is in CPU cycles; advance using cpu_cycles directly
-     * (not apu_cycles), so this block is outside the apu_cycles > 0 guard. */
+     * (not apu_cycles), so this block is outside the apu_cycles > 0 guard.
+     *
+     * The DMC uses a 1-byte sample buffer filled by DMA.  The shift register
+     * is reloaded from the sample buffer when it empties.  If the sample buffer
+     * is already empty when the shift register empties, the DMC stalls and
+     * sets dmc_dma_needed.  The NES main loop performs the DMA (reads the byte
+     * from dmc_current_addr) and clears dmc_dma_needed. */
     {
         ApuDmcChannel *d = &apu->dmc;
-        if (d->dmc_active && d->dmc_timer_period > 0) {
+        if (d->dmc_active && d->dmc_timer_period > 0 && !d->dmc_dma_needed) {
             uint32_t dmc_fires = apu_timer_advance(&d->dmc_timer_counter,
                                                    (uint16_t)(d->dmc_timer_period - 1u),
                                                    cpu_cycles);
-            /* Each fire = one output bit clocked from the shift register.
-             * dmc_bits_remaining starts at 8 (first byte pre-loaded) and
-             * counts down to 0; on reaching 0 we load the next byte.
-             * We don't do real memory DMA here (no bus access in apu_step),
-             * so we just advance bytes_remaining/addr to track sample end. */
+            /* Each fire = one output bit clocked from the shift register. */
             for (uint32_t f = 0; f < dmc_fires; ++f) {
-                /* Clock one bit: decrement the shift-register bit count */
+                /* Shift out one bit and update the output level */
                 if (d->dmc_bits_remaining > 0) {
-                    --d->dmc_bits_remaining;
-                }
-                /* If the shift register is now empty, load the next byte */
-                if (d->dmc_bits_remaining == 0) {
-                    if (d->dmc_bytes_remaining > 0) {
-                        /* Load next byte from sample buffer (DMA fetch simulated) */
-                        --d->dmc_bytes_remaining;
-                        d->dmc_bits_remaining = 8;
-                        /* current_addr advances; wrap at $FFFF back to $8000 */
-                        if (d->dmc_current_addr == 0xFFFFu) {
-                            d->dmc_current_addr = 0x8000u;
-                        } else {
-                            ++d->dmc_current_addr;
+                    /* Delta: bit 0 of shift register determines direction */
+                    if (d->dmc_shift_register & 0x01u) {
+                        if (d->dmc_output_level <= 125u) {
+                            d->dmc_output_level += 2u;
                         }
                     } else {
-                        /* No more bytes: sample ended */
-                        if (d->dmc_loop) {
-                            apu_dmc_start(d);
+                        if (d->dmc_output_level >= 2u) {
+                            d->dmc_output_level -= 2u;
+                        }
+                    }
+                    d->dmc_shift_register >>= 1;
+                    --d->dmc_bits_remaining;
+                }
+                /* If the shift register is now empty, reload from sample buffer */
+                if (d->dmc_bits_remaining == 0) {
+                    if (!d->dmc_sample_buffer_empty) {
+                        /* Load from sample buffer */
+                        d->dmc_shift_register = d->dmc_sample_buffer;
+                        d->dmc_sample_buffer_empty = true;
+                        d->dmc_bits_remaining = 8;
+                        /* Request next DMA if more bytes remain */
+                        if (d->dmc_bytes_remaining > 0) {
+                            d->dmc_dma_needed = true;
+                        }
+                    } else {
+                        /* Sample buffer empty: check if we have more bytes */
+                        if (d->dmc_bytes_remaining > 0) {
+                            /* Need DMA to fill buffer; stall DMC until filled */
+                            d->dmc_dma_needed = true;
                         } else {
-                            d->dmc_active = false;
-                            if (d->dmc_irq_enabled) {
-                                d->dmc_irq_flag = true;
+                            /* No more bytes: sample ended */
+                            if (d->dmc_loop) {
+                                apu_dmc_start(d);
+                            } else {
+                                d->dmc_active = false;
+                                if (d->dmc_irq_enabled) {
+                                    d->dmc_irq_flag = true;
+                                }
                             }
                         }
                         break;
                     }
+                }
+                /* Stop processing fires if a DMA was requested this fire */
+                if (d->dmc_dma_needed) {
+                    break;
                 }
             }
         }

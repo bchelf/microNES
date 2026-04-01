@@ -181,6 +181,7 @@ typedef struct {
     uint8_t  dmc_shift_register;
     uint16_t dmc_timer_counter; /* timer for DMC rate */
     uint16_t dmc_timer_period;  /* timer period for current rate index */
+    bool     dmc_dma_needed;    /* DMA fetch needed to fill sample buffer */
 } ApuDmcChannel;
 
 typedef struct {

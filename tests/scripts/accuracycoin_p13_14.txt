@@ -26,5 +26,5 @@
 # Run page 14 tests
 1560,A
 
-# Screenshot after page 14 tests complete (~15s of tests)
-# (page 14 has more tests, needs more time)
+# Dummy event to push exit frame out so page 14 tests can complete (~20s)
+3200,SELECT

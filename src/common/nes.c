@@ -122,6 +122,8 @@ bool MICRONES_HOT_FUNC(nes_step_instruction)(Nes *nes) {
         apu_step(&nes->apu, nes->pending_apu_cycles);
         nes->pending_apu_cycles = 0;
     }
+    /* Perform DMC DMA if APU requested one (fills sample buffer from memory) */
+    nes_dmc_dma_if_needed(nes);
     return ok;
 }
 

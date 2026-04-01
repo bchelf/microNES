@@ -224,4 +224,29 @@ static inline uint64_t nes_profile_now_us(const Nes *nes) {
     return 0;
 }
 
+/* Perform a pending DMC DMA if requested by the APU.
+ * Reads one byte from dmc_current_addr into the sample buffer.
+ * Note: CPU stall cycles are not added here; accurate DMA stall timing
+ * requires per-cycle tracking which is not yet implemented. */
+static inline void nes_dmc_dma_if_needed(Nes *nes) {
+    ApuDmcChannel *d = &nes->apu.dmc;
+    if (!d->dmc_dma_needed) {
+        return;
+    }
+    d->dmc_dma_needed = false;
+    if (!d->dmc_active || d->dmc_bytes_remaining == 0) {
+        return;
+    }
+    /* Read byte from current DMC address into sample buffer */
+    d->dmc_sample_buffer = nes_cpu_bus_read_fast(nes, d->dmc_current_addr);
+    d->dmc_sample_buffer_empty = false;
+    /* Advance address (wraps from $FFFF to $8000 per NES hardware) */
+    if (d->dmc_current_addr == 0xFFFFu) {
+        d->dmc_current_addr = 0x8000u;
+    } else {
+        ++d->dmc_current_addr;
+    }
+    --d->dmc_bytes_remaining;
+}
+
 #endif
