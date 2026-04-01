@@ -443,10 +443,18 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
         cpu_service_interrupt(cpu, nes, 0xfffau, false);
         return true;
     }
-    if (nes->cartridge.irq_pending && (cpu->p & CPU6502_FLAG_I) == 0) {
-        nes->cartridge.irq_pending = false;
-        cpu_service_interrupt(cpu, nes, 0xfffeu, false);
-        return true;
+    if ((cpu->p & CPU6502_FLAG_I) == 0) {
+        if (nes->cartridge.irq_pending) {
+            nes->cartridge.irq_pending = false;
+            cpu_service_interrupt(cpu, nes, 0xfffeu, false);
+            return true;
+        }
+        if (apu_has_irq(&nes->apu)) {
+            /* APU IRQ (frame counter or DMC): flag is level-triggered,
+             * the interrupt handler must clear it via $4015/$4017 reads/writes. */
+            cpu_service_interrupt(cpu, nes, 0xfffeu, false);
+            return true;
+        }
     }
 
 #if MICRONES_ENABLE_STEP_PROFILING

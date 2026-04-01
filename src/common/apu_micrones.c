@@ -3,12 +3,50 @@
 #include <math.h>
 #include <string.h>
 
+/* Frame counter step thresholds in CPU cycles (not APU cycles).
+ * Per NESdev, these are the CPU cycle counts from frame counter reset at
+ * which quarter-frame and half-frame events fire for NTSC.
+ *
+ * The frame counter cycle count is now tracked in CPU cycles for precision.
+ *
+ * NESdev values (CPU cycles from reset):
+ *   Step 1: 7457  — quarter frame
+ *   Step 2: 14913 — quarter + half frame (length counter clock)
+ *   Step 3: 22371 — quarter frame
+ *   Step 4: 29829 — quarter + half frame + IRQ (4-step mode wraps here)
+ *   Step 5: 37281 — quarter + half frame (5-step mode wraps here)
+ *
+ * The frame counter fires at the END of the CPU cycle at these counts,
+ * i.e., when frame_counter_cycle transitions FROM < N TO >= N.
+ */
+/* APU frame counter timing, derived from 5-len_timing test source:
+ *   With even-cycle $4017 write (delay=4 CPU cycles):
+ *     Step 1 (quarter):      fires at cycle 7456 from reset  (7460 from write)
+ *     Step 2 (quarter+half): fires at cycle 14912 from reset (14916 from write)
+ *     Step 3 (quarter):      fires at cycle 22368 from reset (22372 from write)
+ *     Step 4 (quarter+half): fires at cycle 29828 from reset (29832 from write)
+ *     Frame period:          29830 cycles (wrap after step 4 + 2 dead cycles)
+ *
+ *     IRQ fires at cycles 29827, 29828, 29829 (three cycles, latch).
+ *
+ *   5-step mode:
+ *     Step 1: 7456, Step 2: 14912, Step 3: 22368
+ *     Step 5 (quarter+half): fires at cycle 37280 from reset (37284 from write)
+ *     Frame period: 37282 cycles
+ *
+ * $4017 write delay: 4 CPU cycles for even-cycle write, 3 for odd.
+ * Handled dynamically in apu_cpu_write.
+ */
 enum {
-    APU_FRAME_STEP_1 = 3729,
-    APU_FRAME_STEP_2 = 7457,
-    APU_FRAME_STEP_3 = 11186,
-    APU_FRAME_STEP_4 = 14915,
-    APU_FRAME_STEP_5 = 18641,
+    APU_FRAME_STEP_1   = 7456,
+    APU_FRAME_STEP_2   = 14912,
+    APU_FRAME_STEP_3   = 22368,
+    APU_FRAME_IRQ_PRE  = 29827,  /* first IRQ cycle (one before step 4) */
+    APU_FRAME_STEP_4   = 29828,  /* quarter+half+IRQ (second IRQ cycle) */
+    APU_FRAME_IRQ_3    = 29829,  /* third and final IRQ cycle */
+    APU_FRAME_PERIOD_4 = 29830,  /* total 4-step frame period; wrap point */
+    APU_FRAME_STEP_5   = 37280,  /* quarter+half, 5-step mode */
+    APU_FRAME_PERIOD_5 = 37282,  /* total 5-step frame period */
 };
 
 static const uint8_t k_apu_length_table[32] = {
@@ -35,6 +73,12 @@ static const uint8_t k_apu_triangle_sequence[32] = {
 static const uint16_t k_apu_noise_period_table[16] = {
     4, 8, 16, 32, 64, 96, 128, 160,
     202, 254, 380, 508, 762, 1016, 2034, 4068,
+};
+
+/* DMC rate table (CPU cycles per DMC timer tick) — NTSC */
+static const uint16_t k_apu_dmc_rate_table[16] = {
+    428, 380, 340, 320, 286, 254, 226, 214,
+    190, 160, 142, 128, 106,  84,  72,  54,
 };
 
 enum {
@@ -496,10 +540,43 @@ static uint32_t MICRONES_HOT_FUNC(apu_timer_advance)(uint16_t *counter,
     return fires;
 }
 
+static void apu_dmc_compute_start_addr(ApuDmcChannel *dmc) {
+    dmc->dmc_current_addr = (uint16_t)(0xC000u + ((uint16_t)dmc->dmc_sample_addr_reg << 6));
+}
+
+static void apu_dmc_compute_bytes_remaining(ApuDmcChannel *dmc) {
+    dmc->dmc_bytes_remaining = (uint16_t)(((uint16_t)dmc->dmc_sample_length_reg << 4) + 1u);
+}
+
+static void apu_dmc_start(ApuDmcChannel *dmc) {
+    apu_dmc_compute_start_addr(dmc);
+    apu_dmc_compute_bytes_remaining(dmc);
+    dmc->dmc_timer_period = k_apu_dmc_rate_table[dmc->dmc_rate_index];
+    /* Reset the timer counter to 0 so the first fire occurs on the very
+     * next CPU cycle.  On real hardware the DMC timer runs continuously,
+     * but since we don't tick it while dmc_active=false the counter is
+     * stale; resetting to 0 gives the closest approximation of the
+     * "timer about to fire" state that sync_dmc_fast leaves behind. */
+    dmc->dmc_timer_counter = 0;
+    /* Treat the first byte as pre-loaded into the shift register: consume
+     * one byte from bytes_remaining now so the loop only loads SUBSEQUENT
+     * bytes.  The first timer fire will output the first bit. */
+    if (dmc->dmc_bytes_remaining > 0) {
+        --dmc->dmc_bytes_remaining;
+        dmc->dmc_bits_remaining = 8;
+        dmc->dmc_active = true;
+    } else {
+        dmc->dmc_bits_remaining = 0;
+        dmc->dmc_active = false;
+    }
+}
+
 void apu_init(Apu *apu) {
     memset(apu, 0, sizeof(*apu));
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
+    apu->dmc.dmc_sample_buffer_empty = true;
+    apu->dmc.dmc_bits_remaining = 0;
     apu_reset_debug_defaults(apu);
 }
 
@@ -511,6 +588,8 @@ void apu_reset(Apu *apu) {
     apu->dc_level_tracker = dc;
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
+    apu->dmc.dmc_sample_buffer_empty = true;
+    apu->dmc.dmc_bits_remaining = 0;
     apu_reset_debug_defaults(apu);
 }
 
@@ -518,27 +597,90 @@ void apu_reset(Apu *apu) {
 void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
     if (cpu_cycles == 0) return;
 
-    /* Compute APU-rate cycles (half CPU rate, fired when cpu_cycles is even).
-     * apu_cycles = number of even values in (old, old+cpu_cycles]. */
+    /* Update cumulative CPU cycle counter first. */
     uint32_t old_cpu  = (uint32_t)apu->cpu_cycles;
     apu->cpu_cycles  += cpu_cycles;
+
+    /* --- $4017 write delay ---
+     * The frame counter reset takes effect after the delay from the write.
+     * fc_reset_countdown is the absolute cpu_cycles value at which the reset
+     * fires.  We check AFTER updating cpu_cycles so that the write instruction's
+     * own cycles are consumed before the counter starts, ensuring the counter
+     * begins at 0 relative to the first instruction AFTER the write. */
+    bool fc_reset_fired = false;
+    if (apu->fc_reset_pending && apu->cpu_cycles >= apu->fc_reset_countdown) {
+        uint8_t v = apu->fc_reset_value;
+        apu->fc_reset_pending = false;
+        /* Apply mode + inhibit changes and reset the cycle counter */
+        apu->frame_counter_mode_5 = (v & 0x80u) != 0;
+        apu->frame_irq_inhibit    = (v & 0x40u) != 0;
+        if (apu->frame_irq_inhibit) {
+            apu->frame_irq_flag = false;
+        }
+        apu->frame_counter_cycle = 0;
+        fc_reset_fired = true;
+        /* The immediate half-frame clock for mode 5 was already fired at
+         * write time in apu_cpu_write, so we don't clock again here. */
+    }
+
+    /* Compute APU-rate cycles (half CPU rate, fired when cpu_cycles is even).
+     * apu_cycles = number of even values in (old, old+cpu_cycles]. */
     uint32_t apu_cycles = (old_cpu + cpu_cycles) / 2u - old_cpu / 2u;
 
     if (apu_cycles > 0) {
-        /* --- Frame counter: clocked at APU rate --- */
-        /* Processed before the triangle timer so that any length/linear counter
-         * updates take effect before the sequencer is advanced this batch. */
-        {
+        /* --- Frame counter: now tracked in CPU cycles for precision ---
+         * NESdev specifies the step thresholds in CPU cycles from reset.
+         * Processed before the triangle timer so that any length/linear counter
+         * updates take effect before the sequencer is advanced this batch.
+         * Skip if a reset just fired this batch (the write instruction's own cycles
+         * should not count toward the new frame period). */
+        if (!apu->fc_reset_pending && !fc_reset_fired) {
             uint32_t old_fc = (uint32_t)apu->frame_counter_cycle;
-            uint32_t new_fc = old_fc + apu_cycles;
-            /* Each batch is 1-4 APU cycles; thresholds are 3728+ apart, so at
+            uint32_t new_fc = old_fc + cpu_cycles;
+            /* Each batch is 1-8 CPU cycles; thresholds are 7000+ apart, so at
              * most one threshold crossing per call. Check from high to low so
              * the reset case is handled first. */
             if (!apu->frame_counter_mode_5) {
-                if (old_fc < APU_FRAME_STEP_4 && new_fc >= APU_FRAME_STEP_4) {
+                /* 4-step mode.
+                 * The step events fire at their thresholds; the frame counter
+                 * wraps at APU_FRAME_PERIOD_4 (29830), which is 2 cycles after
+                 * step 4 (29828).  Checks are ordered high-to-low to handle at
+                 * most one crossing per batch (batches are ~1-8 cycles). */
+                /* In 4-step mode, IRQ fires at three consecutive cycles:
+                 *   APU_FRAME_IRQ_PRE (29827), APU_FRAME_STEP_4 (29828),
+                 *   and APU_FRAME_PERIOD_4-1 (29829, i.e. the wrap cycle).
+                 * We approximate this by setting the flag at the wrap as well. */
+                if (new_fc >= APU_FRAME_PERIOD_4) {
+                    /* Wrap: counter has passed end of frame.
+                     * Step 4 events fire if not already done this batch. */
+                    if (old_fc < APU_FRAME_STEP_4) {
+                        apu_quarter_frame(apu); apu_half_frame(apu);
+                        ++apu->frame_counter_steps;
+                        if (!apu->frame_irq_inhibit) {
+                            apu->frame_irq_flag = true;
+                        }
+                    } else if (old_fc < APU_FRAME_IRQ_3) {
+                        /* Third IRQ fires if not already done */
+                        if (!apu->frame_irq_inhibit) {
+                            apu->frame_irq_flag = true;
+                        }
+                    }
+                    new_fc -= APU_FRAME_PERIOD_4;
+                } else if (old_fc < APU_FRAME_IRQ_3 && new_fc >= APU_FRAME_IRQ_3) {
+                    /* Third consecutive IRQ cycle */
+                    if (!apu->frame_irq_inhibit) {
+                        apu->frame_irq_flag = true;
+                    }
+                } else if (old_fc < APU_FRAME_STEP_4 && new_fc >= APU_FRAME_STEP_4) {
                     apu_quarter_frame(apu); apu_half_frame(apu);
+                    if (!apu->frame_irq_inhibit) {
+                        apu->frame_irq_flag = true;
+                    }
                     ++apu->frame_counter_steps;
-                    new_fc = 0;
+                } else if (old_fc < APU_FRAME_IRQ_PRE && new_fc >= APU_FRAME_IRQ_PRE) {
+                    if (!apu->frame_irq_inhibit) {
+                        apu->frame_irq_flag = true;
+                    }
                 } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
                     apu_quarter_frame(apu);
                 } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
@@ -547,10 +689,16 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
                     apu_quarter_frame(apu);
                 }
             } else {
-                if (old_fc < APU_FRAME_STEP_5 && new_fc >= APU_FRAME_STEP_5) {
+                /* 5-step mode: step 5 fires and the frame wraps at APU_FRAME_PERIOD_5. */
+                if (new_fc >= APU_FRAME_PERIOD_5) {
+                    if (old_fc < APU_FRAME_STEP_5) {
+                        apu_quarter_frame(apu); apu_half_frame(apu);
+                        ++apu->frame_counter_steps;
+                    }
+                    new_fc -= APU_FRAME_PERIOD_5;
+                } else if (old_fc < APU_FRAME_STEP_5 && new_fc >= APU_FRAME_STEP_5) {
                     apu_quarter_frame(apu); apu_half_frame(apu);
                     ++apu->frame_counter_steps;
-                    new_fc = 0;
                 } else if (old_fc < APU_FRAME_STEP_3 && new_fc >= APU_FRAME_STEP_3) {
                     apu_quarter_frame(apu);
                 } else if (old_fc < APU_FRAME_STEP_2 && new_fc >= APU_FRAME_STEP_2) {
@@ -583,6 +731,55 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
                 uint16_t feedback = (uint16_t)((n->shift_register & 1u) ^
                                                ((n->shift_register >> tap_bit) & 1u));
                 n->shift_register = (n->shift_register >> 1) | (uint16_t)(feedback << 14u);
+            }
+        }
+
+    }
+
+    /* --- DMC timer: clocked at CPU rate ---
+     * The DMC timer period is in CPU cycles; advance using cpu_cycles directly
+     * (not apu_cycles), so this block is outside the apu_cycles > 0 guard. */
+    {
+        ApuDmcChannel *d = &apu->dmc;
+        if (d->dmc_active && d->dmc_timer_period > 0) {
+            uint32_t dmc_fires = apu_timer_advance(&d->dmc_timer_counter,
+                                                   (uint16_t)(d->dmc_timer_period - 1u),
+                                                   cpu_cycles);
+            /* Each fire = one output bit clocked from the shift register.
+             * dmc_bits_remaining starts at 8 (first byte pre-loaded) and
+             * counts down to 0; on reaching 0 we load the next byte.
+             * We don't do real memory DMA here (no bus access in apu_step),
+             * so we just advance bytes_remaining/addr to track sample end. */
+            for (uint32_t f = 0; f < dmc_fires; ++f) {
+                /* Clock one bit: decrement the shift-register bit count */
+                if (d->dmc_bits_remaining > 0) {
+                    --d->dmc_bits_remaining;
+                }
+                /* If the shift register is now empty, load the next byte */
+                if (d->dmc_bits_remaining == 0) {
+                    if (d->dmc_bytes_remaining > 0) {
+                        /* Load next byte from sample buffer (DMA fetch simulated) */
+                        --d->dmc_bytes_remaining;
+                        d->dmc_bits_remaining = 8;
+                        /* current_addr advances; wrap at $FFFF back to $8000 */
+                        if (d->dmc_current_addr == 0xFFFFu) {
+                            d->dmc_current_addr = 0x8000u;
+                        } else {
+                            ++d->dmc_current_addr;
+                        }
+                    } else {
+                        /* No more bytes: sample ended */
+                        if (d->dmc_loop) {
+                            apu_dmc_start(d);
+                        } else {
+                            d->dmc_active = false;
+                            if (d->dmc_irq_enabled) {
+                                d->dmc_irq_flag = true;
+                            }
+                        }
+                        break;
+                    }
+                }
             }
         }
     }
@@ -632,8 +829,23 @@ uint8_t apu_cpu_read(Apu *apu, uint16_t addr) {
     if (apu->noise.length_counter > 0) {
         status |= 0x08u;
     }
+    if (apu->dmc.dmc_active) {
+        status |= 0x10u;  /* bit 4: DMC active */
+    }
+    if (apu->frame_irq_flag) {
+        status |= 0x40u;  /* bit 6: frame counter IRQ */
+    }
+    if (apu->dmc.dmc_irq_flag) {
+        status |= 0x80u;  /* bit 7: DMC IRQ */
+    }
+    /* Reading $4015 clears the frame counter IRQ flag */
+    apu->frame_irq_flag = false;
     apu->status = status;
     return status;
+}
+
+bool apu_has_irq(const Apu *apu) {
+    return apu->frame_irq_flag || apu->dmc.dmc_irq_flag;
 }
 
 void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
@@ -724,6 +936,25 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         apu->noise.timer_counter = apu->noise.timer_period;
         apu->noise.envelope_start = true;
         break;
+    case 0x4010u:
+        apu->dmc.dmc_irq_enabled = (value & 0x80u) != 0;
+        apu->dmc.dmc_loop        = (value & 0x40u) != 0;
+        apu->dmc.dmc_rate_index  = value & 0x0fu;
+        apu->dmc.dmc_timer_period = k_apu_dmc_rate_table[apu->dmc.dmc_rate_index];
+        if (!apu->dmc.dmc_irq_enabled) {
+            apu->dmc.dmc_irq_flag = false;
+        }
+        break;
+    case 0x4011u:
+        apu->dmc.dmc_direct_load  = value & 0x7fu;
+        apu->dmc.dmc_output_level = value & 0x7fu;
+        break;
+    case 0x4012u:
+        apu->dmc.dmc_sample_addr_reg = value;
+        break;
+    case 0x4013u:
+        apu->dmc.dmc_sample_length_reg = value;
+        break;
     case 0x4015u:
         apu->pulse[0].enabled = (value & 0x01u) != 0;
         apu->pulse[1].enabled = (value & 0x02u) != 0;
@@ -742,13 +973,43 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         if (!apu->noise.enabled) {
             apu->noise.length_counter = 0;
         }
+        /* Writing $4015 clears the DMC IRQ flag */
+        apu->dmc.dmc_irq_flag = false;
+        /* DMC channel: bit 4 starts/stops */
+        if (value & 0x10u) {
+            /* Start or restart DMC: if already active, don't reset */
+            if (!apu->dmc.dmc_active) {
+                apu_dmc_start(&apu->dmc);
+            }
+        } else {
+            apu->dmc.dmc_active = false;
+        }
         apu->status = value & 0x0fu;
         break;
     case 0x4017u:
-        apu->frame_counter_mode_5 = (value & 0x80u) != 0;
-        apu->frame_irq_inhibit = (value & 0x40u) != 0;
-        apu->frame_counter_cycle = 0;
-        if (apu->frame_counter_mode_5) {
+        /* The frame counter RESET (cycle counter to 0) is delayed by 3 or 4
+         * CPU cycles after the write (3 if odd cycle, 4 if even cycle).
+         * We store the absolute cpu_cycles target; apu_step() fires when reached.
+         *
+         * For mode 5 (bit 7 set), the immediate half-frame/quarter-frame
+         * clock happens NOW (at write time), before the reset delay. */
+        /* Delay is 3 CPU cycles if written on an odd CPU cycle, 4 if even.
+         * cpu_cycles is updated by apu_step BEFORE the reset check, so at
+         * write time it reflects cycles completed up to but not including
+         * the current instruction batch.  Parity of cpu_cycles determines
+         * even/odd write cycle. */
+        {
+            uint64_t delay = ((apu->cpu_cycles & 1u) == 0u) ? 3u : 2u;
+            apu->fc_reset_countdown = apu->cpu_cycles + delay;
+        }
+        apu->fc_reset_pending   = true;
+        apu->fc_reset_value     = value;
+        /* If inhibit bit is set, clear the IRQ flag immediately */
+        if (value & 0x40u) {
+            apu->frame_irq_flag = false;
+        }
+        /* For mode 5 (5-step), immediately clock envelope+length counters */
+        if (value & 0x80u) {
             apu_quarter_frame(apu);
             apu_half_frame(apu);
         }

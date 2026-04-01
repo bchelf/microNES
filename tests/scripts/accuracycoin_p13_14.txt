@@ -1,0 +1,27 @@
+# AccuracyCoin navigation to pages 13 and 14
+# From title, cursor is at page header; press RIGHT to advance pages
+# Need 12 RIGHTs to reach page 13, then A to run tests
+
+# Navigate to page 13 (12 x RIGHT)
+120,RIGHT
+180,RIGHT
+240,RIGHT
+300,RIGHT
+360,RIGHT
+420,RIGHT
+480,RIGHT
+540,RIGHT
+600,RIGHT
+660,RIGHT
+720,RIGHT
+780,RIGHT
+
+# Run page 13 tests
+840,A
+
+# Screenshot after page 13 tests complete (~10s of tests)
+# Go to page 14
+1500,RIGHT
+
+# Run page 14 tests
+1560,A

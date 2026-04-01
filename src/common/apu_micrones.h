@@ -162,6 +162,28 @@ typedef struct {
 } ApuNoiseChannel;
 
 typedef struct {
+    /* DMC channel registers */
+    bool     dmc_irq_enabled;   /* $4010 bit 7 */
+    bool     dmc_loop;          /* $4010 bit 6 */
+    uint8_t  dmc_rate_index;    /* $4010 bits 3:0 */
+    uint8_t  dmc_direct_load;   /* $4011 bits 6:0 — direct load value */
+    uint8_t  dmc_sample_addr_reg;  /* $4012 */
+    uint8_t  dmc_sample_length_reg; /* $4013 */
+    /* DMC runtime state */
+    bool     dmc_active;        /* sample bytes remain */
+    bool     dmc_irq_flag;      /* interrupt flag */
+    uint16_t dmc_current_addr;  /* current read address */
+    uint16_t dmc_bytes_remaining; /* bytes left in current sample */
+    uint8_t  dmc_output_level;  /* 7-bit DAC output */
+    uint8_t  dmc_sample_buffer; /* 1-byte sample buffer */
+    bool     dmc_sample_buffer_empty;
+    uint8_t  dmc_bits_remaining;/* bits left in shift register */
+    uint8_t  dmc_shift_register;
+    uint16_t dmc_timer_counter; /* timer for DMC rate */
+    uint16_t dmc_timer_period;  /* timer period for current rate index */
+} ApuDmcChannel;
+
+typedef struct {
     uint8_t registers[0x18];
     uint64_t register_write_count[APU_DEBUG_REGISTER_COUNT];
     uint8_t mix_enable_mask;
@@ -180,13 +202,22 @@ typedef struct {
     uint8_t status;
     bool frame_counter_mode_5;
     bool frame_irq_inhibit;
+    bool frame_irq_flag;        /* APU frame counter interrupt flag */
+    /* $4017 write delay: reset pending until absolute cpu_cycles reaches threshold */
+    bool     fc_reset_pending;
+    uint64_t fc_reset_countdown; /* absolute cpu_cycles at which reset fires */
+    uint8_t  fc_reset_value;     /* the value written to $4017 */
     int16_t pcm[APU_PCM_CAPACITY];
     double dc_level_tracker;
     ApuDebugSampleStats channel_stats[APU_DEBUG_CHANNEL_COUNT];
     ApuPulseChannel pulse[2];
     ApuTriangleChannel triangle;
     ApuNoiseChannel noise;
+    ApuDmcChannel dmc;
 } Apu;
+
+/* Returns true if the APU has a pending IRQ (frame counter or DMC). */
+bool apu_has_irq(const Apu *apu);
 
 void apu_init(Apu *apu);
 void apu_reset(Apu *apu);

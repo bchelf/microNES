@@ -70,6 +70,15 @@ if (MICRONES_PLATFORM STREQUAL "host")
         micrones_core
     )
 
+    add_executable(micrones_test
+        src/host/png_write.c
+        src/host/test_main.c
+    )
+
+    target_link_libraries(micrones_test PRIVATE
+        micrones_core
+    )
+
     if (SDL3_FOUND)
         add_executable(micrones
             src/host/audio_sdl.c
