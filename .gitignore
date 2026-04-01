@@ -9,6 +9,8 @@ roms/
 .cache/
 src/esp32s3/sdkconfig
 .DS_Store
+tests/output/
+tests/screenshots/
 best_runs*
 checkpoints*
 eval*
