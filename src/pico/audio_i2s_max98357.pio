@@ -1,0 +1,19 @@
+.program audio_i2s_max98357
+.side_set 1
+
+; Standard I2S framing for a MAX98357-style sink.
+; Side-set drives BCLK. Two OUT pins drive DIN (bit 0) and LRCLK/WS (bit 1).
+; Each stereo frame is 64 bit clocks:
+;   left slot  = 1 dummy bit + 16 sample bits + 15 zero pad bits
+;   right slot = 1 dummy bit + 16 sample bits + 15 zero pad bits
+; The same mono NES sample is duplicated into both slots.
+
+.wrap_target
+    set y, 1 side 0
+frame_half:
+    set x, 31 side 0
+bitloop:
+    out pins, 2 side 0
+    jmp x-- bitloop side 1
+    jmp y-- frame_half side 0
+.wrap

@@ -6,21 +6,28 @@
  *
  * Set MICRONES_SYS_CLK_MHZ to 315, 250, or 157.
  *
- *   315 MHz  — full speed, 60 fps.  Requires VREG 1.20 V.
- *              USB enumeration may be marginal on some boards; if it fails,
- *              plug the USB cable in after the board is already powered via VSYS,
- *              or switch to 157.
+ *   315 MHz  — full speed analog target.  Requires VREG 1.20 V.
+ *              NTSC: 315 MHz / 22 = 14.318182 MHz  ✓
+ *              SPI:  best achievable ≤ 62.5 MHz = 52.5 MHz (CPSDVSR=6) → 53.4 FPS ceiling.
+ *              USB enumeration may be marginal on some boards.
  *
- *   250 MHz  — stability experiment only.  VREG 1.20 V.
- *              250 does not divide evenly into 14.318182 MHz, so NTSC color
- *              will be wrong/absent.  Use this only to test CPU stability.
+ *   250 MHz  — optimal for TFT/SPI digital target.  VREG 1.20 V.
+ *              SPI:  250 / 4 = exactly 62.5 MHz (CPSDVSR=4) → 63.6 FPS ceiling.
+ *              NTSC: 250 does not divide evenly into 14.318182 MHz; do NOT use
+ *              for the analog target.
  *
  *   157      — 157.5 MHz (315/2).  Stable USB enumeration, VREG 1.10 V.
  *              Achieves ~40 fps with current optimisations; useful for debugging.
  *
  * All timing-dependent values are derived below — no other files need editing.
+ *
+ * MICRONES_SYS_CLK_MHZ may be overridden per build target via a CMake
+ * compile definition (e.g. -DMICRONES_SYS_CLK_MHZ=250 on the TFT target).
+ * The #ifndef guard below makes the hardcoded 315 the fallback default.
  */
+#ifndef MICRONES_SYS_CLK_MHZ
 #define MICRONES_SYS_CLK_MHZ 315
+#endif
 
 /* -------------------------------------------------------------------------
  * Derived values — do not edit below this line.

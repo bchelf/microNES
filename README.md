@@ -159,15 +159,45 @@ This builds:
 ```sh
 cd /Users/bchelf/microNES
 source ~/.zshrc
-cmake -S . -B build-pico -DMICRONES_PLATFORM=pico -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
-cmake --build build-pico -j
+cmake -S . -B build-pico \
+  -DMICRONES_PLATFORM=pico \
+  -DMICRONES_PICO_VIDEO_MODE=emulator \
+  -DMICRONES_PICO_ROM_PATH=/Users/bchelf/microNES/roms/smb1.nes \
+  -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
+cmake --build build-pico --target micrones_pico_analog -j
+cmake --build build-pico --target micrones_pico_tft -j
+cmake --build build-pico --target micrones_pico_tft_max98357 -j
 ```
 
 This builds:
 
-- `build-pico/micrones.uf2`
-- `build-pico/micrones.elf`
-- `build-pico/micrones.bin`
+- `build-pico/micrones_pico_analog.uf2`
+- `build-pico/micrones_pico_analog.elf`
+- `build-pico/micrones_pico_tft.uf2`
+- `build-pico/micrones_pico_tft.elf`
+- `build-pico/micrones_pico_tft_max98357.uf2`
+- `build-pico/micrones_pico_tft_max98357.elf`
+
+The Pico firmware is split into explicit targets:
+
+- `micrones_pico_analog`
+  - original 5-pin analog composite DAC path on `GP0-GP4`
+  - PWM audio on `GP9`
+  - builds and links the NTSC PIO/DMA backend only
+- `micrones_pico_tft`
+  - SPI ILI9341 TFT path on `GP18/19/17/20/21/22`
+  - PWM audio on `GP9`
+  - builds and links the SPI TFT backend only
+- `micrones_pico_tft_max98357`
+  - SPI ILI9341 TFT path on `GP18/19/17/20/21/22`
+  - MAX98357 digital audio backend
+  - I2S-style audio wiring:
+    - `GP10` -> `BCLK`
+    - `GP11` -> `DIN`
+    - `GP12` -> `LRC` / `LRCLK` / `WS`
+    - `3V3(OUT)` -> `VIN`
+    - `GND` -> `GND`
+    - amplifier `OUT+` / `OUT-` -> speaker
 
 ## Useful Host Commands
 
