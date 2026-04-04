@@ -6,9 +6,9 @@ This file summarizes the current state of `micrones`, what has already been impl
 
 `micrones` is intentionally narrow:
 
-- It is not a general NES emulator.
+- It is not a general NES emulator, yet, but eventually will become one.
 - It targets the original Super Mario Bros ROM.
-- It only supports mapper 0 / NROM.
+- It only supports mapper 0 / NROM, but other support is in the works in a branch called ben/make-celeste-work
 - It is being developed as a shared portable NES runtime plus thin host and Pico frontends.
 - The long-term embedded target is RP2350 / Raspberry Pi Pico 2.
 
@@ -26,10 +26,12 @@ The current architecture is:
   - SDL audio playback
 - `src/pico/`
   - Pico firmware and hardware-specific code.
+- `src/esp32s3`
+  - ESP32s3 firmware for OLED 1.9" display (and external speaker)
 
 ## What Is Working
 
-### Build / Targets
+### Build / Targets (OUT OF DATE - NEEDS TO BE UPDATED)
 
 - Host smoke target builds and runs:
   - `build-host/micrones_smoke`
@@ -305,6 +307,153 @@ The next work should stay disciplined:
 - continue prioritizing SMB1-specific correctness
 - keep portability boundaries intact
 
+## Pico I2S Audio Implementation (MAX98357)
+
+### Target
+
+`micrones_pico_tft_max98357` uses a MAX98357A I2S amplifier connected to:
+
+- GP10 — BCLK (PIO side-set)
+- GP11 — DIN (PIO out pin 0)
+- GP12 — LRCLK/WS (PIO out pin 1)
+
+### PIO Program
+
+`audio_i2s_max98357.pio` drives a standard 64-BCLK stereo I2S frame:
+- 2 output pins: DIN (base) and LRCLK (base+1) via `out pins, 2`
+- BCLK driven by side-set
+- Each stereo frame = 133 SM cycles (`set y` + 2×(`set x` + 32×(`out`+`jmp`) + `jmp y--`))
+- Data changes on falling BCLK edge, sampled by MAX98357 on rising edge ✓
+
+### Encoding (`audio_i2s_encode_sample`)
+
+Each mono sample is duplicated to both channels. Each channel = 32 BCLK:
+- 1 dummy bit (WS=0 left, WS=1 right) — this is the "1 BCLK before MSB" required by standard I2S
+- 16 data bits, MSB first
+- 15 zero-pad bits
+
+The 2-bit symbol layout packed into each 32-bit word:
+- Bit [31] of word → LRCLK (WS) — higher out pin (base+1 = GP12)
+- Bit [30] of word → DIN — lower out pin (base = GP11)
+- First symbol occupies bits [31:30], last symbol occupies bits [1:0]
+
+### Critical: PIO Shift Direction
+
+**`sm_config_set_out_shift(c, shift_right, autopull, threshold)`**
+
+- `shift_right = false` → shift OSR **left** → emits bits [31:30] first → **MSB first** ✓
+- `shift_right = true` → shift OSR right → emits bits [1:0] first → **LSB first** ✗
+
+The parameter is named `shift_right` in the pico-sdk source. For I2S (MSB first with first symbol in bits [31:30]), always use **`false`**. Mistaking this for "left=false" vs "right=true" labeling previously caused the bit stream to be reversed, producing distorted crackle instead of audio. Confirm in pico-sdk: `pio.h` documents `true` as "shift OSR to right."
+
+### Ring Buffer and Rate Mismatch
+
+The NES APU produces ~799 samples/NES frame. At the 60.0 fps wall-clock cap (vs the NES native ~60.099 Hz), production is ~47,940 samples/sec while I2S consumes 48,000/sec. In practice the buffer can drift a few samples per frame due to measurement timing.
+
+When the ring fills, the old policy (drop new samples) caused silence: the DMA would drain all 4096 stale samples before new audio could resume.
+
+**Fix:** circular overwrite in `push_samples` — when full, evict the oldest sample with an IRQ-safe head advance:
+
+```c
+uint32_t save = save_and_disable_interrupts();
+s_pcm_head = (s_pcm_head + 1u) & (AUDIO_PCM_RING_SIZE - 1u);
+restore_interrupts(save);
+```
+
+The IRQ disable is required because the DMA ISR (`audio_i2s_fill_dma_block`) also modifies `s_pcm_head`; a torn read-modify-write from the main thread would corrupt the pointer. The critical section is ~4 instructions.
+
+### Diagnostic Fields (audio diag: printf, every 60 frames)
+
+- `underruns=N` — DMA found empty buffer; should stabilize near 0 in steady state
+- `overruns=N` — push_samples evicted an old sample; a small steady nonzero rate is normal
+- `buf_level=N` — current ring fill (0–4095); healthy range is roughly 500–2000
+- `nonzero=1` — APU is producing non-silent samples (0 means APU muted or not stepping)
+- `dropped=N` — samples the APU produced that push_samples could not accept; should be 0
+
+### Known-Good Configuration Summary
+
+- Sys clock: 250 MHz (TFT target only; analog stays at 315 MHz)
+- I2S sample rate: 48,000 Hz
+- `AUDIO_PIO_FRAME_CYCLES = 133` (1 + 2×(1 + 64 + 1) = 133; the constant and comment must agree)
+- `pack_symbols` loop: **15** iterations — 16 would shift d[0] off the top of the uint32_t word
+- `shift_right = false` (MSB first, left-shift OSR)
+
+## ESP32-S3 Implementation Notes
+
+### Scope
+
+There is also an ESP32-S3 frontend under `src/esp32s3/main/`.
+
+This is a separate platform implementation, not the main portable runtime target.
+Treat it as:
+
+- a useful reference for embedded frontend structure
+- a reference for MAX98357 wiring and I2S usage
+- a source of ideas for backend interfaces
+
+Do not assume ESP32-S3 code can be copied directly into Pico code. The high-level
+backend shape carries over; the low-level driver code does not.
+
+### Current ESP32-S3 Layout
+
+Key files:
+
+- `src/esp32s3/main/main.c`
+- `src/esp32s3/main/audio.c`
+- `src/esp32s3/main/audio.h`
+- `src/esp32s3/main/display.c`
+- `src/esp32s3/main/board.h`
+- `src/esp32s3/main/nes_video.c`
+- `src/esp32s3/main/nes_input.c`
+
+### Audio Model
+
+The ESP32-S3 audio path is a good reference for backend structure:
+
+- emulator produces shared-core `int16_t` PCM samples
+- platform frontend pushes them into a ring buffer
+- a platform-specific output task drains that ring buffer into hardware
+
+In `src/esp32s3/main/audio.c`:
+
+- audio output uses ESP-IDF standard I2S driver APIs
+- `audio_init(sample_rate)` configures an I2S TX channel
+- a FreeRTOS audio task drains the PCM ring buffer with `i2s_channel_write(...)`
+- the slot config is 16-bit mono through the ESP-IDF helper macros
+
+This is a good architecture reference, but not an implementation reference for Pico:
+
+- ESP32-S3 uses ESP-IDF I2S driver APIs
+- Pico uses pico-sdk + PIO/DMA
+- ESP32-S3 uses FreeRTOS tasks
+- Pico audio currently uses IRQ/DMA-driven backend code instead
+
+### ESP32-S3 MAX98357 Wiring
+
+The ESP32-S3 board wiring documented in `src/esp32s3/main/board.h` is:
+
+- `GPIO4`  -> `BCLK`
+- `GPIO2`  -> `LRC` / `WS`
+- `GPIO3`  -> `DIN`
+
+Board notes there also document:
+
+- `VIN` -> `3.3V` or `5V`
+- `GND` -> `GND`
+- `OUT+` / `OUT-` -> speaker
+- `SD_MODE` left unconnected for the board's mono mix default
+
+When comparing ESP32-S3 vs Pico MAX98357 behavior, use `board.h` as the wiring source of truth for ESP32-S3 and `audio_i2s_max98357.h` for Pico.
+
+### Practical Guidance
+
+When working on embedded platform code:
+
+- keep `src/common/` portable
+- treat ESP32-S3 and Pico as separate hardware backends
+- copy interface ideas freely
+- do not copy driver calls or timing assumptions across platforms without re-deriving them
+
 ## Guidelines for Future Changes
 
 - Prefer narrow fixes over broad rewrites.
@@ -329,13 +478,61 @@ cmake -S . -B build-host -DMICRONES_PLATFORM=host
 cmake --build build-host -j
 ```
 
-Build Pico:
+Configure Pico:
 
 ```sh
 cd /Users/bchelf/microNES
 source ~/.zshrc
-cmake -S . -B build-pico -DMICRONES_PLATFORM=pico -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
-cmake --build build-pico -j
+cmake -S . -B build-pico \
+  -DMICRONES_PLATFORM=pico \
+  -DMICRONES_PICO_VIDEO_MODE=emulator \
+  -DMICRONES_PICO_ROM_PATH=/Users/bchelf/microNES/roms/smb1.nes \
+  -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
+```
+
+Build Pico analog target:
+
+```sh
+cmake --build build-pico --target micrones_pico_analog -j
+```
+
+Build Pico TFT target:
+
+```sh
+cmake --build build-pico --target micrones_pico_tft -j
+```
+
+Build Pico TFT + MAX98357 target:
+
+```sh
+cmake --build build-pico --target micrones_pico_tft_max98357 -j
+```
+
+Configure Pico test-pattern builds:
+
+```sh
+cd /Users/bchelf/microNES
+source ~/.zshrc
+cmake -S . -B build-pico-test \
+  -DMICRONES_PLATFORM=pico \
+  -DMICRONES_PICO_VIDEO_MODE=test_pattern \
+  -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
+```
+
+Build ESP32-S3:
+
+```sh
+cd /Users/bchelf/microNES/src/esp32s3
+. $IDF_PATH/export.sh
+idf.py build
+```
+
+Build ESP32-S3 with an explicit ROM:
+
+```sh
+cd /Users/bchelf/microNES/src/esp32s3
+. $IDF_PATH/export.sh
+idf.py -DMICRONES_ROM_PATH=/absolute/path/to/game.nes build
 ```
 
 Run SDL:
@@ -367,4 +564,3 @@ The main remaining technical debt is:
 - APU completeness
 - deeper PPU accuracy where SMB later requires it
 - eventual Pico-side integration/performance work
-
