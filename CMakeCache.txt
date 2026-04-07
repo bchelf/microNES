@@ -18,7 +18,7 @@
 CMAKE_ADDR2LINE:FILEPATH=/usr/bin/addr2line
 
 //ASM compiler
-CMAKE_ASM_COMPILER:FILEPATH=/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc
+CMAKE_ASM_COMPILER:FILEPATH=/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc
 
 //Flags used by the ASM compiler during all build types.
 CMAKE_ASM_FLAGS:STRING=
@@ -43,7 +43,7 @@ CMAKE_BUILD_TYPE:STRING=
 CMAKE_COLOR_MAKEFILE:BOOL=ON
 
 //No help, variable specified on the command line.
-CMAKE_CROSSCOMPILING_EMULATOR:UNINITIALIZED=/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/node/22.16.0_64bit/bin/node
+CMAKE_CROSSCOMPILING_EMULATOR:UNINITIALIZED=/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/node/22.16.0_64bit/bin/node
 
 //`clang-scan-deps` dependency scanner
 CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS:FILEPATH=CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS-NOTFOUND
@@ -106,7 +106,7 @@ CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=
 CMAKE_FIND_PACKAGE_REDIRECTS_DIR:STATIC=/home/runner/work/microNES/microNES/build-web/CMakeFiles/pkgRedirects
 
 //Install path prefix, prepended onto install directories.
-CMAKE_INSTALL_PREFIX:PATH=/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/cache/sysroot
+CMAKE_INSTALL_PREFIX:PATH=/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/cache/sysroot
 
 //Path to a program.
 CMAKE_LINKER:FILEPATH=/usr/bin/ld
@@ -206,7 +206,7 @@ CMAKE_STRIP:FILEPATH=/usr/bin/strip
 CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 
 //The CMake toolchain file
-CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
+CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
@@ -227,6 +227,12 @@ MICRONES_APU_ENGINE:STRING=micrones
 
 //Path to an iNES ROM image to embed for Pico emulator video mode
 MICRONES_PICO_ROM_PATH:FILEPATH=
+
+//Pico TFT backend: spi_ili9341 or parallel_8080
+MICRONES_PICO_TFT_BACKEND:STRING=spi_ili9341
+
+//Pico TFT controller init: ili9341, ili9486, or ili9488
+MICRONES_PICO_TFT_CONTROLLER:STRING=ili9341
 
 //Pico video mode: test_pattern or emulator
 MICRONES_PICO_VIDEO_MODE:STRING=test_pattern
@@ -394,6 +400,10 @@ CMAKE_VERBOSE_MAKEFILE-ADVANCED:INTERNAL=1
 EMSCRIPTEN:INTERNAL=1
 //STRINGS property for variable: MICRONES_APU_ENGINE
 MICRONES_APU_ENGINE-STRINGS:INTERNAL=micrones;infones
+//STRINGS property for variable: MICRONES_PICO_TFT_BACKEND
+MICRONES_PICO_TFT_BACKEND-STRINGS:INTERNAL=spi_ili9341;parallel_8080
+//STRINGS property for variable: MICRONES_PICO_TFT_CONTROLLER
+MICRONES_PICO_TFT_CONTROLLER-STRINGS:INTERNAL=ili9341;ili9486;ili9488
 //STRINGS property for variable: MICRONES_PICO_VIDEO_MODE
 MICRONES_PICO_VIDEO_MODE-STRINGS:INTERNAL=test_pattern;emulator
 //STRINGS property for variable: MICRONES_PLATFORM

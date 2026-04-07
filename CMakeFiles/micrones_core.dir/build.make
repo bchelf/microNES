@@ -77,150 +77,150 @@ CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o: CMakeFiles/micrones_co
 CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o: /home/runner/work/microNES/microNES/src/common/apu_micrones.c
 CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building C object CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o -MF CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o.d -o CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o -c /home/runner/work/microNES/microNES/src/common/apu_micrones.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o -MF CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o.d -o CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o -c /home/runner/work/microNES/microNES/src/common/apu_micrones.c
 
 CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/apu_micrones.c > CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/apu_micrones.c > CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.i
 
 CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/apu_micrones.c -o CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/apu_micrones.c -o CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.s
 
 CMakeFiles/micrones_core.dir/src/common/cart.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/cart.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/cart.c.o: /home/runner/work/microNES/microNES/src/common/cart.c
 CMakeFiles/micrones_core.dir/src/common/cart.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building C object CMakeFiles/micrones_core.dir/src/common/cart.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/cart.c.o -MF CMakeFiles/micrones_core.dir/src/common/cart.c.o.d -o CMakeFiles/micrones_core.dir/src/common/cart.c.o -c /home/runner/work/microNES/microNES/src/common/cart.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/cart.c.o -MF CMakeFiles/micrones_core.dir/src/common/cart.c.o.d -o CMakeFiles/micrones_core.dir/src/common/cart.c.o -c /home/runner/work/microNES/microNES/src/common/cart.c
 
 CMakeFiles/micrones_core.dir/src/common/cart.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/cart.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/cart.c > CMakeFiles/micrones_core.dir/src/common/cart.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/cart.c > CMakeFiles/micrones_core.dir/src/common/cart.c.i
 
 CMakeFiles/micrones_core.dir/src/common/cart.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/cart.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/cart.c -o CMakeFiles/micrones_core.dir/src/common/cart.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/cart.c -o CMakeFiles/micrones_core.dir/src/common/cart.c.s
 
 CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o: /home/runner/work/microNES/microNES/src/common/cpu6502.c
 CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building C object CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o -MF CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o.d -o CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o -MF CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o.d -o CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502.c
 
 CMakeFiles/micrones_core.dir/src/common/cpu6502.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/cpu6502.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/cpu6502.c > CMakeFiles/micrones_core.dir/src/common/cpu6502.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/cpu6502.c > CMakeFiles/micrones_core.dir/src/common/cpu6502.c.i
 
 CMakeFiles/micrones_core.dir/src/common/cpu6502.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/cpu6502.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/cpu6502.c -o CMakeFiles/micrones_core.dir/src/common/cpu6502.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/cpu6502.c -o CMakeFiles/micrones_core.dir/src/common/cpu6502.c.s
 
 CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o: /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c
 CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o -MF CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o.d -o CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o -MF CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o.d -o CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c
 
 CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c > CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c > CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.i
 
 CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c -o CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c -o CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.s
 
 CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o: /home/runner/work/microNES/microNES/src/common/frame_pacer.c
 CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building C object CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o -MF CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o.d -o CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o -c /home/runner/work/microNES/microNES/src/common/frame_pacer.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o -MF CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o.d -o CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o -c /home/runner/work/microNES/microNES/src/common/frame_pacer.c
 
 CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/frame_pacer.c > CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/frame_pacer.c > CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.i
 
 CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/frame_pacer.c -o CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/frame_pacer.c -o CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.s
 
 CMakeFiles/micrones_core.dir/src/common/input.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/input.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/input.c.o: /home/runner/work/microNES/microNES/src/common/input.c
 CMakeFiles/micrones_core.dir/src/common/input.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building C object CMakeFiles/micrones_core.dir/src/common/input.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/input.c.o -MF CMakeFiles/micrones_core.dir/src/common/input.c.o.d -o CMakeFiles/micrones_core.dir/src/common/input.c.o -c /home/runner/work/microNES/microNES/src/common/input.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/input.c.o -MF CMakeFiles/micrones_core.dir/src/common/input.c.o.d -o CMakeFiles/micrones_core.dir/src/common/input.c.o -c /home/runner/work/microNES/microNES/src/common/input.c
 
 CMakeFiles/micrones_core.dir/src/common/input.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/input.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/input.c > CMakeFiles/micrones_core.dir/src/common/input.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/input.c > CMakeFiles/micrones_core.dir/src/common/input.c.i
 
 CMakeFiles/micrones_core.dir/src/common/input.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/input.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/input.c -o CMakeFiles/micrones_core.dir/src/common/input.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/input.c -o CMakeFiles/micrones_core.dir/src/common/input.c.s
 
 CMakeFiles/micrones_core.dir/src/common/mmc1.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/mmc1.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/mmc1.c.o: /home/runner/work/microNES/microNES/src/common/mmc1.c
 CMakeFiles/micrones_core.dir/src/common/mmc1.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building C object CMakeFiles/micrones_core.dir/src/common/mmc1.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/mmc1.c.o -MF CMakeFiles/micrones_core.dir/src/common/mmc1.c.o.d -o CMakeFiles/micrones_core.dir/src/common/mmc1.c.o -c /home/runner/work/microNES/microNES/src/common/mmc1.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/mmc1.c.o -MF CMakeFiles/micrones_core.dir/src/common/mmc1.c.o.d -o CMakeFiles/micrones_core.dir/src/common/mmc1.c.o -c /home/runner/work/microNES/microNES/src/common/mmc1.c
 
 CMakeFiles/micrones_core.dir/src/common/mmc1.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/mmc1.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/mmc1.c > CMakeFiles/micrones_core.dir/src/common/mmc1.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/mmc1.c > CMakeFiles/micrones_core.dir/src/common/mmc1.c.i
 
 CMakeFiles/micrones_core.dir/src/common/mmc1.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/mmc1.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/mmc1.c -o CMakeFiles/micrones_core.dir/src/common/mmc1.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/mmc1.c -o CMakeFiles/micrones_core.dir/src/common/mmc1.c.s
 
 CMakeFiles/micrones_core.dir/src/common/nes.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/nes.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/nes.c.o: /home/runner/work/microNES/microNES/src/common/nes.c
 CMakeFiles/micrones_core.dir/src/common/nes.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building C object CMakeFiles/micrones_core.dir/src/common/nes.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/nes.c.o -MF CMakeFiles/micrones_core.dir/src/common/nes.c.o.d -o CMakeFiles/micrones_core.dir/src/common/nes.c.o -c /home/runner/work/microNES/microNES/src/common/nes.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/nes.c.o -MF CMakeFiles/micrones_core.dir/src/common/nes.c.o.d -o CMakeFiles/micrones_core.dir/src/common/nes.c.o -c /home/runner/work/microNES/microNES/src/common/nes.c
 
 CMakeFiles/micrones_core.dir/src/common/nes.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/nes.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/nes.c > CMakeFiles/micrones_core.dir/src/common/nes.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/nes.c > CMakeFiles/micrones_core.dir/src/common/nes.c.i
 
 CMakeFiles/micrones_core.dir/src/common/nes.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/nes.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/nes.c -o CMakeFiles/micrones_core.dir/src/common/nes.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/nes.c -o CMakeFiles/micrones_core.dir/src/common/nes.c.s
 
 CMakeFiles/micrones_core.dir/src/common/nrom.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/nrom.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/nrom.c.o: /home/runner/work/microNES/microNES/src/common/nrom.c
 CMakeFiles/micrones_core.dir/src/common/nrom.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building C object CMakeFiles/micrones_core.dir/src/common/nrom.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/nrom.c.o -MF CMakeFiles/micrones_core.dir/src/common/nrom.c.o.d -o CMakeFiles/micrones_core.dir/src/common/nrom.c.o -c /home/runner/work/microNES/microNES/src/common/nrom.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/nrom.c.o -MF CMakeFiles/micrones_core.dir/src/common/nrom.c.o.d -o CMakeFiles/micrones_core.dir/src/common/nrom.c.o -c /home/runner/work/microNES/microNES/src/common/nrom.c
 
 CMakeFiles/micrones_core.dir/src/common/nrom.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/nrom.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/nrom.c > CMakeFiles/micrones_core.dir/src/common/nrom.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/nrom.c > CMakeFiles/micrones_core.dir/src/common/nrom.c.i
 
 CMakeFiles/micrones_core.dir/src/common/nrom.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/nrom.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/nrom.c -o CMakeFiles/micrones_core.dir/src/common/nrom.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/nrom.c -o CMakeFiles/micrones_core.dir/src/common/nrom.c.s
 
 CMakeFiles/micrones_core.dir/src/common/ppu.c.o: CMakeFiles/micrones_core.dir/flags.make
 CMakeFiles/micrones_core.dir/src/common/ppu.c.o: CMakeFiles/micrones_core.dir/includes_C.rsp
 CMakeFiles/micrones_core.dir/src/common/ppu.c.o: /home/runner/work/microNES/microNES/src/common/ppu.c
 CMakeFiles/micrones_core.dir/src/common/ppu.c.o: CMakeFiles/micrones_core.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building C object CMakeFiles/micrones_core.dir/src/common/ppu.c.o"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/ppu.c.o -MF CMakeFiles/micrones_core.dir/src/common/ppu.c.o.d -o CMakeFiles/micrones_core.dir/src/common/ppu.c.o -c /home/runner/work/microNES/microNES/src/common/ppu.c
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_core.dir/src/common/ppu.c.o -MF CMakeFiles/micrones_core.dir/src/common/ppu.c.o.d -o CMakeFiles/micrones_core.dir/src/common/ppu.c.o -c /home/runner/work/microNES/microNES/src/common/ppu.c
 
 CMakeFiles/micrones_core.dir/src/common/ppu.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_core.dir/src/common/ppu.c.i"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/ppu.c > CMakeFiles/micrones_core.dir/src/common/ppu.c.i
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/common/ppu.c > CMakeFiles/micrones_core.dir/src/common/ppu.c.i
 
 CMakeFiles/micrones_core.dir/src/common/ppu.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_core.dir/src/common/ppu.c.s"
-	/home/runner/work/_temp/0cc3a6a0-db9d-4dc6-8a4d-0c111a0cb477/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/ppu.c -o CMakeFiles/micrones_core.dir/src/common/ppu.c.s
+	/home/runner/work/_temp/8e23974d-92cd-4e02-a27d-5b697043540e/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/common/ppu.c -o CMakeFiles/micrones_core.dir/src/common/ppu.c.s
 
 # Object files for target micrones_core
 micrones_core_OBJECTS = \
