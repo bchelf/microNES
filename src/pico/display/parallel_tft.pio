@@ -1,0 +1,18 @@
+.program parallel_tft
+.side_set 1 opt
+
+; 8080 byte-write model:
+;   - one byte is emitted per two instructions
+;   - 'out pins, 8' drives D0..D7 while WR is LOW (data setup during strobe)
+;   - 'nop side 1' raises WR while data is stable — ILI9486 latches on rising edge
+;
+; Timing:
+;   cycle 1: data = new byte, WR falls (D->Q setup begins)
+;   cycle 2: WR rises while data is stable (tDS = 1 SM cycle >= 16ns at clkdiv=16/250MHz)
+;
+; With clkdiv=N, byte rate is clk_sys / (2 * N).
+
+.wrap_target
+    out pins, 8 side 0
+    nop        side 1
+.wrap

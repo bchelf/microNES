@@ -7,7 +7,7 @@
 #include "pico_video_backend.h"
 #include "pico_input.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
-#include "video_tft_ili9341.h"
+#include "display/video_tft.h"
 #endif
 
 #include "pico/stdlib.h"
@@ -107,7 +107,13 @@ int main(void) {
         while (true) {
             /* Cap to 60 fps (16,667 µs ≈ 60.0 Hz).
              * If the previous frame overran the budget, resync rather than
-             * attempting to catch up — that would only compound the overrun. */
+             * attempting to catch up — that would only compound the overrun.
+             * On the TFT path, frame_deadline_us is captured here so the
+             * skip-present logic below can check whether the budget was
+             * exhausted after step + audio. */
+#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
+            uint64_t frame_deadline_us;
+#endif
             {
                 static uint64_t s_next_frame_us = 0u;
                 uint64_t now = time_us_64();
@@ -120,15 +126,68 @@ int main(void) {
                 if (s_next_frame_us < time_us_64()) {
                     s_next_frame_us = time_us_64();
                 }
+#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
+                frame_deadline_us = s_next_frame_us;
+#endif
             }
 
             nes_set_controller_state(&emulator_video.nes, 0, pico_input_read());
+
+#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
+            /* TFT path: step and present are separated so audio is pushed
+             * between them.  This ensures audio is refilled on every NES
+             * frame regardless of how long the display present takes. */
+            if (!emulator_video_adapter_step_frame(&emulator_video)) {
+                printf("emulator video failed: %s\n", emulator_video_adapter_last_error(&emulator_video));
+                break;
+            }
+
+            /* Drain APU PCM samples into the audio backend immediately after
+             * the NES step, before the display present. */
+            {
+                static int16_t pcm_tmp[256];
+                size_t n;
+                while ((n = nes_audio_read_samples(&emulator_video.nes, pcm_tmp,
+                                                   sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
+                    size_t pushed = pico_audio_backend_push_samples(pcm_tmp, n);
+                    report_samples_drained += n;
+                    report_samples_dropped += (n - pushed);
+                    /* Exp B: detect whether any non-silent samples exist. */
+                    if (!report_saw_nonzero_sample) {
+                        for (size_t i = 0; i < n; ++i) {
+                            if (pcm_tmp[i] != 0) {
+                                report_saw_nonzero_sample = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
+            }
+
+            /* Present the frame to the display — but skip if the previous
+             * frame already overran the 16.67 ms budget.  Skipping one
+             * present lets the loop recover to the next deadline without
+             * accumulating drift.  The display drops to ~30 fps during heavy
+             * scenes but NES emulation and audio remain at 60 fps. */
+            {
+                static bool s_skip_present = false;
+                if (!s_skip_present) {
+                    emulator_video_adapter_present_frame(&emulator_video);
+                }
+                /* Record whether this frame (step + audio + present) overran
+                 * so the next iteration can decide whether to skip present. */
+                s_skip_present = (time_us_64() > frame_deadline_us);
+            }
+#else
+            /* Analog path: render_frame handles step + present together,
+             * matching the original loop structure. */
             if (!emulator_video_adapter_render_frame(&emulator_video)) {
                 printf("emulator video failed: %s\n", emulator_video_adapter_last_error(&emulator_video));
                 break;
             }
 
-            /* Drain APU PCM samples into the PWM audio backend.
+            /* Drain APU PCM samples into the audio backend.
              * The APU produces ~800 samples per frame at 48 kHz / 60 fps. */
             {
                 static int16_t pcm_tmp[256];
@@ -150,6 +209,8 @@ int main(void) {
                 }
                 report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
             }
+#endif
+
             if ((emulator_video.rendered_frames % 60u) == 0u) {
                 uint64_t now_us = time_us_64();
                 PicoVideoBackendStats backend_stats;
@@ -229,11 +290,11 @@ int main(void) {
                     uint64_t delta_present_frames = backend_stats.frames_presented - report_c1_frames;
                     uint64_t delta_present_us = backend_stats.convert_us_total - report_c1_convert_us;
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
-                    PicoTftIli9341Stats tft_raw;
-                    video_tft_ili9341_get_stats(&tft_raw);
+                    PicoTftStats tft_raw;
+                    video_tft_get_stats(&tft_raw);
                     uint64_t delta_tft_convert_us = tft_raw.present_convert_us_total - report_tft_convert_us;
                     uint64_t delta_tft_diff_us = tft_raw.present_diff_us_total - report_tft_diff_us;
-                    uint64_t delta_tft_spi_us = tft_raw.present_spi_us_total - report_tft_spi_us;
+                    uint64_t delta_tft_spi_us = tft_raw.present_bus_us_total - report_tft_spi_us;
                     uint64_t delta_tft_spans = tft_raw.spans_sent_total - report_tft_spans;
 #endif
 
@@ -292,11 +353,11 @@ int main(void) {
                 report_video_stats.swap_wait_us_max = backend_stats.swap_wait_us_max;
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
                 {
-                    PicoTftIli9341Stats tft_raw;
-                    video_tft_ili9341_get_stats(&tft_raw);
+                    PicoTftStats tft_raw;
+                    video_tft_get_stats(&tft_raw);
                     report_tft_convert_us = tft_raw.present_convert_us_total;
                     report_tft_diff_us = tft_raw.present_diff_us_total;
-                    report_tft_spi_us = tft_raw.present_spi_us_total;
+                    report_tft_spi_us = tft_raw.present_bus_us_total;
                     report_tft_spans = tft_raw.spans_sent_total;
                 }
 #endif
