@@ -44,9 +44,9 @@ static void ili9486_init(const TftTransportOps *transport) {
         { 0xC0, pwctrl1,  sizeof(pwctrl1),                         0u },
         { 0xC1, pwctrl2,  sizeof(pwctrl2),                         0u },
         { 0xC5, vmctrl,   sizeof(vmctrl),                          0u },
-        { TFT_CMD_COLMOD, &colmod, 1u,                            20u },
+        { TFT_CMD_COLMOD, &colmod, 1u,                             0u },
         { TFT_CMD_MADCTL, &madctl, 1u,                             0u },
-        { TFT_CMD_DISPON, NULL,    0u,                            120u },
+        { TFT_CMD_DISPON, NULL,    0u,                             0u },
     };
 
     tft_controller_run_init_sequence(transport, sequence, sizeof(sequence) / sizeof(sequence[0]));

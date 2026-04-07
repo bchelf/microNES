@@ -158,7 +158,6 @@ bool video_tft_init(void) {
     }
 
     controller->init(transport);
-    video_tft_fill_rect(0u, 0u, controller->width, controller->height, RGB565_BE(0, 0, 0));
     return true;
 }
 
