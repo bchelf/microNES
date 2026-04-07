@@ -40,6 +40,8 @@ bool emulator_video_adapter_init(
     size_t rom_image_size
 );
 bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter);
+bool emulator_video_adapter_step_frame(PicoEmulatorVideoAdapter *adapter);
+void emulator_video_adapter_present_frame(PicoEmulatorVideoAdapter *adapter);
 const char *emulator_video_adapter_last_error(const PicoEmulatorVideoAdapter *adapter);
 
 #endif

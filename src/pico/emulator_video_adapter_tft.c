@@ -1,6 +1,6 @@
 #include "emulator_video_adapter.h"
 
-#include "video_tft_ili9341.h"
+#include "display/video_tft.h"
 
 #include "pico/time.h"
 
@@ -44,34 +44,37 @@ bool emulator_video_adapter_init(
     return true;
 }
 
-bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
-    uint64_t frame_started_us;
-    const NesFrameBuffer *frame;
+bool emulator_video_adapter_step_frame(PicoEmulatorVideoAdapter *adapter) {
+    uint64_t t0;
 
     if (!adapter->initialized) {
         emulator_video_adapter_set_error(adapter, "emulator video adapter is not initialized");
         return false;
     }
 
-    frame_started_us = time_us_64();
+    t0 = time_us_64();
     if (!nes_step_frame(&adapter->nes)) {
         emulator_video_adapter_set_error(adapter, nes_last_error(&adapter->nes));
         return false;
     }
-    adapter->profile_step_scanline_us_total += time_us_64() - frame_started_us;
+    adapter->profile_step_scanline_us_total += time_us_64() - t0;
+    ++adapter->rendered_frames;
+    adapter->rendered_scanlines += NES_FRAME_HEIGHT;
+    return true;
+}
 
-    frame = nes_framebuffer(&adapter->nes);
+void emulator_video_adapter_present_frame(PicoEmulatorVideoAdapter *adapter) {
+    uint64_t t0 = time_us_64();
+    const NesFrameBuffer *frame = nes_framebuffer(&adapter->nes);
 
     /* NOTE: The debug pixel-scan loop that previously ran here iterated all
      * 256×240 = 61,440 pixels to compute color_mask, min/max pixel, and
      * first-visible coordinates.  It used 64-bit shift ops and multiple
      * branches per pixel, costing ~2–4 ms per frame at 315 MHz — pure
      * overhead that contributed nothing to rendering.  Removed. */
-    video_tft_ili9341_present_frame(frame);
+    video_tft_present_frame(frame);
+    adapter->profile_render_frame_us_total += time_us_64() - t0;
 
-    ++adapter->rendered_frames;
-    adapter->rendered_scanlines += NES_FRAME_HEIGHT;
-    adapter->profile_render_frame_us_total += time_us_64() - frame_started_us;
     /* Debug pixel stats not collected on TFT path (scan removed above). */
     adapter->last_frame_source_nonzero_pixels = 0;
     adapter->last_frame_visible_nonblack_pixels = 0;
@@ -82,7 +85,13 @@ bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     adapter->last_frame_unique_color_count = 0;
     adapter->last_frame_first_visible_x = -1;
     adapter->last_frame_first_visible_y = -1;
+}
 
+bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
+    if (!emulator_video_adapter_step_frame(adapter)) {
+        return false;
+    }
+    emulator_video_adapter_present_frame(adapter);
     return true;
 }
 

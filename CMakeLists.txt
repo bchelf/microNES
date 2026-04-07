@@ -4,6 +4,10 @@ set(MICRONES_PLATFORM "pico" CACHE STRING "Build platform: host, pico, or web")
 set_property(CACHE MICRONES_PLATFORM PROPERTY STRINGS host pico web)
 set(MICRONES_PICO_VIDEO_MODE "test_pattern" CACHE STRING "Pico video mode: test_pattern or emulator")
 set_property(CACHE MICRONES_PICO_VIDEO_MODE PROPERTY STRINGS test_pattern emulator)
+set(MICRONES_PICO_TFT_BACKEND "spi_ili9341" CACHE STRING "Pico TFT backend: spi_ili9341 or parallel_8080")
+set_property(CACHE MICRONES_PICO_TFT_BACKEND PROPERTY STRINGS spi_ili9341 parallel_8080)
+set(MICRONES_PICO_TFT_CONTROLLER "ili9341" CACHE STRING "Pico TFT controller init: ili9341, ili9486, or ili9488")
+set_property(CACHE MICRONES_PICO_TFT_CONTROLLER PROPERTY STRINGS ili9341 ili9486 ili9488)
 set(MICRONES_PICO_ROM_PATH "" CACHE FILEPATH "Path to an iNES ROM image to embed for Pico emulator video mode")
 set(MICRONES_APU_ENGINE "micrones" CACHE STRING "APU engine: micrones (cycle-accurate, default) or infones (InfoNES DDS)")
 set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS micrones infones)
@@ -218,10 +222,8 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         elseif (backend_name STREQUAL "tft")
             target_sources(${target_name} PRIVATE
                 src/pico/pico_video_backend_tft.c
-                src/pico/video_tft_ili9341.c
-            )
-            target_link_libraries(${target_name} PRIVATE
-                hardware_spi
+                src/pico/display/tft_controller_ili9341.c
+                src/pico/display/video_tft.c
             )
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_TFT=1)
             # 250 MHz gives CPSDVSR=4, SCR=0 → exactly 62.5 MHz SPI (63.6 FPS ceiling).
@@ -229,6 +231,64 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             # This overrides the #ifndef default in clock_config.h for this target only;
             # the analog target continues to use 315 MHz via the default.
             target_compile_definitions(${target_name} PRIVATE MICRONES_SYS_CLK_MHZ=250)
+
+            if (MICRONES_PICO_TFT_BACKEND STREQUAL "spi_ili9341")
+                if (NOT MICRONES_PICO_TFT_CONTROLLER STREQUAL "ili9341")
+                    message(FATAL_ERROR "MICRONES_PICO_TFT_BACKEND=spi_ili9341 requires MICRONES_PICO_TFT_CONTROLLER=ili9341")
+                endif ()
+
+                target_sources(${target_name} PRIVATE
+                    src/pico/display/display_spi_ili9341.c
+                )
+                target_link_libraries(${target_name} PRIVATE
+                    hardware_spi
+                )
+                target_compile_definitions(${target_name} PRIVATE
+                    MICRONES_DISPLAY_BACKEND_SPI_ILI9341=1
+                    MICRONES_DISPLAY_CONTROLLER_ILI9341=1
+                )
+            elseif (MICRONES_PICO_TFT_BACKEND STREQUAL "parallel_8080")
+                target_sources(${target_name} PRIVATE
+                    src/pico/display/display_parallel_8080.c
+                )
+                target_link_libraries(${target_name} PRIVATE
+                    hardware_dma
+                    hardware_pio
+                )
+                target_compile_definitions(${target_name} PRIVATE
+                    MICRONES_DISPLAY_BACKEND_PARALLEL_8080=1
+                )
+                pico_generate_pio_header(${target_name}
+                    ${CMAKE_CURRENT_LIST_DIR}/src/pico/display/parallel_tft.pio
+                )
+
+                if (MICRONES_PICO_TFT_CONTROLLER STREQUAL "ili9341")
+                    target_sources(${target_name} PRIVATE
+                        src/pico/display/tft_controller_ili9341.c
+                    )
+                    target_compile_definitions(${target_name} PRIVATE
+                        MICRONES_DISPLAY_CONTROLLER_ILI9341=1
+                    )
+                elseif (MICRONES_PICO_TFT_CONTROLLER STREQUAL "ili9486")
+                    target_sources(${target_name} PRIVATE
+                        src/pico/display/tft_controller_ili9486.c
+                    )
+                    target_compile_definitions(${target_name} PRIVATE
+                        MICRONES_DISPLAY_CONTROLLER_ILI9486=1
+                    )
+                elseif (MICRONES_PICO_TFT_CONTROLLER STREQUAL "ili9488")
+                    target_sources(${target_name} PRIVATE
+                        src/pico/display/tft_controller_ili9488.c
+                    )
+                    target_compile_definitions(${target_name} PRIVATE
+                        MICRONES_DISPLAY_CONTROLLER_ILI9488=1
+                    )
+                else ()
+                    message(FATAL_ERROR "Unsupported MICRONES_PICO_TFT_CONTROLLER='${MICRONES_PICO_TFT_CONTROLLER}'")
+                endif ()
+            else ()
+                message(FATAL_ERROR "Unsupported MICRONES_PICO_TFT_BACKEND='${MICRONES_PICO_TFT_BACKEND}'")
+            endif ()
 
             if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")
                 target_sources(${target_name} PRIVATE

@@ -4,9 +4,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MICRONES_MAX98357_BCLK_PIN 10u
-#define MICRONES_MAX98357_DIN_PIN  11u
-#define MICRONES_MAX98357_LRCLK_PIN 12u
+/*
+ * Keep the MAX98357 wiring on a contiguous 3-pin block that does not overlap
+ * either TFT display backend or the NES controller.
+ */
+#define MICRONES_MAX98357_BCLK_PIN 20u
+#define MICRONES_MAX98357_DIN_PIN  21u
+#define MICRONES_MAX98357_LRCLK_PIN 22u
 
 void audio_i2s_max98357_init(uint32_t sample_rate);
 size_t audio_i2s_max98357_push_samples(const int16_t *samples, size_t count);
