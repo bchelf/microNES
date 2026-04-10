@@ -547,20 +547,12 @@ void video_ntsc_core1_entry(void) {
      */
     int display_line = 1;
     int render_line  = 2;
-    uint32_t irq_count = 0;
-
     while (true) {
         /* ---- Wait for DMA IRQ_1 (fires when a channel completes) ---- */
         while (!s_dma_irq1_pending) {
             __wfe();
         }
         s_dma_irq1_pending = false;
-
-        irq_count++;
-        if (irq_count <= 5 || (irq_count % 1000) == 0) {
-            printf("[c1] irq#%lu display_line=%d idle_buf=%d\n",
-                   (unsigned long)irq_count, display_line, s_idle_buf);
-        }
 
         /*
          * At this point:
