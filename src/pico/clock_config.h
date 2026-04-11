@@ -52,9 +52,11 @@
 #  define MICRONES_PIO_CLKDIV       2.0f
 
 /*
- * Audio PWM: wrap=7142 → f = 315,000,000 / 7143 = 44,103 Hz  (75 ppm from 44,100 Hz)
+ * Audio PWM: clkdiv=1.25, wrap=5249 → f = 315,000,000 / (1.25 × 5250) = 48,000 Hz
  */
-#  define MICRONES_AUDIO_PWM_WRAP   7142u
+#  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
+#  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  4u
+#  define MICRONES_AUDIO_PWM_WRAP         5249u
 
 #elif MICRONES_SYS_CLK_MHZ == 157
 
@@ -75,9 +77,11 @@
 #  define MICRONES_PIO_CLKDIV       1.0f
 
 /*
- * Audio PWM: wrap=3570 → f = 157,500,000 / 3571 = 44,106 Hz  (136 ppm from 44,100 Hz)
+ * Audio PWM: clkdiv=1.25, wrap=2624 → f = 157,500,000 / (1.25 × 2625) = 48,000 Hz
  */
-#  define MICRONES_AUDIO_PWM_WRAP   3570u
+#  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
+#  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  4u
+#  define MICRONES_AUDIO_PWM_WRAP         2624u
 
 #elif MICRONES_SYS_CLK_MHZ == 250
 
@@ -100,9 +104,12 @@
 #  define MICRONES_PIO_CLKDIV       2.0f
 
 /*
- * Audio PWM: wrap=5669 → f = 250,000,000 / 5670 = 44,092 Hz  (182 ppm from 44,100 Hz)
+ * Audio PWM: clkdiv=1.0, wrap=5207 → f = 250,000,000 / 5208 = 48,003 Hz
+ * This is close enough for debug-only builds; 250 MHz is not the analog target.
  */
-#  define MICRONES_AUDIO_PWM_WRAP   5669u
+#  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
+#  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  0u
+#  define MICRONES_AUDIO_PWM_WRAP         5207u
 
 #else
 #  error "MICRONES_SYS_CLK_MHZ must be 315, 250, or 157"

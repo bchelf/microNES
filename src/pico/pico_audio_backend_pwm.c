@@ -7,7 +7,7 @@ const char *pico_audio_backend_name(void) {
 }
 
 uint32_t pico_audio_backend_preferred_sample_rate(void) {
-    return 44100u;
+    return 48000u;
 }
 
 void pico_audio_backend_init(uint32_t sample_rate) {
