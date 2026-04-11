@@ -13,16 +13,12 @@
  *   BAT85 ESD diode pair on the output.
  *
  * PWM configuration at 315 MHz system clock:
- *   wrap       = 7142  (7143 levels)
- *   clkdiv     = 1.0   (integer, no fractional division)
- *   f_carrier  = 315,000,000 / 7143 = 44,103.3 Hz  (75 ppm from 44,100 Hz)
- *   resolution = 7143 levels ≈ 12.8 bits  (well above 8-bit minimum)
+ *   wrap       = 5249  (5250 levels)
+ *   clkdiv     = 1.25  (int=1, frac=4)
+ *   f_carrier  = 315,000,000 / (1.25 * 5250) = 48,000 Hz exactly
+ *   resolution = 5250 levels ≈ 12.4 bits  (well above 8-bit minimum)
  *
- *   Note: 315,000,000 / 44,100 = 50000/7 = 7142.857 — not an integer.
- *   44,100 Hz does not divide evenly into 315 MHz (GCD = 6,300 → irreducible).
- *   wrap=7142 gives the closest attainable rate (error 75 ppm, negligible).
- *
- * Sample rate: PWM wrap interrupt fires at 44,103 Hz ≈ 44.1 kHz.
+ * Sample rate: PWM wrap interrupt fires at 48,000 Hz.
  * The interrupt handler pops one sample from the ring buffer each wrap.
  *
  * The ring buffer is filled from Core 0's main loop via audio_pwm_push_samples().
@@ -35,8 +31,8 @@
 
 /*
  * Initialise PWM audio on GP9.  sample_rate is stored but the actual
- * PWM rate is fixed at 44,103 Hz regardless of the value passed
- * (nearest achievable rate at 315 MHz).  Pass 44100 from main().
+ * PWM rate is fixed by the target clock configuration. Pass the backend's
+ * preferred sample rate from main().
  */
 void audio_pwm_init(uint32_t sample_rate);
 

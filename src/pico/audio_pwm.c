@@ -1,21 +1,19 @@
 /*
- * audio_pwm.c  —  PWM audio output on GP9 at 44,100 Hz
+ * audio_pwm.c  —  PWM audio output on GP9 at 48,000 Hz
  *
  * System clock: 315 MHz
  *
  * PWM configuration (analytically derived):
- *   Target sample rate: 44,100 Hz
- *   315,000,000 / 44,100 = 50,000/7 = 7142.857...  (NOT an integer)
- *   GCD(315,000,000, 44,100) = 6,300 → 44,100 does not divide evenly into 315 MHz.
+ *   Target sample rate: 48,000 Hz
+ *   315,000,000 / (1.25 × 5,250) = 48,000 exactly.
  *
- *   Nearest integer:  wrap = 7142,  clkdiv_int = 1,  clkdiv_frac = 0
- *   f_pwm = 315,000,000 / (7142 + 1) = 315,000,000 / 7143 = 44,103.3 Hz
- *   Error: +3.3 Hz = 75 ppm  (negligible for audio)
- *   Resolution: 7143 levels ≈ 12.8 bits  (> 8-bit minimum ✓)
- *   Carrier = 44,103 Hz  (edge-aligned PWM, carrier = sample interrupt rate)
+ *   clkdiv_int  = 1, clkdiv_frac = 4  (1.25 total divider)
+ *   wrap        = 5,249
+ *   Resolution  = 5,250 levels ≈ 12.4 bits  (> 8-bit minimum ✓)
+ *   Carrier     = 48,000 Hz  (edge-aligned PWM, carrier = sample interrupt rate)
  *
  * Architecture:
- *   • PWM wrap interrupt fires at 44,103 Hz on Core 0.
+ *   • PWM wrap interrupt fires at 48,000 Hz on Core 0.
  *   • Interrupt handler pops one sample from a ring buffer, scales it to
  *     [0..AUDIO_PWM_WRAP], and writes the PWM level.
  *   • Main loop (Core 0) pushes int16 PCM samples via audio_pwm_push_samples().
@@ -42,13 +40,13 @@
 
 /*
  * MICRONES_AUDIO_PWM_WRAP is derived from MICRONES_SYS_CLK_MHZ in clock_config.h:
- *   315 MHz → wrap=7142 → f = 315,000,000 / 7143 = 44,103 Hz  (75 ppm)
- *   157.5 MHz → wrap=3570 → f = 157,500,000 / 3571 = 44,106 Hz (136 ppm)
+ *   315 MHz → clkdiv=1.25, wrap=5249 → 48,000 Hz exactly
+ *   157.5 MHz → clkdiv=1.25, wrap=2624 → 48,000 Hz exactly
  * The interrupt fires once per PWM period (on wrap).
  */
 enum {
     AUDIO_PWM_WRAP  = MICRONES_AUDIO_PWM_WRAP,
-    AUDIO_BUF_SIZE  = 2048,    /* ~46 ms at 44.1 kHz; power-of-2 for cheap modulo */
+    AUDIO_BUF_SIZE  = 2048,    /* ~42.7 ms at 48 kHz; power-of-2 for cheap modulo */
 };
 
 /* =========================================================================
@@ -67,7 +65,7 @@ static uint8_t s_audio_last_level = 128u;   /* sample-and-hold across underruns 
  * PWM wrap interrupt handler (Core 0)
  *
  * Execution time: ~10-15 instructions ≈ 10-15 sys_clk cycles.
- * At 315 MHz / 44,103 Hz ≈ 7,143 cycles between interrupts, the ISR
+ * At 315 MHz / 48,000 Hz = 6,562.5 cycles between interrupts, the ISR
  * consumes < 0.2% of Core 0's cycle budget.
  * ========================================================================= */
 
@@ -91,8 +89,8 @@ static void __isr pwm_audio_irq_handler(void) {
          *   u8  = (raw >> 8) ^ 0x80           top byte, flip sign bit
          *   Maps: -32768 → 0x80^0x80 = 0,  0 → 0x00^0x80 = 128,  32767 → 0x7F^0x80 = 255
          *
-         * Step 2: uint8 → PWM level  (0-255 → 0-7142)
-         *   level = (u8 * 7143) >> 8  ≈ u8 * 27.9
+         * Step 2: uint8 → PWM level  (0-255 → 0-AUDIO_PWM_WRAP)
+         *   level = (u8 * (AUDIO_PWM_WRAP + 1)) >> 8
          */
         uint16_t raw = (uint16_t)audio_buf[head];
         uint8_t  u8  = (uint8_t)((raw >> 8u) ^ 0x80u);
@@ -110,14 +108,16 @@ static void __isr pwm_audio_irq_handler(void) {
  * ========================================================================= */
 
 void audio_pwm_init(uint32_t sample_rate) {
-    (void)sample_rate;   /* actual rate is fixed at 44,103 Hz; param is advisory */
+    (void)sample_rate;   /* actual rate is fixed by clock_config.h for this target */
 
     gpio_set_function(MICRONES_AUDIO_PIN, GPIO_FUNC_PWM);
     s_audio_slice = pwm_gpio_to_slice_num(MICRONES_AUDIO_PIN);
 
     pwm_config config = pwm_get_default_config();
-    pwm_config_set_clkdiv_int(&config, 1u);       /* clkdiv = 1.0 (integer, no fraction) */
-    pwm_config_set_wrap(&config, AUDIO_PWM_WRAP); /* wrap = 7142 */
+    pwm_config_set_clkdiv_int_frac(&config,
+                                   MICRONES_AUDIO_PWM_CLKDIV_INT,
+                                   MICRONES_AUDIO_PWM_CLKDIV_FRAC);
+    pwm_config_set_wrap(&config, AUDIO_PWM_WRAP);
     pwm_init(s_audio_slice, &config, /*start=*/true);
 
     /* Initialise to mid-scale silence */

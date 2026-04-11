@@ -1,9 +1,10 @@
 #include "clock_config.h"
 #include "emulator_video_adapter.h"
+#include "frame_pacer.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "pico_audio_backend.h"
-#include "pico/time.h"
+#include "pico_time.h"
 #include "pico_video_backend.h"
 #include "pico_input.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
@@ -20,6 +21,7 @@ int main(void) {
     extern unsigned char micrones_pico_embedded_rom[];
     extern unsigned int micrones_pico_embedded_rom_len;
     static PicoEmulatorVideoAdapter emulator_video;
+    MicronesFramePacer frame_pacer;
     uint64_t report_started_us = 0;
     uint64_t report_render_us = 0;
     uint64_t report_step_us = 0;
@@ -101,33 +103,31 @@ int main(void) {
             (size_t)micrones_pico_embedded_rom_len)) {
         printf("video mode: emulator (%s)\n", pico_video_backend_name());
         pico_video_backend_start_emulator();
+        micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
 
         report_started_us = time_us_64();
 
         while (true) {
-            /* Cap to 60 fps (16,667 µs ≈ 60.0 Hz).
-             * If the previous frame overran the budget, resync rather than
-             * attempting to catch up — that would only compound the overrun.
-             * On the TFT path, frame_deadline_us is captured here so the
-             * skip-present logic below can check whether the budget was
-             * exhausted after step + audio. */
+            /* Pace emulation to the NTSC NES frame cadence (~16.639 ms,
+             * 60.10 Hz) so wall-clock audio production stays aligned with the
+             * 48 kHz backend. On the TFT path, capture the next frame
+             * deadline so the skip-present logic can decide whether the
+             * current frame used too much of the available budget. */
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
             uint64_t frame_deadline_us;
 #endif
             {
-                static uint64_t s_next_frame_us = 0u;
-                uint64_t now = time_us_64();
-                if (s_next_frame_us == 0u) {
-                    s_next_frame_us = now;
-                } else if (now < s_next_frame_us) {
-                    busy_wait_until(s_next_frame_us);
-                }
-                s_next_frame_us += 16667u;
-                if (s_next_frame_us < time_us_64()) {
-                    s_next_frame_us = time_us_64();
+                uint64_t wait_until_ns = 0u;
+                uint64_t now_ns = micrones_pico_clock_now_ns();
+
+                if (micrones_frame_pacer_should_wait(&frame_pacer, now_ns, &wait_until_ns)) {
+                    micrones_pico_sleep_until_ns(wait_until_ns);
+                    micrones_frame_pacer_note_wait_complete(
+                        &frame_pacer,
+                        micrones_pico_clock_now_ns());
                 }
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
-                frame_deadline_us = s_next_frame_us;
+                frame_deadline_us = (frame_pacer.next_deadline_ns + 999ull) / 1000ull;
 #endif
             }
 
@@ -168,8 +168,8 @@ int main(void) {
             /* Present the frame to the display — but skip if the previous
              * frame already overran the 16.67 ms budget.  Skipping one
              * present lets the loop recover to the next deadline without
-             * accumulating drift.  The display drops to ~30 fps during heavy
-             * scenes but NES emulation and audio remain at 60 fps. */
+             * accumulating drift.  The display drops during heavy scenes but
+             * NES emulation and audio remain on the NTSC cadence. */
             {
                 static bool s_skip_present = false;
                 if (!s_skip_present) {
@@ -188,7 +188,7 @@ int main(void) {
             }
 
             /* Drain APU PCM samples into the audio backend.
-             * The APU produces ~800 samples per frame at 48 kHz / 60 fps. */
+             * The APU produces about 799 samples per NTSC frame at 48 kHz. */
             {
                 static int16_t pcm_tmp[256];
                 size_t n;
@@ -210,6 +210,7 @@ int main(void) {
                 report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
             }
 #endif
+            micrones_frame_pacer_frame_done(&frame_pacer, micrones_pico_clock_now_ns());
 
             if ((emulator_video.rendered_frames % 60u) == 0u) {
                 uint64_t now_us = time_us_64();
@@ -365,7 +366,7 @@ int main(void) {
                 /* Exp A: audio pipeline shape — how many samples were produced
                  * and pushed vs dropped over the last 60 NES frames.
                  * Exp B: report whether any non-silent PCM was seen.
-                 * Expected at 60fps: drained≈800/frame, dropped=0, nonzero=1.
+                 * Expected at NTSC cadence: drained≈799/frame, dropped=0, nonzero=1.
                  * If drained=0 → APU not producing (apu_step not running).
                  * If nonzero=0 → APU producing silence (channels muted/not init).
                  * If dropped>0  → PWM buffer backing up (unexpected at <60fps). */
