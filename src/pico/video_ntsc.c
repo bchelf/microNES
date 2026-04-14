@@ -61,16 +61,16 @@
 /* =========================================================================
  * Colorburst pattern
  *
- * 180° cosine, amplitude ±2 DAC codes around blank (code 4):
- *   Phase 0 (0°)  : cos(0°+180°)  = −1 → 4−2 = 2
+ * 180° cosine, amplitude ±3 DAC codes around blank (code 4):
+ *   Phase 0 (0°)  : cos(0°+180°)  = −1 → 4−3 = 1
  *   Phase 1 (90°) : cos(90°+180°) =  0 → 4
- *   Phase 2 (180°): cos(180°+180°)= +1 → 4+2 = 6
+ *   Phase 2 (180°): cos(180°+180°)= +1 → 4+3 = 7
  *   Phase 3 (270°): cos(270°+180°)=  0 → 4
  *
  * Index by (absolute_sample_index & 3).  Burst begins at sample 72;
- * 72 & 3 = 0 → first burst sample = code 2 (peak-negative). ✓
+ * 72 & 3 = 0 → first burst sample = code 1 (peak-negative). ✓
  * ========================================================================= */
-static const uint8_t k_burst_pattern[4] = { 2, 4, 6, 4 };
+static const uint8_t k_burst_pattern[4] = { 1, 4, 7, 4 };
 
 /* =========================================================================
  * Chroma LUT  [hue 0-12][subcarrier phase 0-3]
