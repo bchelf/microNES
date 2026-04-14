@@ -111,15 +111,27 @@ static uint8_t s_dac_lut[64][4];
  * Rebuild + reflash to toggle; no other files need changing. */
 #define MICRONES_CHROMA_ENABLED 1
 
+/*
+ * Per-row chroma scaling (numerator, denominator 8).
+ * Derived from real NES 2C02 PPU voltage swings:
+ *   Row 0: chroma ≈ 0.194V → ×5/8 = 0.625
+ *   Row 1: chroma ≈ 0.264V → ×8/8 = 1.000
+ *   Row 2: chroma ≈ 0.274V → ×8/8 = 1.000
+ *   Row 3: chroma ≈ 0.110V → ×3/8 = 0.375  (pastels / desaturated)
+ */
+static const int k_chroma_scale[4] = { 5, 8, 8, 3 };
+
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
     for (int c = 0; c < 64; c++) {
         int luma     = (c < palette_size) ? (int)palette_to_luma[c] : 0;
         int dac_base = (int)VIDEO_DAC_BLANK + (luma * (int)VIDEO_LUMA_SCALE) / 7;
         int hue      = c & 0x0F;
         if (hue > 12) hue = 0;
+        int row      = (c >> 4) & 3;
         for (int phase = 0; phase < 4; phase++) {
 #if MICRONES_CHROMA_ENABLED
-            int dac = dac_base + (int)chroma_lut[hue][phase];
+            int chroma = (int)chroma_lut[hue][phase] * k_chroma_scale[row] / 8;
+            int dac = dac_base + chroma;
 #else
             int dac = dac_base;   /* chroma disabled — luma only */
 #endif
