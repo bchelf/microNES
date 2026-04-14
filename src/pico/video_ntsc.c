@@ -75,16 +75,19 @@ static const uint8_t k_burst_pattern[4] = { 2, 4, 6, 4 };
 /* =========================================================================
  * Chroma LUT  [hue 0-12][subcarrier phase 0-3]
  *
- * value = roundf(3.5 × cos(s × π/2 + (hue-1) × 30° × π/180))
+ * value = roundf(3.5 × cos(s × π/2 + (hue-2) × 30° × π/180))
  *
  * Amplitude 3.5 → ±3.5 DAC codes peak → ±~280 mV at the TV (74 mV/LSB).
+ * The (hue-2) term aligns NES hue 8 with the 180° colorburst: the NES PPU
+ * generates burst at the same phase as hue 8, so hue 8 must equal 180°.
+ * (hue-2)*30° gives hue 8 = 6*30° = 180°.  ✓
  * ========================================================================= */
 static int8_t chroma_lut[13][4];
 
 void build_chroma_lut(void) {
     memset(chroma_lut[0], 0, sizeof(chroma_lut[0]));  /* hue 0 = greyscale */
     for (int hue = 1; hue < 13; hue++) {
-        float phase_rad = (float)(hue - 1) * 30.0f * (float)M_PI / 180.0f;
+        float phase_rad = (float)(hue - 2) * 30.0f * (float)M_PI / 180.0f;
         for (int s = 0; s < 4; s++) {
             float sc = (float)s * (float)M_PI / 2.0f;
             chroma_lut[hue][s] = (int8_t)roundf(3.5f * cosf(sc + phase_rad));
