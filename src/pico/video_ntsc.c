@@ -200,24 +200,45 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
          abs_s < VIDEO_ACTIVE_START; abs_s++)
         EMIT(VIDEO_DAC_BLANK);
 
-    /* Active video (116-873): 758 samples */
+    /* Active video (116-873): 758 samples
+     *
+     * The NES pixel clock is 5.3693 MHz; at 14.318 MHz sample rate each
+     * NES dot = 2.667 samples, so 256 pixels occupy ~683 samples.  The
+     * remaining 758−683 = 75 samples are blank border, split 37 left / 38
+     * right to centre the image within the NTSC active window.
+     *
+     * Subcarrier phase for the pixel region: the border adds 37 samples
+     * to the offset, so the first pixel sample is at absolute sample
+     * 116+37 = 153.  153 % 4 = 1, accounted for below.
+     */
+#define VIDEO_BORDER_LEFT   37u
+#define VIDEO_BORDER_RIGHT  38u
+#define VIDEO_PIXEL_SAMPLES (VIDEO_ACTIVE_SAMPLES - VIDEO_BORDER_LEFT - VIDEO_BORDER_RIGHT)  /* 683 */
+
     if (active && pixels != NULL) {
+        /* Left border */
+        for (uint i = 0; i < VIDEO_BORDER_LEFT; i++)
+            EMIT(VIDEO_DAC_BLANK);
+
         /*
-         * Map 256 NES pixels across 758 active samples using fixed-point
-         * integer scaling.  DAC code looked up directly from s_dac_lut,
-         * which was precomputed to include luma, chroma, and clamping.
-         *   pixel_inc = (256 << 16) / 758 = 17644  (≈256/758, 16.16 fixed)
-         * Phase: (VIDEO_ACTIVE_START + s) & 3 = s & 3 (since 116 % 4 == 0).
+         * Map 256 NES pixels across 683 active samples using fixed-point
+         * integer scaling.  DAC code looked up directly from s_dac_lut.
+         *   pixel_inc = (256 << 16) / 683 = 24563  (≈256/683, 16.16 fixed)
+         * Phase: first pixel sample is at absolute sample 153; 153 % 4 = 1.
          */
         uint32_t       pixel_fp  = 0u;
-        const uint32_t pixel_inc = (256u << 16u) / VIDEO_ACTIVE_SAMPLES;
+        const uint32_t pixel_inc = (256u << 16u) / VIDEO_PIXEL_SAMPLES;
 
-        for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++) {
+        for (uint s = 0; s < VIDEO_PIXEL_SAMPLES; s++) {
             uint pixel_idx = pixel_fp >> 16u;
             if (pixel_idx >= 256u) pixel_idx = 255u;
             pixel_fp += pixel_inc;
-            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu][s & 3u]);
+            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu][(VIDEO_BORDER_LEFT + s) & 3u]);
         }
+
+        /* Right border */
+        for (uint i = 0; i < VIDEO_BORDER_RIGHT; i++)
+            EMIT(VIDEO_DAC_BLANK);
     } else {
         for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++)
             EMIT(VIDEO_DAC_BLANK);
