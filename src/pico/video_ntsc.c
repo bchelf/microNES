@@ -59,17 +59,18 @@
 #include <stdbool.h>
 
 /* =========================================================================
- * Colorburst patterns — alternating ±2 and ±3 amplitude cycles
+ * Colorburst pattern
  *
- * The TV's ACC filter integrates over the full 10-cycle burst window,
- * so alternating 5 cycles at ±2 and 5 cycles at ±3 yields an effective
- * burst amplitude of ±2.5 DAC codes — halfway between the two.
+ * 180° cosine, amplitude ±3 DAC codes around blank (code 4):
+ *   Phase 0 (0°)  : cos(0°+180°)  = −1 → 4−3 = 1
+ *   Phase 1 (90°) : cos(90°+180°) =  0 → 4
+ *   Phase 2 (180°): cos(180°+180°)= +1 → 4+3 = 7
+ *   Phase 3 (270°): cos(270°+180°)=  0 → 4
  *
- * Even cycles (0,2,4,6,8): ±2 around blank (code 4) → {2, 4, 6, 4}
- * Odd  cycles (1,3,5,7,9): ±3 around blank (code 4) → {1, 4, 7, 4}
+ * Index by (absolute_sample_index & 3).  Burst begins at sample 72;
+ * 72 & 3 = 0 → first burst sample = code 1 (peak-negative). ✓
  * ========================================================================= */
-static const uint8_t k_burst_lo[4] = { 2, 4, 6, 4 };   /* ±2 amplitude */
-static const uint8_t k_burst_hi[4] = { 1, 4, 7, 4 };   /* ±3 amplitude */
+static const uint8_t k_burst_pattern[4] = { 1, 4, 7, 4 };
 
 /* =========================================================================
  * Chroma LUT  [hue 0-12][subcarrier phase 0-3]
@@ -190,12 +191,9 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
     for (uint i = VIDEO_SYNC_SAMPLES; i < VIDEO_BURST_START; i++)
         EMIT(VIDEO_DAC_BLANK);
 
-    /* Colorburst (72-111): 40 samples, alternating ±2/±3 per cycle */
-    for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++) {
-        uint cycle = i >> 2;   /* 0-9: which subcarrier cycle */
-        const uint8_t *pat = (cycle & 1u) ? k_burst_hi : k_burst_lo;
-        EMIT(pat[(VIDEO_BURST_START + i) & 3u]);
-    }
+    /* Colorburst (72-111): 40 samples, 180° cosine ±3 around blank */
+    for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++)
+        EMIT(k_burst_pattern[(VIDEO_BURST_START + i) & 3u]);
 
     /* Remaining back porch (112-115): 4 samples blank */
     for (uint abs_s = VIDEO_BURST_START + VIDEO_BURST_SAMPLES;
@@ -266,11 +264,8 @@ static void render_test_scanline(uint32_t *buf) {
         EMIT_T(VIDEO_DAC_SYNC);
     for (uint i = VIDEO_SYNC_SAMPLES; i < VIDEO_BURST_START; i++)
         EMIT_T(VIDEO_DAC_BLANK);
-    for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++) {
-        uint cycle = i >> 2;
-        const uint8_t *pat = (cycle & 1u) ? k_burst_hi : k_burst_lo;
-        EMIT_T(pat[(VIDEO_BURST_START + i) & 3u]);
-    }
+    for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++)
+        EMIT_T(k_burst_pattern[(VIDEO_BURST_START + i) & 3u]);
     for (uint abs_s = VIDEO_BURST_START + VIDEO_BURST_SAMPLES;
          abs_s < VIDEO_ACTIVE_START; abs_s++)
         EMIT_T(VIDEO_DAC_BLANK);
