@@ -59,33 +59,63 @@
 #include <stdbool.h>
 
 /* =========================================================================
- * Colorburst pattern
+ * NTSC color encoding
  *
- * 180° cosine, amplitude ±2 DAC codes around blank (code 4):
- *   Phase 0 (0°)  : cos(0°+180°)  = −1 → 4−2 = 2
+ * The 4-bit DAC has only 16 levels (0-15), so color fidelity is limited.
+ * Three cooperating tables control the final composite waveform:
+ *
+ *   k_burst_pattern[4]  — colorburst reference signal (180° cosine, ±3)
+ *   chroma_lut[13][4]   — per-hue chroma modulation (built by build_chroma_lut)
+ *   k_chroma_scale[4]   — per-brightness-row attenuation (applied in precompute)
+ *
+ * The TV's ACC (automatic color control) loop locks to the burst amplitude
+ * and uses it as the gain reference for decoding active-video chroma.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * Colorburst pattern — 180° cosine, amplitude ±3 DAC codes around blank (4)
+ *
+ *   Phase 0 (0°)  : cos(0°+180°)  = −1 → 4−3 = 1
  *   Phase 1 (90°) : cos(90°+180°) =  0 → 4
- *   Phase 2 (180°): cos(180°+180°)= +1 → 4+2 = 6
+ *   Phase 2 (180°): cos(180°+180°)= +1 → 4+3 = 7
  *   Phase 3 (270°): cos(270°+180°)=  0 → 4
  *
- * Index by (absolute_sample_index & 3).  Burst begins at sample 72;
- * 72 & 3 = 0 → first burst sample = code 2 (peak-negative). ✓
- * ========================================================================= */
-static const uint8_t k_burst_pattern[4] = { 2, 4, 6, 4 };
+ * Indexed by (absolute_sample_index & 3).  Burst begins at sample 72;
+ * 72 & 3 = 0 → first burst sample = code 1 (peak-negative). ✓
+ * ------------------------------------------------------------------------- */
+static const uint8_t k_burst_pattern[4] = { 1, 4, 7, 4 };
 
-/* =========================================================================
+/* -------------------------------------------------------------------------
  * Chroma LUT  [hue 0-12][subcarrier phase 0-3]
  *
- * value = roundf(2.5 × cos(s × π/2 + (hue-1) × 30° × π/180))
- * ========================================================================= */
+ * value = roundf(k_hue_amp[hue] × cos(s × π/2 + (hue-2) × 30° × π/180))
+ *
+ * Phase alignment:
+ *   The (hue-2) term aligns NES hue 8 with the 180° colorburst.  The NES
+ *   PPU generates burst at the same phase as hue 8 (the yellow/olive column),
+ *   so hue 8 must map to 180°.  (hue-2)*30° gives hue 8 = 6×30° = 180°. ✓
+ *
+ * Per-hue amplitude (k_hue_amp[]):
+ *   Base amplitude 3.0 → ±3 DAC codes peak (±~222 mV at the TV, 74 mV/LSB).
+ *   Hues 5-7 (red, red-orange, orange) are boosted to 4.1 so their
+ *   30°-off-axis peaks cross the rounding threshold from ±3 to ±4,
+ *   producing richer reds and browns on the 4-bit DAC.
+ * ------------------------------------------------------------------------- */
 static int8_t chroma_lut[13][4];
+
+/* Per-hue chroma amplitude.  Most hues use 3.0; red/orange hues are boosted. */
+/*                         grey  1     2     3     4     5     6     7     8     9    10    11    12 */
+static const float k_hue_amp[13] = {
+    0.0f, 3.0f, 3.0f, 3.0f, 3.0f, 4.1f, 4.1f, 4.1f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f
+};
 
 void build_chroma_lut(void) {
     memset(chroma_lut[0], 0, sizeof(chroma_lut[0]));  /* hue 0 = greyscale */
     for (int hue = 1; hue < 13; hue++) {
-        float phase_rad = (float)(hue - 1) * 30.0f * (float)M_PI / 180.0f;
+        float phase_rad = (float)(hue - 2) * 30.0f * (float)M_PI / 180.0f;
         for (int s = 0; s < 4; s++) {
             float sc = (float)s * (float)M_PI / 2.0f;
-            chroma_lut[hue][s] = (int8_t)roundf(2.5f * cosf(sc + phase_rad));
+            chroma_lut[hue][s] = (int8_t)roundf(k_hue_amp[hue] * cosf(sc + phase_rad));
         }
     }
 }
@@ -106,15 +136,46 @@ static uint8_t s_dac_lut[64][4];
  * Rebuild + reflash to toggle; no other files need changing. */
 #define MICRONES_CHROMA_ENABLED 1
 
+/* -------------------------------------------------------------------------
+ * Per-brightness-row chroma scaling (numerator / 8).
+ *
+ * The real NES 2C02 PPU varies its chroma modulation depth by brightness
+ * row.  Dark colors have less chroma than medium/bright; row 3 colors are
+ * pastels (high luma, very low chroma).  Without this scaling, dark areas
+ * appear oversaturated and pastels appear too vivid on the 4-bit DAC.
+ *
+ *   Row 0 ($0x): dark   — ×6/8  (moderate chroma)
+ *   Row 1 ($1x): medium — ×8/8  (full chroma)
+ *   Row 2 ($2x): bright — ×8/8  (full chroma)
+ *   Row 3 ($3x): pastel — ×3/8  (desaturated, high luma)
+ * ------------------------------------------------------------------------- */
+static const int k_chroma_scale[4] = { 6, 8, 8, 3 };
+
+/*
+ * Build the precomputed DAC lookup table s_dac_lut[64][4].
+ *
+ * For each NES palette index (0-63) and each of the 4 subcarrier phases,
+ * computes the final clamped 4-bit DAC code:
+ *
+ *   dac = blank + (luma × 9) / 7 + chroma_lut[hue][phase] × row_scale / 8
+ *
+ * NES palette index bits:
+ *   [3:0] = hue  (0=grey, 1-12=color, 13-15=black)
+ *   [5:4] = brightness row (0=dark, 1=medium, 2=bright, 3=pastel)
+ *
+ * Called once at startup from video_ntsc_precompute_palette().
+ */
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
     for (int c = 0; c < 64; c++) {
         int luma     = (c < palette_size) ? (int)palette_to_luma[c] : 0;
         int dac_base = (int)VIDEO_DAC_BLANK + (luma * (int)VIDEO_LUMA_SCALE) / 7;
         int hue      = c & 0x0F;
-        if (hue > 12) hue = 0;
+        if (hue > 12) hue = 0;  /* $xD-$xF: no chroma (black) */
+        int row      = (c >> 4) & 3;
         for (int phase = 0; phase < 4; phase++) {
 #if MICRONES_CHROMA_ENABLED
-            int dac = dac_base + (int)chroma_lut[hue][phase];
+            int chroma = (int)chroma_lut[hue][phase] * k_chroma_scale[row] / 8;
+            int dac = dac_base + chroma;
 #else
             int dac = dac_base;   /* chroma disabled — luma only */
 #endif
@@ -186,7 +247,7 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
     for (uint i = VIDEO_SYNC_SAMPLES; i < VIDEO_BURST_START; i++)
         EMIT(VIDEO_DAC_BLANK);
 
-    /* Colorburst (72-111): 40 samples, 180° cosine ±2 around blank */
+    /* Colorburst (72-111): 40 samples, 180° cosine ±3 around blank */
     for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++)
         EMIT(k_burst_pattern[(VIDEO_BURST_START + i) & 3u]);
 
@@ -195,24 +256,45 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
          abs_s < VIDEO_ACTIVE_START; abs_s++)
         EMIT(VIDEO_DAC_BLANK);
 
-    /* Active video (116-873): 758 samples */
+    /* Active video (116-873): 758 samples
+     *
+     * The NES pixel clock is 5.3693 MHz; at 14.318 MHz sample rate each
+     * NES dot = 2.667 samples, so 256 pixels occupy ~683 samples.  The
+     * remaining 758−683 = 75 samples are blank border, split 37 left / 38
+     * right to centre the image within the NTSC active window.
+     *
+     * Subcarrier phase for the pixel region: the border adds 37 samples
+     * to the offset, so the first pixel sample is at absolute sample
+     * 116+37 = 153.  153 % 4 = 1, accounted for below.
+     */
+#define VIDEO_BORDER_LEFT   37u
+#define VIDEO_BORDER_RIGHT  38u
+#define VIDEO_PIXEL_SAMPLES (VIDEO_ACTIVE_SAMPLES - VIDEO_BORDER_LEFT - VIDEO_BORDER_RIGHT)  /* 683 */
+
     if (active && pixels != NULL) {
+        /* Left border */
+        for (uint i = 0; i < VIDEO_BORDER_LEFT; i++)
+            EMIT(VIDEO_DAC_BLANK);
+
         /*
-         * Map 256 NES pixels across 758 active samples using fixed-point
-         * integer scaling.  DAC code looked up directly from s_dac_lut,
-         * which was precomputed to include luma, chroma, and clamping.
-         *   pixel_inc = (256 << 16) / 758 = 17644  (≈256/758, 16.16 fixed)
-         * Phase: (VIDEO_ACTIVE_START + s) & 3 = s & 3 (since 116 % 4 == 0).
+         * Map 256 NES pixels across 683 active samples using fixed-point
+         * integer scaling.  DAC code looked up directly from s_dac_lut.
+         *   pixel_inc = (256 << 16) / 683 = 24563  (≈256/683, 16.16 fixed)
+         * Phase: first pixel sample is at absolute sample 153; 153 % 4 = 1.
          */
         uint32_t       pixel_fp  = 0u;
-        const uint32_t pixel_inc = (256u << 16u) / VIDEO_ACTIVE_SAMPLES;
+        const uint32_t pixel_inc = (256u << 16u) / VIDEO_PIXEL_SAMPLES;
 
-        for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++) {
+        for (uint s = 0; s < VIDEO_PIXEL_SAMPLES; s++) {
             uint pixel_idx = pixel_fp >> 16u;
             if (pixel_idx >= 256u) pixel_idx = 255u;
             pixel_fp += pixel_inc;
-            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu][s & 3u]);
+            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu][(VIDEO_BORDER_LEFT + s) & 3u]);
         }
+
+        /* Right border */
+        for (uint i = 0; i < VIDEO_BORDER_RIGHT; i++)
+            EMIT(VIDEO_DAC_BLANK);
     } else {
         for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++)
             EMIT(VIDEO_DAC_BLANK);
