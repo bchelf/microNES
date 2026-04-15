@@ -115,11 +115,11 @@ static uint8_t s_dac_lut[64][4];
  * Per-row chroma scaling (numerator, denominator 8).
  * Derived from real NES 2C02 PPU voltage swings:
  *   Row 0: chroma ≈ 0.194V → ×5/8 = 0.625
- *   Row 1: chroma ≈ 0.264V → ×8/8 = 1.000
- *   Row 2: chroma ≈ 0.274V → ×8/8 = 1.000
+ *   Row 1: chroma ≈ 0.264V → ×7/8 = 0.875
+ *   Row 2: chroma ≈ 0.274V → ×7/8 = 0.875
  *   Row 3: chroma ≈ 0.110V → ×3/8 = 0.375  (pastels / desaturated)
  */
-static const int k_chroma_scale[4] = { 5, 8, 8, 3 };
+static const int k_chroma_scale[4] = { 5, 7, 7, 3 };
 
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
     for (int c = 0; c < 64; c++) {
