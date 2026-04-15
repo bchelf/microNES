@@ -59,32 +59,51 @@
 #include <stdbool.h>
 
 /* =========================================================================
- * Colorburst pattern
+ * NTSC color encoding
  *
- * 180° cosine, amplitude ±3 DAC codes around blank (code 4):
+ * The 4-bit DAC has only 16 levels (0-15), so color fidelity is limited.
+ * Three cooperating tables control the final composite waveform:
+ *
+ *   k_burst_pattern[4]  — colorburst reference signal (180° cosine, ±3)
+ *   chroma_lut[13][4]   — per-hue chroma modulation (built by build_chroma_lut)
+ *   k_chroma_scale[4]   — per-brightness-row attenuation (applied in precompute)
+ *
+ * The TV's ACC (automatic color control) loop locks to the burst amplitude
+ * and uses it as the gain reference for decoding active-video chroma.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * Colorburst pattern — 180° cosine, amplitude ±3 DAC codes around blank (4)
+ *
  *   Phase 0 (0°)  : cos(0°+180°)  = −1 → 4−3 = 1
  *   Phase 1 (90°) : cos(90°+180°) =  0 → 4
  *   Phase 2 (180°): cos(180°+180°)= +1 → 4+3 = 7
  *   Phase 3 (270°): cos(270°+180°)=  0 → 4
  *
- * Index by (absolute_sample_index & 3).  Burst begins at sample 72;
+ * Indexed by (absolute_sample_index & 3).  Burst begins at sample 72;
  * 72 & 3 = 0 → first burst sample = code 1 (peak-negative). ✓
- * ========================================================================= */
+ * ------------------------------------------------------------------------- */
 static const uint8_t k_burst_pattern[4] = { 1, 4, 7, 4 };
 
-/* =========================================================================
+/* -------------------------------------------------------------------------
  * Chroma LUT  [hue 0-12][subcarrier phase 0-3]
  *
- * value = roundf(amp[hue] × cos(s × π/2 + (hue-2) × 30° × π/180))
+ * value = roundf(k_hue_amp[hue] × cos(s × π/2 + (hue-2) × 30° × π/180))
  *
- * Base amplitude 3.0 → ±3 DAC codes peak → ±~222 mV at the TV (74 mV/LSB).
- * Hues 5-7 (red, red-orange, orange) boosted to 4.1 for richer reds/browns.
- * The (hue-2) term aligns NES hue 8 with the 180° colorburst: the NES PPU
- * generates burst at the same phase as hue 8, so hue 8 must equal 180°.
- * (hue-2)*30° gives hue 8 = 6*30° = 180°.  ✓
- * ========================================================================= */
+ * Phase alignment:
+ *   The (hue-2) term aligns NES hue 8 with the 180° colorburst.  The NES
+ *   PPU generates burst at the same phase as hue 8 (the yellow/olive column),
+ *   so hue 8 must map to 180°.  (hue-2)*30° gives hue 8 = 6×30° = 180°. ✓
+ *
+ * Per-hue amplitude (k_hue_amp[]):
+ *   Base amplitude 3.0 → ±3 DAC codes peak (±~222 mV at the TV, 74 mV/LSB).
+ *   Hues 5-7 (red, red-orange, orange) are boosted to 4.1 so their
+ *   30°-off-axis peaks cross the rounding threshold from ±3 to ±4,
+ *   producing richer reds and browns on the 4-bit DAC.
+ * ------------------------------------------------------------------------- */
 static int8_t chroma_lut[13][4];
 
+/* Per-hue chroma amplitude.  Most hues use 3.0; red/orange hues are boosted. */
 /*                         grey  1     2     3     4     5     6     7     8     9    10    11    12 */
 static const float k_hue_amp[13] = {
     0.0f, 3.0f, 3.0f, 3.0f, 3.0f, 4.1f, 4.1f, 4.1f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f
@@ -117,22 +136,41 @@ static uint8_t s_dac_lut[64][4];
  * Rebuild + reflash to toggle; no other files need changing. */
 #define MICRONES_CHROMA_ENABLED 1
 
-/*
- * Per-row chroma scaling (numerator, denominator 8).
- * Derived from real NES 2C02 PPU voltage swings:
- *   Row 0: chroma ≈ 0.194V → ×6/8 = 0.750
- *   Row 1: chroma ≈ 0.264V → ×8/8 = 1.000
- *   Row 2: chroma ≈ 0.274V → ×8/8 = 1.000
- *   Row 3: chroma ≈ 0.110V → ×3/8 = 0.375  (pastels / desaturated)
- */
+/* -------------------------------------------------------------------------
+ * Per-brightness-row chroma scaling (numerator / 8).
+ *
+ * The real NES 2C02 PPU varies its chroma modulation depth by brightness
+ * row.  Dark colors have less chroma than medium/bright; row 3 colors are
+ * pastels (high luma, very low chroma).  Without this scaling, dark areas
+ * appear oversaturated and pastels appear too vivid on the 4-bit DAC.
+ *
+ *   Row 0 ($0x): dark   — ×6/8  (moderate chroma)
+ *   Row 1 ($1x): medium — ×8/8  (full chroma)
+ *   Row 2 ($2x): bright — ×8/8  (full chroma)
+ *   Row 3 ($3x): pastel — ×3/8  (desaturated, high luma)
+ * ------------------------------------------------------------------------- */
 static const int k_chroma_scale[4] = { 6, 8, 8, 3 };
 
+/*
+ * Build the precomputed DAC lookup table s_dac_lut[64][4].
+ *
+ * For each NES palette index (0-63) and each of the 4 subcarrier phases,
+ * computes the final clamped 4-bit DAC code:
+ *
+ *   dac = blank + (luma × 9) / 7 + chroma_lut[hue][phase] × row_scale / 8
+ *
+ * NES palette index bits:
+ *   [3:0] = hue  (0=grey, 1-12=color, 13-15=black)
+ *   [5:4] = brightness row (0=dark, 1=medium, 2=bright, 3=pastel)
+ *
+ * Called once at startup from video_ntsc_precompute_palette().
+ */
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
     for (int c = 0; c < 64; c++) {
         int luma     = (c < palette_size) ? (int)palette_to_luma[c] : 0;
         int dac_base = (int)VIDEO_DAC_BLANK + (luma * (int)VIDEO_LUMA_SCALE) / 7;
         int hue      = c & 0x0F;
-        if (hue > 12) hue = 0;
+        if (hue > 12) hue = 0;  /* $xD-$xF: no chroma (black) */
         int row      = (c >> 4) & 3;
         for (int phase = 0; phase < 4; phase++) {
 #if MICRONES_CHROMA_ENABLED
