@@ -78,7 +78,7 @@ static const uint8_t k_burst_pattern[4] = { 1, 4, 7, 4 };
  * value = roundf(amp[hue] × cos(s × π/2 + (hue-2) × 30° × π/180))
  *
  * Base amplitude 3.0 → ±3 DAC codes peak → ±~222 mV at the TV (74 mV/LSB).
- * Hues 5-7 (red, red-orange, orange) boosted to 3.5 for richer reds/browns.
+ * Hues 5-7 (red, red-orange, orange) boosted to 4.1 for richer reds/browns.
  * The (hue-2) term aligns NES hue 8 with the 180° colorburst: the NES PPU
  * generates burst at the same phase as hue 8, so hue 8 must equal 180°.
  * (hue-2)*30° gives hue 8 = 6*30° = 180°.  ✓
@@ -87,7 +87,7 @@ static int8_t chroma_lut[13][4];
 
 /*                         grey  1     2     3     4     5     6     7     8     9    10    11    12 */
 static const float k_hue_amp[13] = {
-    0.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.5f, 3.5f, 3.5f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f
+    0.0f, 3.0f, 3.0f, 3.0f, 3.0f, 4.1f, 4.1f, 4.1f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f
 };
 
 void build_chroma_lut(void) {
@@ -120,12 +120,12 @@ static uint8_t s_dac_lut[64][4];
 /*
  * Per-row chroma scaling (numerator, denominator 8).
  * Derived from real NES 2C02 PPU voltage swings:
- *   Row 0: chroma ≈ 0.194V → ×5/8 = 0.625
+ *   Row 0: chroma ≈ 0.194V → ×6/8 = 0.750
  *   Row 1: chroma ≈ 0.264V → ×8/8 = 1.000
  *   Row 2: chroma ≈ 0.274V → ×8/8 = 1.000
  *   Row 3: chroma ≈ 0.110V → ×3/8 = 0.375  (pastels / desaturated)
  */
-static const int k_chroma_scale[4] = { 5, 8, 8, 3 };
+static const int k_chroma_scale[4] = { 6, 8, 8, 3 };
 
 void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_size) {
     for (int c = 0; c < 64; c++) {
