@@ -52,7 +52,8 @@
 #  define MICRONES_PIO_CLKDIV       2.0f
 
 /*
- * Audio PWM: clkdiv=1.25, wrap=5249 → f = 315,000,000 / (1.25 × 5250) = 48,000 Hz
+ * Audio PWM sample-rate timer: clkdiv=1.25, wrap=5249
+ * → f_sample = 315,000,000 / (1.25 × 5250) = 48,000 Hz
  */
 #  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
 #  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  4u
@@ -77,7 +78,8 @@
 #  define MICRONES_PIO_CLKDIV       1.0f
 
 /*
- * Audio PWM: clkdiv=1.25, wrap=2624 → f = 157,500,000 / (1.25 × 2625) = 48,000 Hz
+ * Audio PWM sample-rate timer: clkdiv=1.25, wrap=2624
+ * → f_sample = 157,500,000 / (1.25 × 2625) = 48,000 Hz
  */
 #  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
 #  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  4u
@@ -104,8 +106,9 @@
 #  define MICRONES_PIO_CLKDIV       2.0f
 
 /*
- * Audio PWM: clkdiv=1.0, wrap=5207 → f = 250,000,000 / 5208 = 48,003 Hz
- * This is close enough for debug-only builds; 250 MHz is not the analog target.
+ * Audio PWM sample-rate timer: clkdiv=1.0, wrap=5207
+ * → f_sample = 250,000,000 / 5208 = 48,003 Hz
+ * Close enough for debug-only builds; 250 MHz is not the analog target.
  */
 #  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
 #  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  0u
@@ -114,5 +117,17 @@
 #else
 #  error "MICRONES_SYS_CLK_MHZ must be 315, 250, or 157"
 #endif
+
+/*
+ * Audio PWM carrier — identical for all clock speeds.
+ * clkdiv = 1.0, wrap = 255  →  f_carrier = sys_clk / 256
+ *   315 MHz → 1,230,469 Hz
+ *   250 MHz →   976,563 Hz
+ *   157 MHz →   615,234 Hz
+ * Resolution = 256 levels = 8 bits (sufficient for NES audio).
+ */
+#define MICRONES_AUDIO_PWM_CARRIER_CLKDIV_INT   1u
+#define MICRONES_AUDIO_PWM_CARRIER_CLKDIV_FRAC  0u
+#define MICRONES_AUDIO_PWM_CARRIER_WRAP         255u
 
 #endif /* MICRONES_CLOCK_CONFIG_H */

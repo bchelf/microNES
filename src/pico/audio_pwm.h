@@ -12,19 +12,23 @@
  *       → 100µF DC-blocking cap → 10kΩ bleeder to GND → output jack.
  *   BAT85 ESD diode pair on the output.
  *
- * PWM configuration at 315 MHz system clock:
- *   wrap       = 5249  (5250 levels)
- *   clkdiv     = 1.25  (int=1, frac=4)
- *   f_carrier  = 315,000,000 / (1.25 * 5250) = 48,000 Hz exactly
- *   resolution = 5250 levels ≈ 12.4 bits  (well above 8-bit minimum)
+ * Two PWM slices are used:
  *
- * Sample rate: PWM wrap interrupt fires at 48,000 Hz.
- * The interrupt handler pops one sample from the ring buffer each wrap.
+ *   1. Carrier slice (GP9, slice 4):
+ *      Free-running PWM at ~1.23 MHz (315 MHz / 256) with 8-bit resolution.
+ *      No interrupt — just holds whatever level is written.
+ *
+ *   2. Sample-rate timer slice (slice 0, no GPIO):
+ *      Wraps at exactly 48,000 Hz.  Its wrap interrupt pops one sample from
+ *      the ring buffer and writes the new level to the carrier slice.
+ *
+ * The high carrier frequency is attenuated >50 dB by the two-pole RC filter
+ * (f_c = 15.9 kHz), vs ~20 dB for the old 48 kHz carrier.
  *
  * The ring buffer is filled from Core 0's main loop via audio_pwm_push_samples().
- * The PWM wrap interrupt runs on Core 0 (same core as the NES CPU loop);
+ * The timer interrupt runs on Core 0 (same core as the NES CPU loop);
  * interrupt latency and execution time are well within the emulator's per-cycle
- * budget (~7,000 CPU cycles between interrupts at 315 MHz / 44.1 kHz).
+ * budget (~6,500 cycles between interrupts at 315 MHz / 48 kHz).
  */
 
 #define MICRONES_AUDIO_PIN  9u   /* GP9 */
