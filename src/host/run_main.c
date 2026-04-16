@@ -1,6 +1,7 @@
 #include "audio_sdl.h"
 #include "frame_pacer.h"
 #include "nes.h"
+#include "smb1_bg_classifier.h"
 #include "wav_write.h"
 #include "window_sdl.h"
 
@@ -29,6 +30,7 @@ typedef struct {
     bool throttled;
     bool apu_stats;
     bool apu_write_summary;
+    bool transparent_bg;
     uint64_t max_frames;
     const char *dump_wav_path;
     double dump_wav_seconds;
@@ -42,7 +44,7 @@ typedef struct {
 
 static void print_usage(const char *argv0) {
     printf(
-        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--dump-wav path] [--dump-wav-seconds N]\n",
+        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--transparent-bg] [--dump-wav path] [--dump-wav-seconds N]\n",
         argv0
     );
 }
@@ -124,6 +126,7 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     options->throttled = true;
     options->apu_stats = false;
     options->apu_write_summary = false;
+    options->transparent_bg = false;
     options->max_frames = 0;
     options->dump_wav_path = NULL;
     options->dump_wav_seconds = 2.0;
@@ -219,6 +222,14 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
         }
         if (strcmp(arg, "--apu-write-summary") == 0) {
             options->apu_write_summary = true;
+            continue;
+        }
+        if (strcmp(arg, "--transparent-bg") == 0) {
+            options->transparent_bg = true;
+            continue;
+        }
+        if (strcmp(arg, "--no-transparent-bg") == 0) {
+            options->transparent_bg = false;
             continue;
         }
         if (strcmp(arg, "--dump-wav") == 0) {
@@ -491,7 +502,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    window = host_sdl_window_create("micrones - SMB1", options.scale, options.enable_vsync, options.enable_color);
+    window = host_sdl_window_create(
+        "micrones - SMB1",
+        options.scale,
+        options.enable_vsync,
+        options.enable_color,
+        options.transparent_bg
+    );
     if (window == NULL) {
         fprintf(stderr, "SDL window init failed: %s\n", host_sdl_window_last_error());
         return 2;
@@ -505,6 +522,9 @@ int main(int argc, char **argv) {
     }
 
     nes_reset(&nes);
+    if (options.transparent_bg) {
+        ppu_set_bg_tile_classifier(&nes.ppu, smb1_bg_tile_is_interactive, NULL);
+    }
     nes_audio_set_mix_enable_mask(&nes, options.audio_mix_mask);
     nes_audio_set_test_tone(&nes, options.test_tone);
     nes_audio_debug_reset_metrics(&nes);

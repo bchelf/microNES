@@ -1172,6 +1172,11 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
     uint8_t cached_low = 0;
     uint8_t cached_high = 0;
     uint8_t cached_palette_select = 0;
+    /* Per-tile-group cache of classifier result.  When no classifier is
+     * installed, treat every tile as interactive so we fall back to
+     * normal rendering. */
+    bool cached_bg_interactive = true;
+    bool has_bg_classifier = ppu->bg_tile_classifier != NULL;
 
     sprite0.oam_index = 0;
     sprite0.y = ppu->oam[0];
@@ -1228,6 +1233,9 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                 cached_palette_select =
                     (uint8_t)((attr >> ((((bg_coarse_y & 0x02u) << 1) | (coarse_x & 0x02u)))) & 0x03u);
                 cached_tile_group = tile_group;
+                cached_bg_interactive =
+                    !has_bg_classifier ||
+                    ppu->bg_tile_classifier(tile, ppu->bg_tile_classifier_user);
             }
 
             {
@@ -1266,6 +1274,15 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
 #if MICRONES_ENABLE_RUNTIME_DIAGNOSTICS
             ++ppu->sprite_composited_pixel_count;
 #endif
+        } else if (has_bg_classifier) {
+            /* No sprite wins this pixel.  If BG is transparent (universal
+             * color), or rendering was suppressed (!show_bg / left-mask),
+             * or the covering tile is classified non-interactive, emit
+             * the transparency sentinel.  This runs strictly after
+             * sprite-0 hit evaluation, which consumes the real opacity. */
+            if (!background.opaque || !cached_bg_interactive) {
+                color = PPU_COLOR_TRANSPARENT;
+            }
         }
 
 #if MICRONES_ENABLE_FRAMEBUFFER
@@ -1620,6 +1637,11 @@ void ppu_cpu_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t val
 
 void ppu_set_render_target(Ppu *ppu, NesFrameBuffer *fb) {
     ppu->active_frame_buffer = (fb != NULL) ? fb : &ppu->frame_buffer;
+}
+
+void ppu_set_bg_tile_classifier(Ppu *ppu, PpuBgTileClassifier fn, void *user) {
+    ppu->bg_tile_classifier = fn;
+    ppu->bg_tile_classifier_user = user;
 }
 
 const NesFrameBuffer *ppu_framebuffer(const Ppu *ppu) {

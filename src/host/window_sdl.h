@@ -6,7 +6,7 @@
 
 typedef struct HostSdlWindow HostSdlWindow;
 
-HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color);
+HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color, bool enable_transparent);
 void host_sdl_window_destroy(HostSdlWindow *window);
 bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, int width, int height);
 bool host_sdl_window_present(HostSdlWindow *window);

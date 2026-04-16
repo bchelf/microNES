@@ -16,6 +16,21 @@ enum {
     PPU_VISIBLE_WRITE_DIAG_MAX = 32,
 };
 
+/* Sentinel color value written to the framebuffer when a BG pixel is
+ * classified as non-interactive (see ppu_set_bg_tile_classifier).  Valid
+ * NES palette indices are 0x00..0x3F, so 0xFE cannot collide with real
+ * palette output.  Host frontends interpret this value as "fully
+ * transparent" when rendering into a composited window. */
+#define PPU_COLOR_TRANSPARENT 0xFEu
+
+/* Classifier callback: given a background nametable tile index, return
+ * true if the tile represents something the player can physically
+ * interact with (ground, bricks, pipes, blocks, etc.) and should remain
+ * visible, or false for decorative background (sky, clouds, hills, HUD
+ * you want hidden, etc.).  The classifier is invoked once per covering
+ * tile per scanline, not per pixel. */
+typedef bool (*PpuBgTileClassifier)(uint8_t tile_index, void *user);
+
 typedef enum {
     PPU_SPRITE0_REJECT_NONE = 0,
     PPU_SPRITE0_REJECT_RENDER_DISABLED,
@@ -248,11 +263,19 @@ typedef struct {
     NesFrameBuffer frame_buffer;
     NesFrameBuffer *active_frame_buffer; /* render target; points to frame_buffer by default */
     NesScanline scanline_buffer;
+    /* Optional non-interactive BG tile filter.  When set, any BG pixel
+     * whose covering nametable tile fails the classifier is replaced with
+     * PPU_COLOR_TRANSPARENT in the framebuffer before sprite composition
+     * reads it.  Sprite-0 hit and other diagnostics see the real palette
+     * values, not the sentinel. */
+    PpuBgTileClassifier bg_tile_classifier;
+    void *bg_tile_classifier_user;
 } Ppu;
 
 void ppu_init(Ppu *ppu);
 void ppu_reset(Ppu *ppu);
 void ppu_set_render_target(Ppu *ppu, NesFrameBuffer *fb);
+void ppu_set_bg_tile_classifier(Ppu *ppu, PpuBgTileClassifier fn, void *user);
 void ppu_set_sprite0_diag_window(Ppu *ppu, uint64_t frame_start, uint64_t frame_end);
 void ppu_step_cycles(Ppu *ppu, NesCartridge *cartridge, uint32_t cycles);
 
