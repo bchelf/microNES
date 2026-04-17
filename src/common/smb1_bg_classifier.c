@@ -18,7 +18,6 @@
  *   0x25–0x38  hills, bushes, clouds, decorative scenery
  *   0x39–0x3C  cloud base row
  *   0x42–0x44, 0x46, 0x48–0x4A  castle edge/tower decorations
- *   0x26       sky / hollow pipe interior (decorative in both contexts)
  *   0x28, 0x29, 0x2E  HUD punctuation
  *   0xCE, 0xCF  HUD symbol variants
  *   0xD0–0xE8  castle wall tiles
@@ -47,7 +46,9 @@ static const bool k_smb1_bg_tile_interactive[256] = {
     /* coins (background tile, animated frames) */
     [0x50] = true, [0x74] = true, [0x75] = true, [0x76] = true,
 
-    /* pipes — cap (top-left, top-right) and shaft (body-left, body-right) */
+    /* pipes — cap and shaft; 0x26 is the pipe-shaft inner tile
+     * (confirmed: nametable shows shaft rows as 0x68 0x69 0x26 0x6A) */
+    [0x26] = true,
     [0x60] = true, [0x61] = true, [0x62] = true, [0x63] = true,
     [0x64] = true, [0x65] = true, [0x66] = true, [0x67] = true,
     [0x68] = true, [0x69] = true, [0x6A] = true,
@@ -56,7 +57,11 @@ static const bool k_smb1_bg_tile_interactive[256] = {
     /* underground / bonus-room ground */
     [0x84] = true, [0x85] = true, [0x86] = true, [0x87] = true,
 
-    /* staircase / step blocks */
+    /* staircase / step blocks — 0x7E/0x7F are the solid step fill;
+     * 0x70/0x71 are the exposed face profiles (triangular staircase silhouette)
+     * visible on the end-of-level staircase; 0x72/0x73 are the block surfaces
+     * that form the step tops and flagpole-base block faces */
+    [0x70] = true, [0x71] = true, [0x72] = true, [0x73] = true,
     [0x7E] = true, [0x7F] = true,
 
     /* vine / flagpole shaft */
