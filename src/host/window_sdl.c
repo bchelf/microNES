@@ -17,6 +17,7 @@ struct HostSdlWindow {
     int rgba_pitch_bytes;
     bool enable_color;
     bool enable_transparent;
+    uint8_t opaque_alpha;   /* alpha for non-transparent pixels; 0xFF = fully opaque */
 };
 
 static char g_host_sdl_window_last_error[256];
@@ -88,7 +89,7 @@ static void host_convert_palette_to_rgba(uint8_t palette_index, uint8_t *rgba_ou
     rgba_out[3] = 0xffu;
 }
 
-HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color, bool enable_transparent) {
+HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color, bool enable_transparent, int opacity_percent) {
     HostSdlWindow *window;
     SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
 
@@ -192,6 +193,12 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
     }
     window->enable_color = enable_color;
     window->enable_transparent = enable_transparent;
+    if (enable_transparent && opacity_percent < 100) {
+        int clamped = opacity_percent < 0 ? 0 : opacity_percent;
+        window->opaque_alpha = (uint8_t)(clamped * 255 / 100);
+    } else {
+        window->opaque_alpha = 0xffu;
+    }
 
     return window;
 }
@@ -229,8 +236,10 @@ bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, 
             host_write_transparent(rgba);
         } else if (window->enable_color) {
             host_convert_palette_to_rgba(pixel, rgba);
+            rgba[3] = window->opaque_alpha;
         } else {
             host_convert_gray_to_rgba(pixel, rgba);
+            rgba[3] = window->opaque_alpha;
         }
     }
 

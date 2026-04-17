@@ -31,6 +31,7 @@ typedef struct {
     bool apu_stats;
     bool apu_write_summary;
     bool transparent_bg;
+    int opacity;
     uint64_t max_frames;
     const char *dump_wav_path;
     double dump_wav_seconds;
@@ -40,11 +41,12 @@ typedef struct {
 
 typedef struct {
     int counts[8];
+    bool dump_nametable;
 } HostInputState;
 
 static void print_usage(const char *argv0) {
     printf(
-        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--transparent-bg] [--dump-wav path] [--dump-wav-seconds N]\n",
+        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--transparent-bg] [--opacity 0-100] [--dump-wav path] [--dump-wav-seconds N]\n",
         argv0
     );
 }
@@ -127,6 +129,7 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     options->apu_stats = false;
     options->apu_write_summary = false;
     options->transparent_bg = false;
+    options->opacity = 100;
     options->max_frames = 0;
     options->dump_wav_path = NULL;
     options->dump_wav_seconds = 2.0;
@@ -230,6 +233,15 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
         }
         if (strcmp(arg, "--no-transparent-bg") == 0) {
             options->transparent_bg = false;
+            continue;
+        }
+        if (strcmp(arg, "--opacity") == 0) {
+            if (i + 1 >= argc || !parse_int_arg(argv[i + 1], &options->opacity) ||
+                options->opacity < 0 || options->opacity > 100) {
+                fprintf(stderr, "--opacity requires an integer 0-100\n");
+                return false;
+            }
+            ++i;
             continue;
         }
         if (strcmp(arg, "--dump-wav") == 0) {
@@ -446,7 +458,11 @@ static bool host_process_events(bool *running, HostInputState *input) {
             return true;
         case SDL_EVENT_KEY_DOWN:
             if (!event.key.repeat) {
-                host_update_button_state(input, event.key.scancode, true);
+                if (event.key.scancode == SDL_SCANCODE_F1) {
+                    input->dump_nametable = true;
+                } else {
+                    host_update_button_state(input, event.key.scancode, true);
+                }
             }
             break;
         case SDL_EVENT_KEY_UP:
@@ -507,7 +523,8 @@ int main(int argc, char **argv) {
         options.scale,
         options.enable_vsync,
         options.enable_color,
-        options.transparent_bg
+        options.transparent_bg,
+        options.opacity
     );
     if (window == NULL) {
         fprintf(stderr, "SDL window init failed: %s\n", host_sdl_window_last_error());
@@ -546,6 +563,9 @@ int main(int argc, char **argv) {
     printf("target fps: %.4f\n", micrones_frame_pacer_target_fps());
     printf("vsync: %s\n", options.enable_vsync ? "on" : "off");
     printf("display mode: %s\n", options.enable_color ? "color" : "grayscale");
+    if (options.transparent_bg) {
+        printf("opacity: %d%%\n", options.opacity);
+    }
     printf("audio: %s", host_audio_sdl_is_enabled(audio) ? "on" : "off");
     if (host_audio_sdl_is_enabled(audio)) {
         printf(" sample_rate=%u", nes_audio_sample_rate(&nes));
@@ -630,6 +650,24 @@ int main(int argc, char **argv) {
         }
         if (!running) {
             break;
+        }
+
+        if (input.dump_nametable) {
+            input.dump_nametable = false;
+            fprintf(stderr, "=== nametable dump (frame %" PRIu64 ") ===\n", nes.ppu.completed_frame_count);
+            fprintf(stderr, "     ");
+            for (int col = 0; col < 32; ++col) {
+                fprintf(stderr, "%02X ", col);
+            }
+            fprintf(stderr, "\n");
+            for (int row = 0; row < 30; ++row) {
+                fprintf(stderr, "r%02d: ", row);
+                for (int col = 0; col < 32; ++col) {
+                    fprintf(stderr, "%02X ", nes.ppu.nametables[row * 32 + col]);
+                }
+                fprintf(stderr, "\n");
+            }
+            fprintf(stderr, "=== end nametable dump ===\n");
         }
 
         ++presented_frames;
