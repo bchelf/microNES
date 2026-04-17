@@ -205,11 +205,18 @@ typedef struct {
     bool frame_irq_inhibit;
     int16_t pcm[APU_PCM_CAPACITY];
     /* First-order HP filter state (y[n] = x[n] - x[n-1] + alpha*y[n-1]).
-     * alpha = 0.995 → ~38 Hz corner at 48 kHz, matches Mesen's output chain
-     * and preserves NES-style bass while removing DC drift / note-off clicks.
-     * float is sufficient; double costs ~250 cycles/sample in SW on LX7. */
+     * alpha ≈ 0.988 → ~90 Hz corner at 48 kHz, approximating the combined
+     * effect of the real 2A03's ~90 Hz + ~440 Hz output HP stages.  Shorter
+     * note-on transient tail than a softer corner while still preserving
+     * most of the bass content.  float is sufficient; double costs ~250
+     * cycles/sample in SW on LX7. */
     float hp_prev_x;
     float hp_prev_y;
+    /* First-order LP filter state (y[n] = y[n-1] + alpha*(x[n] - y[n-1])).
+     * alpha ≈ 0.84 → ~14 kHz corner at 48 kHz, approximating the real NES
+     * analog output rolloff and masking aliasing produced by the mixer's
+     * nearest-sample snapshot of a 1.789 MHz APU. */
+    float lp_prev_y;
     ApuDebugSampleStats channel_stats[APU_DEBUG_CHANNEL_COUNT];
     ApuPulseChannel pulse[2];
     ApuTriangleChannel triangle;

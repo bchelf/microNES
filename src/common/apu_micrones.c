@@ -538,17 +538,25 @@ static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
     }
     int32_t mixed_raw = (int32_t)s_pulse_mix_table[pulse1_raw + pulse2_raw] + tnd_mix;
 
-    /* First-order HP filter: y[n] = x[n] - x[n-1] + alpha * y[n-1].
-     * alpha = 0.995 → ~38 Hz corner @ 48 kHz (~matches Mesen). Removes the
-     * triangle's held-DC tail on note-off and the DC bias of the NES mixer,
-     * while preserving bass content down to ~40 Hz. */
-    const float k_hp_alpha = 0.995f;
+    /* Stage 1 — first-order HP: y[n] = x[n] - x[n-1] + alpha * y[n-1].
+     * alpha ≈ 0.988 → ~90 Hz corner @ 48 kHz, approximating the real 2A03's
+     * combined ~90 Hz + ~440 Hz output HP stages.  Removes held DC (triangle
+     * tail on note-off, mixer DC bias) and tightens note-on transients. */
+    const float k_hp_alpha = 0.988f;
     float x = (float)mixed_raw;
-    float y = x - apu->hp_prev_x + k_hp_alpha * apu->hp_prev_y;
+    float y_hp = x - apu->hp_prev_x + k_hp_alpha * apu->hp_prev_y;
     apu->hp_prev_x = x;
-    apu->hp_prev_y = y;
+    apu->hp_prev_y = y_hp;
 
-    int sample = (int)lrintf(y);
+    /* Stage 2 — first-order LP: y[n] = y[n-1] + alpha*(x[n] - y[n-1]).
+     * alpha ≈ 0.84 → ~14 kHz corner @ 48 kHz.  Masks aliasing produced by
+     * the mixer's nearest-sample snapshot of a 1.789 MHz APU (pulse duty
+     * edges and high-pitch triangle steps fall above Nyquist). */
+    const float k_lp_alpha = 0.84f;
+    float y_lp = apu->lp_prev_y + k_lp_alpha * (y_hp - apu->lp_prev_y);
+    apu->lp_prev_y = y_lp;
+
+    int sample = (int)lrintf(y_lp);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -594,16 +602,18 @@ void apu_init(Apu *apu) {
 }
 
 void apu_reset(Apu *apu) {
-    /* Preserve the HP filter state across reset so the first post-reset sample
-     * isn't a step from 0 to the mixer's DC bias (audible pop).  Also preserve
-     * the DMC bus-read callback, which is wired once at Nes init time. */
+    /* Preserve the HP/LP filter state across reset so the first post-reset
+     * sample isn't a step from 0 to the mixer's DC bias (audible pop).  Also
+     * preserve the DMC bus-read callback, which is wired once at Nes init. */
     float hp_prev_x = apu->hp_prev_x;
     float hp_prev_y = apu->hp_prev_y;
+    float lp_prev_y = apu->lp_prev_y;
     ApuBusReadFn dmc_bus_read = apu->dmc_bus_read;
     void *dmc_bus_read_user = apu->dmc_bus_read_user;
     memset(apu, 0, sizeof(*apu));
     apu->hp_prev_x = hp_prev_x;
     apu->hp_prev_y = hp_prev_y;
+    apu->lp_prev_y = lp_prev_y;
     apu->dmc_bus_read = dmc_bus_read;
     apu->dmc_bus_read_user = dmc_bus_read_user;
     apu->pulse[0].sweep_ones_complement = true;
@@ -813,8 +823,14 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         if (pulse->enabled) {
             pulse->length_counter = k_apu_length_table[(value >> 3) & 0x1fu];
         }
-        /* Do not reset timer_counter or duty_step: the 2A03 duty sequencer is
-         * free-running and the timer reloads naturally at the next expiry. */
+        /* Per NesDev APU_Pulse: writing the 4th register resets the sequencer
+         * to position 0.  Without this, rapid note changes (e.g. the SMB1
+         * end-of-level countdown trill on pulse 2) inherit a random duty
+         * phase from the previous note; for duties 0/1/2, if the phase lands
+         * inside a run of 0-bits the note plays silent for its entire brief
+         * duration, collapsing the trill to a single audible pitch.  The
+         * timer itself is free-running and reloads at its next expiry. */
+        pulse->duty_step = 0;
         pulse->envelope_start = true;
         break;
     }
