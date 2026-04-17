@@ -37,6 +37,13 @@ static const uint16_t k_apu_noise_period_table[16] = {
     202, 254, 380, 508, 762, 1016, 2034, 4068,
 };
 
+/* NTSC DMC rate table: CPU cycles per output-unit clock.
+ * Source: NesDev wiki, APU DMC. PAL uses a different table; we are NTSC-only. */
+static const uint16_t k_apu_dmc_rate_table[16] = {
+    428, 380, 340, 320, 286, 254, 226, 214,
+    190, 160, 142, 128, 106,  84,  72,  54,
+};
+
 enum {
     APU_TEST_TONE_PULSE_PHASE = 0,
     APU_TEST_TONE_TRIANGLE_PHASE = 1,
@@ -224,16 +231,6 @@ static void apu_clock_noise_length(ApuNoiseChannel *noise) {
 
 static void apu_clock_triangle_linear(ApuTriangleChannel *triangle) {
     if (triangle->linear_reload_flag) {
-        /* When reloading from silence (counter was 0), reset the sequencer to
-         * a zero-value position so the waveform begins at the bottom of its
-         * cycle.  This prevents the click caused by the output jumping from
-         * silence to an arbitrary mid-waveform amplitude at note-on.  The
-         * real 2A03 does not reset the sequencer here, but without the NES
-         * hardware's analog output smoothing the discontinuity is clearly
-         * audible in digital emulation. */
-        if (triangle->linear_counter == 0) {
-            triangle->sequence_step = 15; /* sequence value 0 — zero crossing */
-        }
         triangle->linear_counter = triangle->linear_reload_value;
     } else if (triangle->linear_counter > 0) {
         --triangle->linear_counter;
@@ -379,13 +376,15 @@ static uint8_t apu_pulse_output(const ApuPulseChannel *pulse) {
 }
 
 static uint8_t apu_triangle_output(const ApuTriangleChannel *triangle) {
-    if (!triangle->enabled ||
-        triangle->length_counter == 0 ||
-        triangle->linear_counter == 0 ||
-        triangle->timer_period < 2u) {
+    /* Real 2A03: when length/linear counters reach 0 the sequencer stops being
+     * clocked but the DAC still emits the current sequence value. The NES's
+     * analog HP filters then decay the held DC to 0 over ~30 ms. Returning 0
+     * here produces an audible click at note-off; instead, rely on the HP in
+     * apu_mix_sample to remove the held DC. The period<2 gate remains purely
+     * to avoid aliasing through our nearest-sample mixer. */
+    if (triangle->timer_period < 2u) {
         return 0;
     }
-
     return k_apu_triangle_sequence[triangle->sequence_step];
 }
 
@@ -397,6 +396,61 @@ static uint8_t apu_noise_output(const ApuNoiseChannel *noise) {
     }
 
     return apu_noise_volume(noise);
+}
+
+/* DMC memory reader: if the sample buffer is empty and there are bytes left
+ * to fetch, read one byte from the CPU bus, wrap the address from $FFFF back
+ * to $8000, and either halt on end-of-sample or loop per $4010 bit 6.
+ * Real hardware stalls the CPU for 3-4 cycles on the fetch; we do not model
+ * that here — it is inaudible for SMB1's short DMC samples. */
+static void apu_dmc_memory_reader(Apu *apu) {
+    ApuDmcChannel *d = &apu->dmc;
+    if (d->sample_buffer_filled || d->bytes_remaining == 0u) {
+        return;
+    }
+    if (apu->dmc_bus_read == NULL) {
+        return;
+    }
+    d->sample_buffer = apu->dmc_bus_read(apu->dmc_bus_read_user, d->current_address);
+    d->sample_buffer_filled = true;
+    d->current_address = (uint16_t)(((d->current_address + 1u) & 0x7fffu) | 0x8000u);
+    --d->bytes_remaining;
+    if (d->bytes_remaining == 0u && d->loop_flag) {
+        d->current_address = d->sample_address;
+        d->bytes_remaining = d->sample_length;
+    }
+    /* IRQ on end-of-sample is intentionally not raised: SMB1 does not rely on
+     * it, and there is no IRQ line wired from the APU in this engine. */
+}
+
+/* DMC output: clocked at the timer rate. If not silenced, the low bit of the
+ * shift register steps output_level by ±2 (clamped to 0..127). When the shift
+ * register is exhausted, reload from the sample buffer if available; else
+ * latch silence. */
+static void apu_dmc_output_clock(Apu *apu) {
+    ApuDmcChannel *d = &apu->dmc;
+    if (!d->silence_flag) {
+        if ((d->shift_register & 0x01u) != 0u) {
+            if (d->output_level <= 125u) d->output_level = (uint8_t)(d->output_level + 2u);
+        } else {
+            if (d->output_level >= 2u) d->output_level = (uint8_t)(d->output_level - 2u);
+        }
+    }
+    d->shift_register >>= 1;
+    if (d->bits_remaining > 0u) {
+        --d->bits_remaining;
+    }
+    if (d->bits_remaining == 0u) {
+        d->bits_remaining = 8u;
+        if (d->sample_buffer_filled) {
+            d->silence_flag = false;
+            d->shift_register = d->sample_buffer;
+            d->sample_buffer_filled = false;
+            apu_dmc_memory_reader(apu);
+        } else {
+            d->silence_flag = true;
+        }
+    }
 }
 
 /* ---- NES hardware mixer lookup tables ----------------------------------------
@@ -434,6 +488,7 @@ static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
     int32_t pulse2_raw = (int32_t)apu_pulse_output(&apu->pulse[1]);
     int32_t triangle_raw = (int32_t)apu_triangle_output(&apu->triangle);
     int32_t noise_raw = (int32_t)apu_noise_output(&apu->noise);
+    int32_t dmc_raw = (int32_t)apu->dmc.output_level;  /* 0..127, held value */
 
     if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_PULSE1) {
         apu->test_tone_phase[APU_TEST_TONE_PULSE_PHASE] += k_apu_test_tone_step_pulse1;
@@ -441,6 +496,7 @@ static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
         pulse2_raw = 0;
         triangle_raw = 0;
         noise_raw = 0;
+        dmc_raw = 0;
     } else if (apu->test_tone_mode == APU_DEBUG_TEST_TONE_TRIANGLE) {
         uint32_t phase = apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] + k_apu_test_tone_step_triangle;
         apu->test_tone_phase[APU_TEST_TONE_TRIANGLE_PHASE] = phase;
@@ -449,33 +505,58 @@ static int16_t MICRONES_HOT_FUNC(apu_mix_sample)(Apu *apu) {
         pulse1_raw = 0;
         pulse2_raw = 0;
         noise_raw = 0;
+        dmc_raw = 0;
     }
 
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_PULSE1], pulse1_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_PULSE2], pulse2_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_TRIANGLE], triangle_raw);
     apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_NOISE], noise_raw);
-    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], 0);
+    apu_stats_note(&apu->channel_stats[APU_DEBUG_CHANNEL_DMC], dmc_raw);
 
     /* Apply per-channel debug mute mask (all-on by default; no-op in production) */
     if (!(apu->mix_enable_mask & APU_DEBUG_MASK_PULSE1))   pulse1_raw = 0;
     if (!(apu->mix_enable_mask & APU_DEBUG_MASK_PULSE2))   pulse2_raw = 0;
     if (!(apu->mix_enable_mask & APU_DEBUG_MASK_TRIANGLE)) triangle_raw = 0;
     if (!(apu->mix_enable_mask & APU_DEBUG_MASK_NOISE))    noise_raw = 0;
+    if (!(apu->mix_enable_mask & APU_DEBUG_MASK_DMC))      dmc_raw = 0;
 
-    /* Table lookup replaces 6 float divides with 2 lookups + integer add */
-    int32_t mixed_raw = (int32_t)s_pulse_mix_table[pulse1_raw + pulse2_raw]
-                      + s_tnd_mix_table[triangle_raw * 16 + noise_raw];
+    /* Pulse side: table lookup.  TND side: fast path when DMC is silent (the
+     * precomputed table covers tri*16+noise with dmc=0).  When DMC is active
+     * fall back to the exact non-linear formula for that sample.  SMB1 plays
+     * DMC only during percussive hits so the slow path runs maybe 30% of the
+     * time during music and never during silent frames. */
+    int32_t tnd_mix;
+    if (dmc_raw == 0) {
+        tnd_mix = s_tnd_mix_table[triangle_raw * 16 + noise_raw];
+    } else {
+        float tnd = (float)triangle_raw / 8227.0f
+                  + (float)noise_raw    / 12241.0f
+                  + (float)dmc_raw      / 22638.0f;
+        float v = 159.79f / (1.0f / tnd + 100.0f);
+        tnd_mix = (int32_t)lrintf(v * k_mix_table_scale);
+    }
+    int32_t mixed_raw = (int32_t)s_pulse_mix_table[pulse1_raw + pulse2_raw] + tnd_mix;
 
-    /* Leaky DC-level tracker to remove positive DC bias (~0.76 Hz corner).
-     * dc_level_tracker stores the DC estimate pre-scaled by 32767 so the
-     * update and output use integer-range arithmetic, eliminating two float
-     * multiplies per sample vs the normalise→track→denormalise approach. */
-    float dc = apu->dc_level_tracker;
-    dc += ((float)mixed_raw - dc) * 0.0001f;
-    apu->dc_level_tracker = dc;
+    /* Stage 1 — first-order HP: y[n] = x[n] - x[n-1] + alpha * y[n-1].
+     * alpha ≈ 0.988 → ~90 Hz corner @ 48 kHz, approximating the real 2A03's
+     * combined ~90 Hz + ~440 Hz output HP stages.  Removes held DC (triangle
+     * tail on note-off, mixer DC bias) and tightens note-on transients. */
+    const float k_hp_alpha = 0.988f;
+    float x = (float)mixed_raw;
+    float y_hp = x - apu->hp_prev_x + k_hp_alpha * apu->hp_prev_y;
+    apu->hp_prev_x = x;
+    apu->hp_prev_y = y_hp;
 
-    int sample = (int)lrintf((float)mixed_raw - dc);
+    /* Stage 2 — first-order LP: y[n] = y[n-1] + alpha*(x[n] - y[n-1]).
+     * alpha ≈ 0.84 → ~14 kHz corner @ 48 kHz.  Masks aliasing produced by
+     * the mixer's nearest-sample snapshot of a 1.789 MHz APU (pulse duty
+     * edges and high-pitch triangle steps fall above Nyquist). */
+    const float k_lp_alpha = 0.84f;
+    float y_lp = apu->lp_prev_y + k_lp_alpha * (y_hp - apu->lp_prev_y);
+    apu->lp_prev_y = y_lp;
+
+    int sample = (int)lrintf(y_lp);
     if (sample < -32768) {
         sample = -32768;
         ++apu->clip_count;
@@ -513,18 +594,38 @@ void apu_init(Apu *apu) {
     memset(apu, 0, sizeof(*apu));
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
+    /* Start the DMC timer at a valid rate so it clocks even before $4010 is
+     * written.  Output remains 0 until $4011 or sample playback drives it. */
+    apu->dmc.timer_period = k_apu_dmc_rate_table[0];
+    apu->dmc.silence_flag = true;
     apu_reset_debug_defaults(apu);
 }
 
 void apu_reset(Apu *apu) {
-    /* Preserve the DC-level tracker across reset so the first post-reset
-     * sample isn't subtracted against 0 (which would cause an audible pop). */
-    float dc = apu->dc_level_tracker;
+    /* Preserve the HP/LP filter state across reset so the first post-reset
+     * sample isn't a step from 0 to the mixer's DC bias (audible pop).  Also
+     * preserve the DMC bus-read callback, which is wired once at Nes init. */
+    float hp_prev_x = apu->hp_prev_x;
+    float hp_prev_y = apu->hp_prev_y;
+    float lp_prev_y = apu->lp_prev_y;
+    ApuBusReadFn dmc_bus_read = apu->dmc_bus_read;
+    void *dmc_bus_read_user = apu->dmc_bus_read_user;
     memset(apu, 0, sizeof(*apu));
-    apu->dc_level_tracker = dc;
+    apu->hp_prev_x = hp_prev_x;
+    apu->hp_prev_y = hp_prev_y;
+    apu->lp_prev_y = lp_prev_y;
+    apu->dmc_bus_read = dmc_bus_read;
+    apu->dmc_bus_read_user = dmc_bus_read_user;
     apu->pulse[0].sweep_ones_complement = true;
     apu->noise.shift_register = 1;
+    apu->dmc.timer_period = k_apu_dmc_rate_table[0];
+    apu->dmc.silence_flag = true;
     apu_reset_debug_defaults(apu);
+}
+
+void apu_set_dmc_bus_read(Apu *apu, ApuBusReadFn fn, void *user) {
+    apu->dmc_bus_read = fn;
+    apu->dmc_bus_read_user = user;
 }
 
 #if MICRONES_ENABLE_APU_EMULATION
@@ -628,6 +729,20 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles) {
             }
         }
 
+        /* --- DMC timer: clocked every CPU cycle ---
+         * Each fire advances the output unit one bit. The memory reader is
+         * driven by the output unit (fetches on shift-register reload) so no
+         * separate reader clock is needed. */
+        {
+            ApuDmcChannel *d = &apu->dmc;
+            if (d->timer_period > 0u) {
+                uint32_t fires = apu_timer_advance(&d->timer_counter, d->timer_period, cycles_this);
+                for (uint32_t i = 0; i < fires; ++i) {
+                    apu_dmc_output_clock(apu);
+                }
+            }
+        }
+
 #if MICRONES_ENABLE_APU_PCM_OUTPUT
         apu->sample_phase += APU_OUTPUT_SAMPLE_RATE * cycles_this;
         if (apu->sample_phase >= APU_CPU_CLOCK_HZ) {
@@ -660,6 +775,9 @@ uint8_t apu_cpu_read(Apu *apu, uint16_t addr) {
     }
     if (apu->noise.length_counter > 0) {
         status |= 0x08u;
+    }
+    if (apu->dmc.bytes_remaining > 0) {
+        status |= 0x10u;
     }
     apu->status = status;
     return status;
@@ -705,8 +823,14 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         if (pulse->enabled) {
             pulse->length_counter = k_apu_length_table[(value >> 3) & 0x1fu];
         }
-        /* Do not reset timer_counter or duty_step: the 2A03 duty sequencer is
-         * free-running and the timer reloads naturally at the next expiry. */
+        /* Per NesDev APU_Pulse: writing the 4th register resets the sequencer
+         * to position 0.  Without this, rapid note changes (e.g. the SMB1
+         * end-of-level countdown trill on pulse 2) inherit a random duty
+         * phase from the previous note; for duties 0/1/2, if the phase lands
+         * inside a run of 0-bits the note plays silent for its entire brief
+         * duration, collapsing the trill to a single audible pitch.  The
+         * timer itself is free-running and reloads at its next expiry. */
+        pulse->duty_step = 0;
         pulse->envelope_start = true;
         break;
     }
@@ -753,11 +877,32 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         apu->noise.timer_counter = apu->noise.timer_period;
         apu->noise.envelope_start = true;
         break;
+    case 0x4010u:
+        apu->dmc.irq_enabled = (value & 0x80u) != 0;
+        apu->dmc.loop_flag = (value & 0x40u) != 0;
+        apu->dmc.rate_index = value & 0x0fu;
+        apu->dmc.timer_period = k_apu_dmc_rate_table[apu->dmc.rate_index];
+        break;
+    case 0x4011u:
+        /* Direct DAC load. Real 2A03 games (incl. SMB1 percussion) also use
+         * $4011 to "bang" the DAC without DPCM playback; writing here updates
+         * the output_level directly. Upper bit ignored per hardware. */
+        apu->dmc.output_level = value & 0x7fu;
+        break;
+    case 0x4012u:
+        /* Sample address: %11AAAAAA.AA000000 → $C000 + value*64 */
+        apu->dmc.sample_address = (uint16_t)(0xc000u | ((uint16_t)value << 6));
+        break;
+    case 0x4013u:
+        /* Sample length in bytes: %LLLL.LLLL0001 → value*16 + 1 */
+        apu->dmc.sample_length = (uint16_t)(((uint16_t)value << 4) + 1u);
+        break;
     case 0x4015u:
         apu->pulse[0].enabled = (value & 0x01u) != 0;
         apu->pulse[1].enabled = (value & 0x02u) != 0;
         apu->triangle.enabled = (value & 0x04u) != 0;
         apu->noise.enabled = (value & 0x08u) != 0;
+        apu->dmc.enabled = (value & 0x10u) != 0;
         if (!apu->pulse[0].enabled) {
             apu->pulse[0].length_counter = 0;
         }
@@ -771,7 +916,17 @@ void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value) {
         if (!apu->noise.enabled) {
             apu->noise.length_counter = 0;
         }
-        apu->status = value & 0x0fu;
+        if (!apu->dmc.enabled) {
+            apu->dmc.bytes_remaining = 0;
+        } else if (apu->dmc.bytes_remaining == 0) {
+            /* Restart playback: reset the memory reader pointer/length from
+             * $4012/$4013 and immediately prefetch a byte so the output unit
+             * has something to consume on the next reload. */
+            apu->dmc.current_address = apu->dmc.sample_address;
+            apu->dmc.bytes_remaining = apu->dmc.sample_length;
+            apu_dmc_memory_reader(apu);
+        }
+        apu->status = value & 0x1fu;
         break;
     case 0x4017u:
         apu->frame_counter_mode_5 = (value & 0x80u) != 0;

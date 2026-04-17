@@ -274,6 +274,12 @@ static inline void apu_step(Apu *apu, uint32_t cpu_cycles) { (void)apu; (void)cp
 uint8_t apu_cpu_read(Apu *apu, uint16_t addr);
 void    apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value);
 
+/* DMC memory reader callback (no-op in this engine — InfoNES DMC path does
+ * not fetch via the CPU bus).  Declared for call-site compatibility with the
+ * micrones engine. */
+typedef uint8_t (*ApuBusReadFn)(void *user, uint16_t addr);
+void apu_set_dmc_bus_read(Apu *apu, ApuBusReadFn fn, void *user);
+
 uint32_t apu_output_sample_rate(const Apu *apu);
 size_t   apu_audio_available_samples(const Apu *apu);
 size_t   apu_audio_read_samples(Apu *apu, int16_t *dst, size_t max_samples);

@@ -400,6 +400,15 @@ void MICRONES_HOT_FUNC(apu_step)(Apu *apu, uint32_t cpu_cycles)
 }
 #endif /* MICRONES_ENABLE_APU_EMULATION */
 
+void apu_set_dmc_bus_read(Apu *apu, ApuBusReadFn fn, void *user)
+{
+    /* InfoNES DMC path does not use a bus-read callback; stubbed for API
+     * parity with the micrones engine. */
+    (void)apu;
+    (void)fn;
+    (void)user;
+}
+
 uint8_t apu_cpu_read(Apu *apu, uint16_t addr)
 {
     if (addr != 0x4015u) return 0;
