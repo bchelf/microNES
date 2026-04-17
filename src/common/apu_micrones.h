@@ -162,6 +162,29 @@ typedef struct {
 } ApuNoiseChannel;
 
 typedef struct {
+    bool enabled;              /* $4015 bit 4 */
+    bool irq_enabled;          /* $4010 bit 7 (not wired to CPU; kept for state) */
+    bool loop_flag;            /* $4010 bit 6 */
+    bool silence_flag;         /* output-unit silence */
+    bool sample_buffer_filled;
+    uint8_t rate_index;        /* $4010 bits 3-0 */
+    uint8_t output_level;      /* 0-127, $4011 / delta updates */
+    uint8_t sample_buffer;     /* prefetched byte */
+    uint8_t shift_register;    /* bits currently being emitted */
+    uint8_t bits_remaining;    /* bits left in shift_register (0-8) */
+    uint16_t timer_period;     /* CPU cycles per output clock (from rate table) */
+    uint16_t timer_counter;
+    uint16_t sample_address;   /* derived from $4012 */
+    uint16_t sample_length;    /* derived from $4013 */
+    uint16_t current_address;  /* memory reader pointer */
+    uint16_t bytes_remaining;  /* bytes left to fetch (0 = idle) */
+} ApuDmcChannel;
+
+/* DMC memory reader callback. Returns the byte at the given CPU bus address
+ * ($8000-$FFFF on real hardware). Caller supplies a user-data pointer. */
+typedef uint8_t (*ApuBusReadFn)(void *user, uint16_t addr);
+
+typedef struct {
     uint8_t registers[0x18];
     uint64_t register_write_count[APU_DEBUG_REGISTER_COUNT];
     uint8_t mix_enable_mask;
@@ -181,11 +204,19 @@ typedef struct {
     bool frame_counter_mode_5;
     bool frame_irq_inhibit;
     int16_t pcm[APU_PCM_CAPACITY];
-    float dc_level_tracker;  // float is sufficient; double costs ~250 cycles/sample in SW on LX7
+    /* First-order HP filter state (y[n] = x[n] - x[n-1] + alpha*y[n-1]).
+     * alpha = 0.995 → ~38 Hz corner at 48 kHz, matches Mesen's output chain
+     * and preserves NES-style bass while removing DC drift / note-off clicks.
+     * float is sufficient; double costs ~250 cycles/sample in SW on LX7. */
+    float hp_prev_x;
+    float hp_prev_y;
     ApuDebugSampleStats channel_stats[APU_DEBUG_CHANNEL_COUNT];
     ApuPulseChannel pulse[2];
     ApuTriangleChannel triangle;
     ApuNoiseChannel noise;
+    ApuDmcChannel dmc;
+    ApuBusReadFn dmc_bus_read;
+    void *dmc_bus_read_user;
 } Apu;
 
 void apu_init(Apu *apu);
@@ -197,6 +228,8 @@ static inline void apu_step(Apu *apu, uint32_t cpu_cycles) { (void)apu; (void)cp
 #endif
 uint8_t apu_cpu_read(Apu *apu, uint16_t addr);
 void apu_cpu_write(Apu *apu, uint16_t addr, uint8_t value);
+
+void apu_set_dmc_bus_read(Apu *apu, ApuBusReadFn fn, void *user);
 
 uint32_t apu_output_sample_rate(const Apu *apu);
 size_t apu_audio_available_samples(const Apu *apu);

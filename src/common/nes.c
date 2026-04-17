@@ -33,12 +33,20 @@ static bool nes_has_cartridge(const Nes *nes) {
     return cart_is_loaded(&nes->cartridge);
 }
 
+/* DMC memory reader callback.  The APU needs to fetch sample bytes from the
+ * $8000-$FFFF PRG window; route through the fast CPU-bus read path so MMC1
+ * bank switches (for future mapper support) are observed. */
+static uint8_t nes_apu_dmc_bus_read(void *user, uint16_t addr) {
+    return nes_cpu_bus_read_fast((Nes *)user, addr);
+}
+
 void nes_init(Nes *nes) {
     memset(nes, 0, sizeof(*nes));
     nes->cpu_ram_base = nes->cpu_ram;  /* cache address of embedded cpu_ram array */
     cpu6502_init(&nes->cpu);
     ppu_init(&nes->ppu);
     apu_init(&nes->apu);
+    apu_set_dmc_bus_read(&nes->apu, nes_apu_dmc_bus_read, nes);
     input_controller_init(&nes->controllers[0]);
     input_controller_init(&nes->controllers[1]);
     nes_clear_runtime_state(nes);
