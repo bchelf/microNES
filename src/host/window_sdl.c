@@ -1,6 +1,7 @@
 #include "window_sdl.h"
 
 #include "framebuffer.h"
+#include "ppu.h"
 
 #include <SDL3/SDL.h>
 
@@ -15,6 +16,8 @@ struct HostSdlWindow {
     uint8_t *rgba_pixels;
     int rgba_pitch_bytes;
     bool enable_color;
+    bool enable_transparent;
+    uint8_t opaque_alpha;   /* alpha for non-transparent pixels; 0xFF = fully opaque */
 };
 
 static char g_host_sdl_window_last_error[256];
@@ -61,6 +64,13 @@ static uint8_t host_scale_channel(uint8_t value, float scale) {
     return (uint8_t)(scaled > 255u ? 255u : scaled);
 }
 
+static void host_write_transparent(uint8_t *rgba_out) {
+    rgba_out[0] = 0u;
+    rgba_out[1] = 0u;
+    rgba_out[2] = 0u;
+    rgba_out[3] = 0u;
+}
+
 static void host_convert_gray_to_rgba(uint8_t gray, uint8_t *rgba_out) {
     uint8_t out = host_scale_channel(gray, k_host_sdl_brightness_scale);
 
@@ -79,8 +89,9 @@ static void host_convert_palette_to_rgba(uint8_t palette_index, uint8_t *rgba_ou
     rgba_out[3] = 0xffu;
 }
 
-HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color) {
+HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color, bool enable_transparent, int opacity_percent) {
     HostSdlWindow *window;
+    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
 
     host_sdl_set_error(NULL);
 
@@ -101,7 +112,14 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
 
-    window->window = SDL_CreateWindow(title, NES_FRAME_WIDTH * scale, NES_FRAME_HEIGHT * scale, SDL_WINDOW_RESIZABLE);
+    if (enable_transparent) {
+        /* Requires a compositor: supported on macOS, most Wayland/X11
+         * compositors, and Windows with DWM.  SDL falls back to an
+         * opaque window if the platform cannot honor the flag. */
+        window_flags |= SDL_WINDOW_TRANSPARENT;
+    }
+
+    window->window = SDL_CreateWindow(title, NES_FRAME_WIDTH * scale, NES_FRAME_HEIGHT * scale, window_flags);
     if (window->window == NULL) {
         host_sdl_set_sdl_error("SDL_CreateWindow failed");
         host_sdl_window_destroy(window);
@@ -150,6 +168,22 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
 
+    if (enable_transparent) {
+        /* Honor per-pixel alpha from the uploaded RGBA frame and the
+         * cleared (0,0,0,0) draw color so the compositor sees a
+         * transparent background outside interactive tiles. */
+        if (!SDL_SetTextureBlendMode(window->texture, SDL_BLENDMODE_BLEND)) {
+            host_sdl_set_sdl_error("SDL_SetTextureBlendMode failed");
+            host_sdl_window_destroy(window);
+            return NULL;
+        }
+        if (!SDL_SetRenderDrawBlendMode(window->renderer, SDL_BLENDMODE_BLEND)) {
+            host_sdl_set_sdl_error("SDL_SetRenderDrawBlendMode failed");
+            host_sdl_window_destroy(window);
+            return NULL;
+        }
+    }
+
     window->rgba_pitch_bytes = NES_FRAME_WIDTH * 4;
     window->rgba_pixels = (uint8_t *)malloc((size_t)NES_FRAME_WIDTH * NES_FRAME_HEIGHT * 4u);
     if (window->rgba_pixels == NULL) {
@@ -158,6 +192,13 @@ HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_
         return NULL;
     }
     window->enable_color = enable_color;
+    window->enable_transparent = enable_transparent;
+    if (enable_transparent && opacity_percent < 100) {
+        int clamped = opacity_percent < 0 ? 0 : opacity_percent;
+        window->opaque_alpha = (uint8_t)(clamped * 255 / 100);
+    } else {
+        window->opaque_alpha = 0xffu;
+    }
 
     return window;
 }
@@ -189,11 +230,16 @@ bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, 
 
     for (int i = 0; i < width * height; ++i) {
         uint8_t *rgba = &window->rgba_pixels[i * 4];
+        uint8_t pixel = pixels[i];
 
-        if (window->enable_color) {
-            host_convert_palette_to_rgba(pixels[i], rgba);
+        if (window->enable_transparent && pixel == PPU_COLOR_TRANSPARENT) {
+            host_write_transparent(rgba);
+        } else if (window->enable_color) {
+            host_convert_palette_to_rgba(pixel, rgba);
+            rgba[3] = window->opaque_alpha;
         } else {
-            host_convert_gray_to_rgba(pixels[i], rgba);
+            host_convert_gray_to_rgba(pixel, rgba);
+            rgba[3] = window->opaque_alpha;
         }
     }
 
@@ -210,6 +256,14 @@ bool host_sdl_window_present(HostSdlWindow *window) {
         return false;
     }
 
+    if (window->enable_transparent) {
+        /* Clear to fully transparent so the compositor shows whatever is
+         * behind the window anywhere the frame's alpha is zero. */
+        if (!SDL_SetRenderDrawColor(window->renderer, 0, 0, 0, 0)) {
+            host_sdl_set_sdl_error("SDL_SetRenderDrawColor failed");
+            return false;
+        }
+    }
     if (!SDL_RenderClear(window->renderer)) {
         host_sdl_set_sdl_error("SDL_RenderClear failed");
         return false;

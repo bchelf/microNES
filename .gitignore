@@ -10,3 +10,4 @@ build_*/
 .cache/
 src/esp32s3/sdkconfig
 .DS_Store
+.aider*

@@ -42,6 +42,7 @@ set(MICRONES_COMMON_SOURCES
     src/common/nes.c
     src/common/nrom.c
     src/common/ppu.c
+    src/common/smb1_bg_classifier.c
 )
 
 if (NOT MICRONES_PLATFORM STREQUAL "pico")
