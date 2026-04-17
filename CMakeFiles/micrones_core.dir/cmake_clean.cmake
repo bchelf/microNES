@@ -19,6 +19,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/micrones_core.dir/src/common/nrom.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/ppu.c.o"
   "CMakeFiles/micrones_core.dir/src/common/ppu.c.o.d"
+  "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o"
+  "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o.d"
   "libmicrones_core.a"
   "libmicrones_core.pdb"
 )

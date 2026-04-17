@@ -382,6 +382,30 @@ src/common/ppu.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/ppu.c.s
 .PHONY : src/common/ppu.c.s
 
+src/common/smb1_bg_classifier.o: src/common/smb1_bg_classifier.c.o
+.PHONY : src/common/smb1_bg_classifier.o
+
+# target to build an object file
+src/common/smb1_bg_classifier.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o
+.PHONY : src/common/smb1_bg_classifier.c.o
+
+src/common/smb1_bg_classifier.i: src/common/smb1_bg_classifier.c.i
+.PHONY : src/common/smb1_bg_classifier.i
+
+# target to preprocess a source file
+src/common/smb1_bg_classifier.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.i
+.PHONY : src/common/smb1_bg_classifier.c.i
+
+src/common/smb1_bg_classifier.s: src/common/smb1_bg_classifier.c.s
+.PHONY : src/common/smb1_bg_classifier.s
+
+# target to generate assembly for a file
+src/common/smb1_bg_classifier.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.s
+.PHONY : src/common/smb1_bg_classifier.c.s
+
 src/web/web_main.o: src/web/web_main.c.o
 .PHONY : src/web/web_main.o
 
@@ -446,6 +470,9 @@ help:
 	@echo "... src/common/ppu.o"
 	@echo "... src/common/ppu.i"
 	@echo "... src/common/ppu.s"
+	@echo "... src/common/smb1_bg_classifier.o"
+	@echo "... src/common/smb1_bg_classifier.i"
+	@echo "... src/common/smb1_bg_classifier.s"
 	@echo "... src/web/web_main.o"
 	@echo "... src/web/web_main.i"
 	@echo "... src/web/web_main.s"
