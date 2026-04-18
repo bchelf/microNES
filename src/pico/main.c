@@ -22,6 +22,7 @@ int main(void) {
     extern unsigned int micrones_pico_embedded_rom_len;
     static PicoEmulatorVideoAdapter emulator_video;
     MicronesFramePacer frame_pacer;
+#if MICRONES_ENABLE_PERF_LOG
     uint64_t report_started_us = 0;
     uint64_t report_render_us = 0;
     uint64_t report_step_us = 0;
@@ -49,6 +50,7 @@ int main(void) {
     uint64_t report_tft_spi_us = 0;
     uint64_t report_tft_spans = 0;
 #endif
+#endif /* MICRONES_ENABLE_PERF_LOG */
 #endif
 
     /* System clock — speed controlled by MICRONES_SYS_CLK_MHZ in clock_config.h.
@@ -105,7 +107,9 @@ int main(void) {
         pico_video_backend_start_emulator();
         micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
 
+#if MICRONES_ENABLE_PERF_LOG
         report_started_us = time_us_64();
+#endif
 
         while (true) {
             /* Pace emulation to the NTSC NES frame cadence (~16.639 ms,
@@ -149,10 +153,10 @@ int main(void) {
                 size_t n;
                 while ((n = nes_audio_read_samples(&emulator_video.nes, pcm_tmp,
                                                    sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
+#if MICRONES_ENABLE_PERF_LOG
                     size_t pushed = pico_audio_backend_push_samples(pcm_tmp, n);
                     report_samples_drained += n;
                     report_samples_dropped += (n - pushed);
-                    /* Exp B: detect whether any non-silent samples exist. */
                     if (!report_saw_nonzero_sample) {
                         for (size_t i = 0; i < n; ++i) {
                             if (pcm_tmp[i] != 0) {
@@ -161,8 +165,13 @@ int main(void) {
                             }
                         }
                     }
+#else
+                    pico_audio_backend_push_samples(pcm_tmp, n);
+#endif
                 }
+#if MICRONES_ENABLE_PERF_LOG
                 report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
+#endif
             }
 
             /* Present the frame to the display — but skip if the previous
@@ -194,10 +203,10 @@ int main(void) {
                 size_t n;
                 while ((n = nes_audio_read_samples(&emulator_video.nes, pcm_tmp,
                                                    sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
+#if MICRONES_ENABLE_PERF_LOG
                     size_t pushed = pico_audio_backend_push_samples(pcm_tmp, n);
                     report_samples_drained += n;
                     report_samples_dropped += (n - pushed);
-                    /* Exp B: detect whether any non-silent samples exist. */
                     if (!report_saw_nonzero_sample) {
                         for (size_t i = 0; i < n; ++i) {
                             if (pcm_tmp[i] != 0) {
@@ -206,12 +215,18 @@ int main(void) {
                             }
                         }
                     }
+#else
+                    pico_audio_backend_push_samples(pcm_tmp, n);
+#endif
                 }
+#if MICRONES_ENABLE_PERF_LOG
                 report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
+#endif
             }
 #endif
             micrones_frame_pacer_frame_done(&frame_pacer, micrones_pico_clock_now_ns());
 
+#if MICRONES_ENABLE_PERF_LOG
             if ((emulator_video.rendered_frames % 60u) == 0u) {
                 uint64_t now_us = time_us_64();
                 PicoVideoBackendStats backend_stats;
@@ -401,6 +416,7 @@ int main(void) {
                 report_apu_internal_dropped = 0;
                 report_saw_nonzero_sample = false;
             }
+#endif /* MICRONES_ENABLE_PERF_LOG */
         }
         pico_video_backend_start_test_pattern();
         while (true) {

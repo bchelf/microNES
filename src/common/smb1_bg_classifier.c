@@ -77,6 +77,11 @@ static const bool k_smb1_bg_tile_interactive[256] = {
     [0x8E] = true, [0x8F] = true, [0x90] = true,
     [0x91] = true, [0x92] = true, [0x93] = true, [0x94] = true,
 
+    /* ground — castle levels (8-4 etc); 0x5D/0x5E are the main brick rows,
+     * 0x41 is the castle ground variant (appears in gaps/columns) */
+    [0x41] = true,
+    [0x5D] = true, [0x5E] = true,
+
     /* underground / bonus-room ground */
     [0x84] = true, [0x85] = true,
 
@@ -128,7 +133,9 @@ static const bool k_smb1_bg_tile_interactive[256] = {
     [0xCF] = true,
 
     /* bullet bill shooters — confirmed from nametable frame 16929:
-     * 2×4 tile block: C6/C7 (top) through CC/CD (bottom) */
+     * 2×4 tile block: C6/C7 (top) through CC/CD (bottom);
+     * 0x2A/0x40 are the base/pedestal tiles below the shooter (rows 24-25) */
+    [0x2A] = true, [0x40] = true,
     [0xC6] = true, [0xC7] = true, [0xC8] = true, [0xC9] = true,
     [0xCA] = true, [0xCB] = true, [0xCC] = true, [0xCD] = true,
 

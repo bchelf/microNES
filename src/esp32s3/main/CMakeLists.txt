@@ -16,6 +16,7 @@ else()
     message(FATAL_ERROR "MICRONES_APU_ENGINE must be 'infones' or 'micrones'")
 endif()
 
+option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic logging" OFF)
 message(STATUS "microNES ESP32-S3 APU engine: ${MICRONES_APU_ENGINE}")
 
 if(EXISTS "${MICRONES_ROM_PATH}")
@@ -86,6 +87,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     MICRONES_HAS_ROM=${MICRONES_HAS_ROM_FLAG}
     MICRONES_ROM_START_SYMBOL="_binary_${MICRONES_ROM_SYMBOL_STEM}_start"
     MICRONES_ROM_END_SYMBOL="_binary_${MICRONES_ROM_SYMBOL_STEM}_end"
+    MICRONES_ENABLE_PERF_LOG=$<BOOL:${MICRONES_ENABLE_PERF_LOG}>
 )
 
 # Compile everything in this component at -O3.

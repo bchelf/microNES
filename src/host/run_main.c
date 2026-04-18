@@ -676,6 +676,7 @@ int main(int argc, char **argv) {
 
         if (now_ns - stats_window_start_ns >= HOST_FPS_SAMPLE_MS * 1000000ull) {
             micrones_frame_pacer_get_stats(&pacer, now_ns, &pacer_stats);
+#if MICRONES_ENABLE_PERF_LOG
             printf(
                 "fps: %.2f/%.2f frame_ms(avg/last/worst)=%.3f/%.3f/%.3f late=%" PRIu64 " max_late=%.3fms frames=%" PRIu64 "\n",
                 pacer_stats.measured_fps,
@@ -695,6 +696,7 @@ int main(int argc, char **argv) {
                     host_audio_sdl_dropped_samples(audio)
                 );
             }
+#endif
             snprintf(
                 title,
                 sizeof(title),
