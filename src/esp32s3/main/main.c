@@ -131,6 +131,7 @@ typedef struct {
     uint32_t audio_us;
 } StepTimes;
 
+#if MICRONES_ENABLE_PERF_LOG
 static void print_diag(uint64_t period_us, uint32_t frames,
                        uint32_t audio_pushed, uint32_t audio_skipped, uint32_t audio_overflow,
                        const StepTimes *avg, uint32_t insn_per_frame)
@@ -149,6 +150,7 @@ static void print_diag(uint64_t period_us, uint32_t frames,
         (unsigned long)audio_overflow,
         (unsigned)audio_free_slots());
 }
+#endif
 
 // ─────────────────────────────────────────────────────────────
 //  Emulator task  (runs on Core 1, large stack)
@@ -266,16 +268,17 @@ static void emulator_task(void *arg)
 
     // ── Main emulator loop ───────────────────────────────────
     {
+        uint32_t next_display_buffer = 0;
+#if MICRONES_ENABLE_PERF_LOG
         uint64_t report_start_us = esp_timer_get_time();
         uint32_t report_frames   = 0;
         AudioStats prev_audio_stats = audio_stats_snapshot();
-        uint32_t next_display_buffer = 0;
         StepTimes acc = {0};   // accumulated µs per step over report window
         uint32_t prev_insn_count = s_nes.cpu.insn_count;
+#endif
 
         while (true) {
             uint64_t frame_start_us = esp_timer_get_time();
-            uint64_t t0, t1;
 
             // 1. Read inputs → NES controller (hardware controller only; touch disabled)
             {
@@ -290,36 +293,47 @@ static void emulator_task(void *arg)
             nes_set_render_target(&s_nes, s_display_frames[display_buffer]);
 
             // 3. Step one NES frame (renders directly into s_display_frames[display_buffer])
-            t0 = esp_timer_get_time();
-            if (!nes_step_frame(&s_nes)) {
-                ESP_LOGE(TAG, "NES halted: %s",
-                         nes_stop_reason_name(s_nes.stop_info.reason));
-                xSemaphoreGive(s_display_frame_free[display_buffer]);
-                break;
+#if MICRONES_ENABLE_PERF_LOG
+            {
+                uint64_t t0 = esp_timer_get_time();
+#endif
+                if (!nes_step_frame(&s_nes)) {
+                    ESP_LOGE(TAG, "NES halted: %s",
+                             nes_stop_reason_name(s_nes.stop_info.reason));
+                    xSemaphoreGive(s_display_frame_free[display_buffer]);
+                    break;
+                }
+#if MICRONES_ENABLE_PERF_LOG
+                acc.nes_us += (uint32_t)(esp_timer_get_time() - t0);
             }
-            t1 = esp_timer_get_time();
-            acc.nes_us += (uint32_t)(t1 - t0);
+#endif
 
             // 4. Queue rendered frame for display (Core 0 will stream it to the panel)
             xQueueSend(s_display_frame_queue, &display_buffer, 0);
             next_display_buffer = (display_buffer + 1u) % DISPLAY_FRAME_BUFFER_COUNT;
 
             // 5. Drain APU samples into audio ring buffer
-            t0 = esp_timer_get_time();
+#if MICRONES_ENABLE_PERF_LOG
             {
-                static int16_t pcm_tmp[256];
-                size_t n;
-                while ((n = nes_audio_read_samples(&s_nes, pcm_tmp,
-                            sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
-                    (void)audio_push_samples(pcm_tmp, n);
+                uint64_t t0 = esp_timer_get_time();
+#endif
+                {
+                    static int16_t pcm_tmp[256];
+                    size_t n;
+                    while ((n = nes_audio_read_samples(&s_nes, pcm_tmp,
+                                sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
+                        (void)audio_push_samples(pcm_tmp, n);
+                    }
                 }
+#if MICRONES_ENABLE_PERF_LOG
+                acc.audio_us += (uint32_t)(esp_timer_get_time() - t0);
             }
-            t1 = esp_timer_get_time();
-            acc.audio_us += (uint32_t)(t1 - t0);
 
             report_frames++;
+#endif
 
             // 6. Diagnostics every 60 frames
+#if MICRONES_ENABLE_PERF_LOG
             if (report_frames >= 60u) {
                 uint64_t now_us = esp_timer_get_time();
                 AudioStats audio_stats = audio_stats_snapshot();
@@ -340,6 +354,7 @@ static void emulator_task(void *arg)
                 prev_insn_count  = cur_insn_count;
                 acc = (StepTimes){0};
             }
+#endif
 
             // 7. Frame pacing: spin-wait to maintain ~60 fps
             {

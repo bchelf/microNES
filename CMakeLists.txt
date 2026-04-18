@@ -11,6 +11,7 @@ set_property(CACHE MICRONES_PICO_TFT_CONTROLLER PROPERTY STRINGS ili9341 ili9486
 set(MICRONES_PICO_ROM_PATH "" CACHE FILEPATH "Path to an iNES ROM image to embed for Pico emulator video mode")
 set(MICRONES_APU_ENGINE "micrones" CACHE STRING "APU engine: micrones (cycle-accurate, default) or infones (InfoNES DDS)")
 set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS micrones infones)
+option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic logging" OFF)
 
 if (MICRONES_PLATFORM STREQUAL "pico")
     set(PICO_BOARD pico2 CACHE STRING "Target board")
@@ -88,6 +89,10 @@ if (MICRONES_PLATFORM STREQUAL "host")
             SDL3::SDL3
             micrones_core
         )
+
+        if (MICRONES_ENABLE_PERF_LOG)
+            target_compile_definitions(micrones PRIVATE MICRONES_ENABLE_PERF_LOG=1)
+        endif ()
     else ()
         message(WARNING "SDL3 not found; micrones_run will not be built.")
     endif ()
@@ -173,6 +178,10 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         endif ()
 
         target_compile_definitions(${target_name} PRIVATE MICRONES_ENABLE_PICO_VIDEO_STATS=0)
+
+        if (MICRONES_ENABLE_PERF_LOG)
+            target_compile_definitions(${target_name} PRIVATE MICRONES_ENABLE_PERF_LOG=1)
+        endif ()
         pico_enable_stdio_usb(${target_name} 1)
         pico_enable_stdio_uart(${target_name} 0)
 
