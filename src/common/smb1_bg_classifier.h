@@ -13,6 +13,6 @@
  *
  * The allowlist is intentionally hand-curated against the SMB1 CHR ROM
  * and is not portable to other games.  The `user` argument is ignored. */
-bool smb1_bg_tile_is_interactive(uint8_t tile_index, void *user);
+bool smb1_bg_tile_is_interactive(uint8_t tile_index, uint8_t palette_select, void *user);
 
 #endif

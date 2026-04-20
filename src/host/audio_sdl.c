@@ -9,7 +9,7 @@
 enum {
     HOST_AUDIO_CHANNELS = 1,
     HOST_AUDIO_BYTES_PER_SAMPLE = 2,
-    HOST_AUDIO_MAX_QUEUED_MS = 100,
+    HOST_AUDIO_MAX_QUEUED_MS = 25,
 };
 
 struct HostAudioSdl {

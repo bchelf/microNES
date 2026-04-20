@@ -1235,7 +1235,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                 cached_tile_group = tile_group;
                 cached_bg_interactive =
                     !has_bg_classifier ||
-                    ppu->bg_tile_classifier(tile, ppu->bg_tile_classifier_user);
+                    ppu->bg_tile_classifier(tile, cached_palette_select, ppu->bg_tile_classifier_user);
             }
 
             {

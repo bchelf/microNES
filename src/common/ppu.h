@@ -23,13 +23,14 @@ enum {
  * transparent" when rendering into a composited window. */
 #define PPU_COLOR_TRANSPARENT 0xFEu
 
-/* Classifier callback: given a background nametable tile index, return
- * true if the tile represents something the player can physically
- * interact with (ground, bricks, pipes, blocks, etc.) and should remain
- * visible, or false for decorative background (sky, clouds, hills, HUD
- * you want hidden, etc.).  The classifier is invoked once per covering
- * tile per scanline, not per pixel. */
-typedef bool (*PpuBgTileClassifier)(uint8_t tile_index, void *user);
+/* Classifier callback: given a background nametable tile index plus the
+ * selected 2-bit background palette for that tile, return true if the
+ * tile represents something the player can physically interact with
+ * (ground, bricks, pipes, blocks, etc.) and should remain visible, or
+ * false for decorative background (sky, clouds, hills, HUD you want
+ * hidden, etc.).  The classifier is invoked once per covering tile per
+ * scanline, not per pixel. */
+typedef bool (*PpuBgTileClassifier)(uint8_t tile_index, uint8_t palette_select, void *user);
 
 typedef enum {
     PPU_SPRITE0_REJECT_NONE = 0,
