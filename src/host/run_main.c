@@ -40,7 +40,6 @@ typedef struct {
 } RunOptions;
 
 typedef struct {
-    int counts[8];
     bool dump_nametable;
 } HostInputState;
 
@@ -364,74 +363,49 @@ static void host_print_apu_write_summary(const ApuDebugReport *report) {
     }
 }
 
-static int host_button_index_for_scancode(SDL_Scancode scancode) {
-    switch (scancode) {
-    case SDL_SCANCODE_UP:
-    case SDL_SCANCODE_W:
-        return 4;
-    case SDL_SCANCODE_DOWN:
-    case SDL_SCANCODE_S:
-        return 5;
-    case SDL_SCANCODE_LEFT:
-    case SDL_SCANCODE_A:
-        return 6;
-    case SDL_SCANCODE_RIGHT:
-    case SDL_SCANCODE_D:
-        return 7;
-    case SDL_SCANCODE_L:
-        return 0;
-    case SDL_SCANCODE_K:
-        return 1;
-    case SDL_SCANCODE_TAB:
-    case SDL_SCANCODE_RSHIFT:
-        return 2;
-    case SDL_SCANCODE_RETURN:
-        return 3;
-    default:
-        return -1;
-    }
-}
-
-static uint8_t host_button_mask_for_index(int index) {
-    static const uint8_t k_button_masks[8] = {
-        NES_BUTTON_A,
-        NES_BUTTON_B,
-        NES_BUTTON_SELECT,
-        NES_BUTTON_START,
-        NES_BUTTON_UP,
-        NES_BUTTON_DOWN,
-        NES_BUTTON_LEFT,
-        NES_BUTTON_RIGHT,
-    };
-
-    return (index >= 0 && index < 8) ? k_button_masks[index] : 0;
-}
-
-static void host_update_button_state(HostInputState *input, SDL_Scancode scancode, bool down) {
-    int index = host_button_index_for_scancode(scancode);
-
-    if (index < 0) {
-        return;
-    }
-
-    if (down) {
-        ++input->counts[index];
-    } else if (input->counts[index] > 0) {
-        --input->counts[index];
-    }
-}
-
-static NesControllerState host_build_controller_state(const HostInputState *input) {
+static NesControllerState host_read_controller_state(void) {
     NesControllerState state = { 0 };
+    int numkeys = 0;
+    const bool *keys;
     bool up_down;
     bool down_down;
     bool left_down;
     bool right_down;
 
-    for (int i = 0; i < 8; ++i) {
-        if (input->counts[i] > 0) {
-            state.buttons |= host_button_mask_for_index(i);
-        }
+    SDL_PumpEvents();
+    keys = SDL_GetKeyboardState(&numkeys);
+    if (keys == NULL || numkeys <= 0) {
+        return state;
+    }
+
+    if ((SDL_SCANCODE_L < numkeys && keys[SDL_SCANCODE_L])) {
+        state.buttons |= NES_BUTTON_A;
+    }
+    if ((SDL_SCANCODE_K < numkeys && keys[SDL_SCANCODE_K])) {
+        state.buttons |= NES_BUTTON_B;
+    }
+    if ((SDL_SCANCODE_TAB < numkeys && keys[SDL_SCANCODE_TAB]) ||
+        (SDL_SCANCODE_RSHIFT < numkeys && keys[SDL_SCANCODE_RSHIFT])) {
+        state.buttons |= NES_BUTTON_SELECT;
+    }
+    if (SDL_SCANCODE_RETURN < numkeys && keys[SDL_SCANCODE_RETURN]) {
+        state.buttons |= NES_BUTTON_START;
+    }
+    if ((SDL_SCANCODE_UP < numkeys && keys[SDL_SCANCODE_UP]) ||
+        (SDL_SCANCODE_W < numkeys && keys[SDL_SCANCODE_W])) {
+        state.buttons |= NES_BUTTON_UP;
+    }
+    if ((SDL_SCANCODE_DOWN < numkeys && keys[SDL_SCANCODE_DOWN]) ||
+        (SDL_SCANCODE_S < numkeys && keys[SDL_SCANCODE_S])) {
+        state.buttons |= NES_BUTTON_DOWN;
+    }
+    if ((SDL_SCANCODE_LEFT < numkeys && keys[SDL_SCANCODE_LEFT]) ||
+        (SDL_SCANCODE_A < numkeys && keys[SDL_SCANCODE_A])) {
+        state.buttons |= NES_BUTTON_LEFT;
+    }
+    if ((SDL_SCANCODE_RIGHT < numkeys && keys[SDL_SCANCODE_RIGHT]) ||
+        (SDL_SCANCODE_D < numkeys && keys[SDL_SCANCODE_D])) {
+        state.buttons |= NES_BUTTON_RIGHT;
     }
 
     up_down = (state.buttons & NES_BUTTON_UP) != 0;
@@ -460,13 +434,8 @@ static bool host_process_events(bool *running, HostInputState *input) {
             if (!event.key.repeat) {
                 if (event.key.scancode == SDL_SCANCODE_F1) {
                     input->dump_nametable = true;
-                } else {
-                    host_update_button_state(input, event.key.scancode, true);
                 }
             }
-            break;
-        case SDL_EVENT_KEY_UP:
-            host_update_button_state(input, event.key.scancode, false);
             break;
         default:
             break;
@@ -500,7 +469,7 @@ int main(int argc, char **argv) {
     RunOptions options;
     HostSdlWindow *window = NULL;
     HostAudioSdl *audio = NULL;
-    HostInputState input = { { 0 } };
+    HostInputState input = { 0 };
     MicronesFramePacer pacer;
     MicronesFramePacerStats pacer_stats;
     Nes nes;
@@ -540,7 +509,7 @@ int main(int argc, char **argv) {
 
     nes_reset(&nes);
     if (options.transparent_bg) {
-        ppu_set_bg_tile_classifier(&nes.ppu, smb1_bg_tile_is_interactive, NULL);
+        ppu_set_bg_tile_classifier(&nes.ppu, smb1_bg_tile_is_interactive, &nes);
     }
     nes_audio_set_mix_enable_mask(&nes, options.audio_mix_mask);
     nes_audio_set_test_tone(&nes, options.test_tone);
@@ -594,10 +563,16 @@ int main(int argc, char **argv) {
         char title[128];
         uint32_t instructions_until_input_poll = HOST_INPUT_POLL_INSTRUCTION_INTERVAL;
 
+        now_ns = host_now_ns();
+        if (!options.enable_vsync && micrones_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
+            host_wait_until_ns(pacer.wait_until_ns);
+            micrones_frame_pacer_note_wait_complete(&pacer, host_now_ns());
+        }
+
         if (!host_process_events(&running, &input)) {
             break;
         }
-        nes_set_controller_state(&nes, 0, host_build_controller_state(&input));
+        nes_set_controller_state(&nes, 0, host_read_controller_state());
 
         while (running && nes.ppu.completed_frame_count < target_completed_frame) {
             if (!nes_step_instruction(&nes)) {
@@ -609,7 +584,7 @@ int main(int argc, char **argv) {
                 if (!host_process_events(&running, &input)) {
                     break;
                 }
-                nes_set_controller_state(&nes, 0, host_build_controller_state(&input));
+                nes_set_controller_state(&nes, 0, host_read_controller_state());
                 instructions_until_input_poll = HOST_INPUT_POLL_INSTRUCTION_INTERVAL;
             }
         }
@@ -710,11 +685,6 @@ int main(int argc, char **argv) {
 
         if (options.max_frames != 0 && presented_frames >= options.max_frames) {
             break;
-        }
-
-        if (micrones_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
-            host_wait_until_ns(pacer.wait_until_ns);
-            micrones_frame_pacer_note_wait_complete(&pacer, host_now_ns());
         }
     }
 

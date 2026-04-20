@@ -1,4 +1,10 @@
 #include "smb1_bg_classifier.h"
+#include "nes.h"
+
+enum {
+    SMB1_AREA_TYPE_ADDR = 0x074Eu,
+    SMB1_AREA_TYPE_WATER = 0x00u,
+};
 
 /* =====================================================================
  * SMB1 background-tile allowlist
@@ -9,13 +15,18 @@
  *
  * Default = false (decorative / transparent).
  * Explicit true entries = solid/visible tiles (ground, bricks, pipes,
- * blocks, stairs, coins, flagpole, title card, vines).
+ * blocks, stairs, coins, flagpole, title card, vines, axe).
  *
  * Tiles left false (transparent):
  *   0x24       blank sky
  *   0x25       decorative scenery (cloud/hill fill)
  *   0x35–0x3C  cloud/hill tops and bases
  *   0xCE       HUD symbol variant (unused in visible text)
+ *
+ * Palette-sensitive exceptions:
+ *   0x41/0x26 with palette 2 are SMB1 water/lava tiles.  Hide them only
+ *   while SMB1 says the current area type is water; in castle areas the
+ *   same tiles represent lava and should remain visible.
  */
 
 /* One entry per possible CHR tile index (0x00..0xFF).
@@ -147,9 +158,21 @@ static const bool k_smb1_bg_tile_interactive[256] = {
     [0x27] = true,
     [0x9B] = true, [0x9C] = true, [0x9D] = true, [0x9E] = true,
     [0xA9] = true, [0xAA] = true,
+
+    /* axe — palette 3 metatile at Bowser bridge endpoints */
+    [0x7B] = true, [0x7C] = true, [0x7D] = true, [0x7E] = true,
 };
 
-bool smb1_bg_tile_is_interactive(uint8_t tile_index, void *user) {
-    (void)user;
+bool smb1_bg_tile_is_interactive(uint8_t tile_index, uint8_t palette_select, void *user) {
+    if (palette_select == 2u && (tile_index == 0x26u || tile_index == 0x41u)) {
+        const Nes *nes = (const Nes *)user;
+        uint8_t area_type = 0xffu;
+        if (nes != NULL && nes->cpu_ram_base != NULL) {
+            area_type = nes->cpu_ram_base[SMB1_AREA_TYPE_ADDR & 0x07ffu];
+        }
+        if (area_type == SMB1_AREA_TYPE_WATER) {
+            return false;
+        }
+    }
     return k_smb1_bg_tile_interactive[tile_index];
 }
