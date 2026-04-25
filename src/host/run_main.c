@@ -1,4 +1,5 @@
 #include "audio_sdl.h"
+#include "camera_sdl.h"
 #include "frame_pacer.h"
 #include "nes.h"
 #include "smb1_bg_classifier.h"
@@ -15,6 +16,9 @@
 
 enum {
     HOST_DEFAULT_SCALE = 4,
+    HOST_DEFAULT_CAMERA_WIDTH = 320,
+    HOST_DEFAULT_CAMERA_HEIGHT = 240,
+    HOST_DEFAULT_CAMERA_FPS = 60,
     HOST_FPS_SAMPLE_MS = 1000,
     HOST_COARSE_SLEEP_THRESHOLD_NS = 2000000,
     HOST_COARSE_SLEEP_GUARD_NS = 250000,
@@ -27,6 +31,7 @@ typedef struct {
     bool enable_vsync;
     bool enable_color;
     bool enable_audio;
+    bool enable_camera_input;
     bool throttled;
     bool apu_stats;
     bool apu_write_summary;
@@ -35,6 +40,7 @@ typedef struct {
     uint64_t max_frames;
     const char *dump_wav_path;
     double dump_wav_seconds;
+    int camera_index;
     uint8_t audio_mix_mask;
     ApuDebugTestTone test_tone;
 } RunOptions;
@@ -45,7 +51,7 @@ typedef struct {
 
 static void print_usage(const char *argv0) {
     printf(
-        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--transparent-bg] [--opacity 0-100] [--dump-wav path] [--dump-wav-seconds N]\n",
+        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--camera-input] [--no-camera-input] [--camera-index N] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--transparent-bg] [--opacity 0-100] [--dump-wav path] [--dump-wav-seconds N]\n",
         argv0
     );
 }
@@ -124,6 +130,7 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     options->enable_vsync = false;
     options->enable_color = true;
     options->enable_audio = true;
+    options->enable_camera_input = false;
     options->throttled = true;
     options->apu_stats = false;
     options->apu_write_summary = false;
@@ -132,6 +139,7 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     options->max_frames = 0;
     options->dump_wav_path = NULL;
     options->dump_wav_seconds = 2.0;
+    options->camera_index = 0;
     options->audio_mix_mask = APU_DEBUG_MASK_ALL;
     options->test_tone = APU_DEBUG_TEST_TONE_NONE;
 
@@ -172,6 +180,22 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
         }
         if (strcmp(arg, "--no-audio") == 0) {
             options->enable_audio = false;
+            continue;
+        }
+        if (strcmp(arg, "--camera-input") == 0) {
+            options->enable_camera_input = true;
+            continue;
+        }
+        if (strcmp(arg, "--no-camera-input") == 0) {
+            options->enable_camera_input = false;
+            continue;
+        }
+        if (strcmp(arg, "--camera-index") == 0) {
+            if (i + 1 >= argc || !parse_int_arg(argv[i + 1], &options->camera_index) || options->camera_index < 0) {
+                fprintf(stderr, "--camera-index requires a non-negative integer\n");
+                return false;
+            }
+            ++i;
             continue;
         }
         if (strcmp(arg, "--throttled") == 0) {
@@ -469,6 +493,7 @@ int main(int argc, char **argv) {
     RunOptions options;
     HostSdlWindow *window = NULL;
     HostAudioSdl *audio = NULL;
+    HostCameraSdl *camera = NULL;
     HostInputState input = { 0 };
     MicronesFramePacer pacer;
     MicronesFramePacerStats pacer_stats;
@@ -479,6 +504,7 @@ int main(int argc, char **argv) {
     uint64_t now_ns;
     int16_t audio_samples[2048];
     ApuDebugReport apu_report;
+    HostCameraSdlStats camera_stats;
     int16_t *wav_samples = NULL;
     size_t wav_capacity = 0;
     size_t wav_count = 0;
@@ -521,6 +547,20 @@ int main(int argc, char **argv) {
         nes_destroy(&nes);
         return 4;
     }
+    camera = host_camera_sdl_create(
+        options.enable_camera_input,
+        options.camera_index,
+        HOST_DEFAULT_CAMERA_WIDTH,
+        HOST_DEFAULT_CAMERA_HEIGHT,
+        HOST_DEFAULT_CAMERA_FPS
+    );
+    if (camera == NULL) {
+        fprintf(stderr, "SDL camera init failed: %s\n", host_camera_sdl_last_error());
+        host_audio_sdl_destroy(audio);
+        host_sdl_window_destroy(window);
+        nes_destroy(&nes);
+        return 5;
+    }
 
     now_ns = host_now_ns();
     micrones_frame_pacer_init(&pacer, options.throttled, now_ns);
@@ -540,6 +580,19 @@ int main(int argc, char **argv) {
         printf(" sample_rate=%u", nes_audio_sample_rate(&nes));
     }
     printf("\n");
+    if (host_camera_sdl_is_enabled(camera)) {
+        host_camera_sdl_get_stats(camera, &camera_stats);
+        printf(
+            "camera: on index=%d device=\"%s\" request=%dx%d@%d\n",
+            options.camera_index,
+            camera_stats.device_name,
+            HOST_DEFAULT_CAMERA_WIDTH,
+            HOST_DEFAULT_CAMERA_HEIGHT,
+            HOST_DEFAULT_CAMERA_FPS
+        );
+    } else {
+        printf("camera: off\n");
+    }
     printf("audio mix mask: %02X\n", nes_audio_mix_enable_mask(&nes));
     printf("apu test tone: %s\n", apu_debug_test_tone_name(nes_audio_test_tone(&nes)));
     if (options.dump_wav_path != NULL) {
@@ -547,10 +600,11 @@ int main(int argc, char **argv) {
         wav_samples = (int16_t *)calloc(wav_capacity != 0 ? wav_capacity : 1u, sizeof(*wav_samples));
         if (wav_samples == NULL) {
             fprintf(stderr, "WAV buffer allocation failed\n");
+            host_camera_sdl_destroy(camera);
             host_audio_sdl_destroy(audio);
             host_sdl_window_destroy(window);
             nes_destroy(&nes);
-            return 5;
+            return 6;
         }
         printf("wav dump: %s seconds=%.2f samples=%zu\n", options.dump_wav_path, options.dump_wav_seconds, wav_capacity);
     }
@@ -570,6 +624,11 @@ int main(int argc, char **argv) {
         }
 
         if (!host_process_events(&running, &input)) {
+            break;
+        }
+        if (!host_camera_sdl_poll(camera, now_ns)) {
+            fprintf(stderr, "Camera poll failed: %s\n", host_camera_sdl_last_error());
+            running = false;
             break;
         }
         nes_set_controller_state(&nes, 0, host_read_controller_state());
@@ -679,6 +738,25 @@ int main(int argc, char **argv) {
                 pacer_stats.measured_fps,
                 pacer_stats.late_frame_count
             );
+            if (host_camera_sdl_is_enabled(camera)) {
+                char camera_suffix[96];
+                host_camera_sdl_get_stats(camera, &camera_stats);
+                if (!camera_stats.approved) {
+                    snprintf(camera_suffix, sizeof(camera_suffix), " | cam pending");
+                } else if (camera_stats.total_frames_acquired == 0) {
+                    snprintf(camera_suffix, sizeof(camera_suffix), " | cam waiting");
+                } else {
+                    snprintf(
+                        camera_suffix,
+                        sizeof(camera_suffix),
+                        " | cam %.1f fps %dx%d",
+                        camera_stats.measured_fps,
+                        camera_stats.frame_width,
+                        camera_stats.frame_height
+                    );
+                }
+                strncat(title, camera_suffix, sizeof(title) - strlen(title) - 1u);
+            }
             host_sdl_window_set_title(window, title);
             stats_window_start_ns = now_ns;
         }
@@ -707,6 +785,7 @@ int main(int argc, char **argv) {
 
     free(wav_samples);
     nes_destroy(&nes);
+    host_camera_sdl_destroy(camera);
     host_audio_sdl_destroy(audio);
     host_sdl_window_destroy(window);
     return 0;
