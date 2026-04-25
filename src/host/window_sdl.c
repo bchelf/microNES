@@ -89,6 +89,43 @@ static void host_convert_palette_to_rgba(uint8_t palette_index, uint8_t *rgba_ou
     rgba_out[3] = 0xffu;
 }
 
+static void host_write_rgba_pixel(HostSdlWindow *window, uint8_t pixel, uint8_t *rgba) {
+    if (window->enable_transparent && pixel == PPU_COLOR_TRANSPARENT) {
+        host_write_transparent(rgba);
+    } else if (window->enable_color) {
+        host_convert_palette_to_rgba(pixel, rgba);
+        rgba[3] = window->opaque_alpha;
+    } else {
+        host_convert_gray_to_rgba(pixel, rgba);
+        rgba[3] = window->opaque_alpha;
+    }
+}
+
+static bool host_sdl_window_convert_scanlines(
+    HostSdlWindow *window,
+    const uint8_t *pixels,
+    int width,
+    int start_y,
+    int count
+) {
+    if (window == NULL || pixels == NULL || width != NES_FRAME_WIDTH || start_y < 0 ||
+        count <= 0 || start_y + count > NES_FRAME_HEIGHT) {
+        host_sdl_set_error("invalid scanline upload parameters");
+        return false;
+    }
+
+    for (int y = start_y; y < start_y + count; ++y) {
+        const uint8_t *src = &pixels[(size_t)(y - start_y) * (size_t)width];
+        uint8_t *dst = &window->rgba_pixels[(size_t)y * (size_t)window->rgba_pitch_bytes];
+
+        for (int x = 0; x < width; ++x) {
+            host_write_rgba_pixel(window, src[x], &dst[x * 4]);
+        }
+    }
+
+    return true;
+}
+
 HostSdlWindow *host_sdl_window_create(const char *title, int scale, bool enable_vsync, bool enable_color, bool enable_transparent, int opacity_percent) {
     HostSdlWindow *window;
     SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
@@ -228,22 +265,31 @@ bool host_sdl_window_upload_frame(HostSdlWindow *window, const uint8_t *pixels, 
         return false;
     }
 
-    for (int i = 0; i < width * height; ++i) {
-        uint8_t *rgba = &window->rgba_pixels[i * 4];
-        uint8_t pixel = pixels[i];
-
-        if (window->enable_transparent && pixel == PPU_COLOR_TRANSPARENT) {
-            host_write_transparent(rgba);
-        } else if (window->enable_color) {
-            host_convert_palette_to_rgba(pixel, rgba);
-            rgba[3] = window->opaque_alpha;
-        } else {
-            host_convert_gray_to_rgba(pixel, rgba);
-            rgba[3] = window->opaque_alpha;
-        }
+    if (!host_sdl_window_convert_scanlines(window, pixels, width, 0, height)) {
+        return false;
     }
 
     if (!SDL_UpdateTexture(window->texture, NULL, window->rgba_pixels, window->rgba_pitch_bytes)) {
+        host_sdl_set_sdl_error("SDL_UpdateTexture failed");
+        return false;
+    }
+    return true;
+}
+
+bool host_sdl_window_upload_scanlines(HostSdlWindow *window, const uint8_t *pixels, int width, int start_y, int count) {
+    SDL_Rect rect;
+    uint8_t *src;
+
+    if (!host_sdl_window_convert_scanlines(window, pixels, width, start_y, count)) {
+        return false;
+    }
+
+    rect.x = 0;
+    rect.y = start_y;
+    rect.w = width;
+    rect.h = count;
+    src = &window->rgba_pixels[(size_t)start_y * (size_t)window->rgba_pitch_bytes];
+    if (!SDL_UpdateTexture(window->texture, &rect, src, window->rgba_pitch_bytes)) {
         host_sdl_set_sdl_error("SDL_UpdateTexture failed");
         return false;
     }

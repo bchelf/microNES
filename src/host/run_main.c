@@ -19,6 +19,7 @@ enum {
     HOST_COARSE_SLEEP_THRESHOLD_NS = 2000000,
     HOST_COARSE_SLEEP_GUARD_NS = 250000,
     HOST_INPUT_POLL_INSTRUCTION_INTERVAL = 32,
+    HOST_SCANLINE_UPLOAD_BATCH = 8,
 };
 
 typedef struct {
@@ -465,6 +466,62 @@ static void host_wait_until_ns(uint64_t deadline_ns) {
     }
 }
 
+static bool host_upload_scanline_batch(HostSdlWindow *window, Nes *nes, int start_y, int count) {
+    return host_sdl_window_upload_scanlines(
+        window,
+        &nes->ppu.frame_buffer.pixels[(size_t)start_y * NES_FRAME_WIDTH],
+        NES_FRAME_WIDTH,
+        start_y,
+        count
+    );
+}
+
+static bool host_drain_ready_scanline(
+    HostSdlWindow *window,
+    Nes *nes,
+    uint64_t target_render_frame,
+    int *pending_start_y,
+    int *pending_count,
+    bool *uploaded_any
+) {
+    NesScanline *scanline = &nes->ppu.scanline_buffer;
+
+    if (!nes->ppu.scanline_ready || !scanline->ready) {
+        return true;
+    }
+
+    nes->ppu.scanline_ready = false;
+    scanline->ready = false;
+
+    if (scanline->frame_index != target_render_frame || scanline->y >= NES_FRAME_HEIGHT) {
+        return true;
+    }
+
+    if (*pending_count == 0) {
+        *pending_start_y = (int)scanline->y;
+        *pending_count = 1;
+    } else if (*pending_start_y + *pending_count == (int)scanline->y) {
+        ++*pending_count;
+    } else {
+        if (!host_upload_scanline_batch(window, nes, *pending_start_y, *pending_count)) {
+            return false;
+        }
+        *uploaded_any = true;
+        *pending_start_y = (int)scanline->y;
+        *pending_count = 1;
+    }
+
+    if (*pending_count >= HOST_SCANLINE_UPLOAD_BATCH || scanline->y == (NES_FRAME_HEIGHT - 1)) {
+        if (!host_upload_scanline_batch(window, nes, *pending_start_y, *pending_count)) {
+            return false;
+        }
+        *uploaded_any = true;
+        *pending_count = 0;
+    }
+
+    return true;
+}
+
 int main(int argc, char **argv) {
     RunOptions options;
     HostSdlWindow *window = NULL;
@@ -560,8 +617,12 @@ int main(int argc, char **argv) {
 
     while (running) {
         uint64_t target_completed_frame = nes.ppu.completed_frame_count + 1;
+        uint64_t target_render_frame = nes.ppu.completed_frame_count;
         char title[128];
         uint32_t instructions_until_input_poll = HOST_INPUT_POLL_INSTRUCTION_INTERVAL;
+        int pending_scanline_start_y = 0;
+        int pending_scanline_count = 0;
+        bool uploaded_any_scanlines = false;
 
         now_ns = host_now_ns();
         if (!options.enable_vsync && micrones_frame_pacer_should_wait(&pacer, now_ns, NULL)) {
@@ -580,6 +641,17 @@ int main(int argc, char **argv) {
                 running = false;
                 break;
             }
+            if (!host_drain_ready_scanline(
+                    window,
+                    &nes,
+                    target_render_frame,
+                    &pending_scanline_start_y,
+                    &pending_scanline_count,
+                    &uploaded_any_scanlines)) {
+                fprintf(stderr, "Scanline upload failed: %s\n", host_sdl_window_last_error());
+                running = false;
+                break;
+            }
             if (--instructions_until_input_poll == 0) {
                 if (!host_process_events(&running, &input)) {
                     break;
@@ -592,10 +664,21 @@ int main(int argc, char **argv) {
             break;
         }
 
-        if (!host_sdl_window_upload_frame(window, nes.ppu.frame_buffer.pixels, NES_FRAME_WIDTH, NES_FRAME_HEIGHT)) {
-            fprintf(stderr, "Frame upload failed: %s\n", host_sdl_window_last_error());
-            running = false;
-            break;
+        if (pending_scanline_count != 0) {
+            if (!host_upload_scanline_batch(window, &nes, pending_scanline_start_y, pending_scanline_count)) {
+                fprintf(stderr, "Scanline upload failed: %s\n", host_sdl_window_last_error());
+                running = false;
+                break;
+            }
+            uploaded_any_scanlines = true;
+        }
+
+        if (!uploaded_any_scanlines) {
+            if (!host_sdl_window_upload_frame(window, nes.ppu.frame_buffer.pixels, NES_FRAME_WIDTH, NES_FRAME_HEIGHT)) {
+                fprintf(stderr, "Frame upload failed: %s\n", host_sdl_window_last_error());
+                running = false;
+                break;
+            }
         }
         if (!host_sdl_window_present(window)) {
             fprintf(stderr, "Render failed: %s\n", host_sdl_window_last_error());
