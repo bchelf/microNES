@@ -310,6 +310,54 @@ src/common/mmc1.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc1.c.s
 .PHONY : src/common/mmc1.c.s
 
+src/common/mmc3.o: src/common/mmc3.c.o
+.PHONY : src/common/mmc3.o
+
+# target to build an object file
+src/common/mmc3.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.o
+.PHONY : src/common/mmc3.c.o
+
+src/common/mmc3.i: src/common/mmc3.c.i
+.PHONY : src/common/mmc3.i
+
+# target to preprocess a source file
+src/common/mmc3.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.i
+.PHONY : src/common/mmc3.c.i
+
+src/common/mmc3.s: src/common/mmc3.c.s
+.PHONY : src/common/mmc3.s
+
+# target to generate assembly for a file
+src/common/mmc3.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.s
+.PHONY : src/common/mmc3.c.s
+
+src/common/mmc5.o: src/common/mmc5.c.o
+.PHONY : src/common/mmc5.o
+
+# target to build an object file
+src/common/mmc5.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc5.c.o
+.PHONY : src/common/mmc5.c.o
+
+src/common/mmc5.i: src/common/mmc5.c.i
+.PHONY : src/common/mmc5.i
+
+# target to preprocess a source file
+src/common/mmc5.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc5.c.i
+.PHONY : src/common/mmc5.c.i
+
+src/common/mmc5.s: src/common/mmc5.c.s
+.PHONY : src/common/mmc5.s
+
+# target to generate assembly for a file
+src/common/mmc5.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc5.c.s
+.PHONY : src/common/mmc5.c.s
+
 src/common/nes.o: src/common/nes.c.o
 .PHONY : src/common/nes.o
 
@@ -382,30 +430,6 @@ src/common/ppu.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/ppu.c.s
 .PHONY : src/common/ppu.c.s
 
-src/common/smb1_bg_classifier.o: src/common/smb1_bg_classifier.c.o
-.PHONY : src/common/smb1_bg_classifier.o
-
-# target to build an object file
-src/common/smb1_bg_classifier.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o
-.PHONY : src/common/smb1_bg_classifier.c.o
-
-src/common/smb1_bg_classifier.i: src/common/smb1_bg_classifier.c.i
-.PHONY : src/common/smb1_bg_classifier.i
-
-# target to preprocess a source file
-src/common/smb1_bg_classifier.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.i
-.PHONY : src/common/smb1_bg_classifier.c.i
-
-src/common/smb1_bg_classifier.s: src/common/smb1_bg_classifier.c.s
-.PHONY : src/common/smb1_bg_classifier.s
-
-# target to generate assembly for a file
-src/common/smb1_bg_classifier.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.s
-.PHONY : src/common/smb1_bg_classifier.c.s
-
 src/web/web_main.o: src/web/web_main.c.o
 .PHONY : src/web/web_main.o
 
@@ -461,6 +485,12 @@ help:
 	@echo "... src/common/mmc1.o"
 	@echo "... src/common/mmc1.i"
 	@echo "... src/common/mmc1.s"
+	@echo "... src/common/mmc3.o"
+	@echo "... src/common/mmc3.i"
+	@echo "... src/common/mmc3.s"
+	@echo "... src/common/mmc5.o"
+	@echo "... src/common/mmc5.i"
+	@echo "... src/common/mmc5.s"
 	@echo "... src/common/nes.o"
 	@echo "... src/common/nes.i"
 	@echo "... src/common/nes.s"
@@ -470,9 +500,6 @@ help:
 	@echo "... src/common/ppu.o"
 	@echo "... src/common/ppu.i"
 	@echo "... src/common/ppu.s"
-	@echo "... src/common/smb1_bg_classifier.o"
-	@echo "... src/common/smb1_bg_classifier.i"
-	@echo "... src/common/smb1_bg_classifier.s"
 	@echo "... src/web/web_main.o"
 	@echo "... src/web/web_main.i"
 	@echo "... src/web/web_main.s"

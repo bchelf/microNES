@@ -77,15 +77,15 @@ CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o: CMakeFiles/micrones_wasm.dir/
 CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o: /home/runner/work/microNES/microNES/src/web/web_main.c
 CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o: CMakeFiles/micrones_wasm.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/runner/work/microNES/microNES/build-web/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building C object CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o"
-	/home/runner/work/_temp/a8ba3365-c8b8-4d5d-94a2-cdb74f123fd1/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o -MF CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o.d -o CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o -c /home/runner/work/microNES/microNES/src/web/web_main.c
+	/home/runner/work/_temp/b0a497a6-37fa-4524-8d6d-931f8c087e00/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o -MF CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o.d -o CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o -c /home/runner/work/microNES/microNES/src/web/web_main.c
 
 CMakeFiles/micrones_wasm.dir/src/web/web_main.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/micrones_wasm.dir/src/web/web_main.c.i"
-	/home/runner/work/_temp/a8ba3365-c8b8-4d5d-94a2-cdb74f123fd1/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/web/web_main.c > CMakeFiles/micrones_wasm.dir/src/web/web_main.c.i
+	/home/runner/work/_temp/b0a497a6-37fa-4524-8d6d-931f8c087e00/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/runner/work/microNES/microNES/src/web/web_main.c > CMakeFiles/micrones_wasm.dir/src/web/web_main.c.i
 
 CMakeFiles/micrones_wasm.dir/src/web/web_main.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/micrones_wasm.dir/src/web/web_main.c.s"
-	/home/runner/work/_temp/a8ba3365-c8b8-4d5d-94a2-cdb74f123fd1/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/web/web_main.c -o CMakeFiles/micrones_wasm.dir/src/web/web_main.c.s
+	/home/runner/work/_temp/b0a497a6-37fa-4524-8d6d-931f8c087e00/emsdk-main/upstream/emscripten/emcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/runner/work/microNES/microNES/src/web/web_main.c -o CMakeFiles/micrones_wasm.dir/src/web/web_main.c.s
 
 # Object files for target micrones_wasm
 micrones_wasm_OBJECTS = \

@@ -15,10 +15,11 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/runner/work/microNES/microNES/src/common/frame_pacer.c" "CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/input.c" "CMakeFiles/micrones_core.dir/src/common/input.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/input.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/mmc1.c" "CMakeFiles/micrones_core.dir/src/common/mmc1.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/mmc1.c.o.d"
+  "/home/runner/work/microNES/microNES/src/common/mmc3.c" "CMakeFiles/micrones_core.dir/src/common/mmc3.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/mmc3.c.o.d"
+  "/home/runner/work/microNES/microNES/src/common/mmc5.c" "CMakeFiles/micrones_core.dir/src/common/mmc5.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/mmc5.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/nes.c" "CMakeFiles/micrones_core.dir/src/common/nes.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/nes.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/nrom.c" "CMakeFiles/micrones_core.dir/src/common/nrom.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/nrom.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/ppu.c" "CMakeFiles/micrones_core.dir/src/common/ppu.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/ppu.c.o.d"
-  "/home/runner/work/microNES/microNES/src/common/smb1_bg_classifier.c" "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.
