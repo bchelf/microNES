@@ -1,0 +1,131 @@
+(footprint "RCA_BOOMELE_AV5"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0.4 -7.8 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "c923d360-f7cb-4d4f-9c4e-7abbaa0f801b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.1)
+			)
+		)
+	)
+	(property "Value" "RCA_BOOMELE_AV5"
+		(at 0.2 -6 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "164ffc49-99e3-4007-8dd4-a1c2cbc9b9fb")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "2f563b77-d531-4afb-8156-ba3d42c4a7a0")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ca8e9c04-c221-4487-a9ee-21a13b02f121")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_rect
+		(start -3 -3)
+		(end 3 7)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "be141028-6506-4f80-b0c8-3376d82dbfdf")
+	)
+	(fp_rect
+		(start -3.5 -3.5)
+		(end 3.5 7.5)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "3cd8166d-2f77-43a8-b105-5d3a9c491971")
+	)
+	(fp_line
+		(start 2 -0.5)
+		(end 2 4.5)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "a3dc692d-76aa-409b-9868-ae82c0a0b179")
+	)
+	(fp_rect
+		(start -2.5 -2.5)
+		(end 2.5 6.5)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "05767d80-65a5-4d13-a804-faaf812b144b")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 11 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "0eeaf8f7-78ad-4139-ba2d-b964ae3a2504")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole roundrect
+		(at 0 0)
+		(size 2.2 3.4)
+		(drill oval 1.2 2.4)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(roundrect_rratio 0.125)
+		(uuid "03e1dd56-8d47-4ff1-9425-95f228e49361")
+	)
+	(pad "2" thru_hole oval
+		(at 0 3.9)
+		(size 3.8 2.8)
+		(drill oval 2.8 1.8)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "f6794af6-189b-4e63-9b5a-c28b2632d2b5")
+	)
+	(embedded_fonts no)
+)
