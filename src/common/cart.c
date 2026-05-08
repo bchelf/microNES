@@ -1,6 +1,7 @@
 #include "cart.h"
 #include "mmc1.h"
 #include "mmc3.h"
+#include "mmc5.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,8 +140,8 @@ static bool cart_parse_ines_image(
         return false;
     }
     cartridge->mapper = (uint8_t)mapper;
-    if (cartridge->mapper != 0 && cartridge->mapper != 1 && cartridge->mapper != 4) {
-        cart_set_error(error, error_size, "only mapper 0 (NROM), mapper 1 (MMC1), and mapper 4 (MMC3) are supported");
+    if (cartridge->mapper != 0 && cartridge->mapper != 1 && cartridge->mapper != 4 && cartridge->mapper != 5) {
+        cart_set_error(error, error_size, "only mapper 0 (NROM), mapper 1 (MMC1), mapper 4 (MMC3), and mapper 5 (MMC5) are supported");
         return false;
     }
 
@@ -150,6 +151,10 @@ static bool cart_parse_ines_image(
     }
     if (is_nes2 && cartridge->mapper == 4 && cartridge->submapper != 0) {
         cart_set_error(error, error_size, "only mapper 4 submapper 0 is supported");
+        return false;
+    }
+    if (is_nes2 && cartridge->mapper == 5 && cartridge->submapper != 0) {
+        cart_set_error(error, error_size, "only mapper 5 submapper 0 is supported");
         return false;
     }
 
@@ -232,8 +237,10 @@ static bool cart_parse_ines_image(
     } else if (cartridge->mapper == 1) {
         /* mapper 1 / MMC1: mmc1_cart_init sets shift register and bank pointers */
         mmc1_cart_init(cartridge);
-    } else {
+    } else if (cartridge->mapper == 4) {
         mmc3_cart_init(cartridge);
+    } else {
+        mmc5_cart_init(cartridge);
     }
 
     if (!cart_build_chr_row_cache(cartridge, error, error_size)) {
@@ -390,6 +397,8 @@ bool cart_load_ines_const_memory(
         /* Rebase precomputed bank pointers into the new DRAM allocation */
         if (cartridge->mapper == 4) {
             mmc3_rebase_banks(cartridge, old_prg);
+        } else if (cartridge->mapper == 5) {
+            mmc5_rebase_banks(cartridge, old_prg);
         } else {
             cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);
             cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);

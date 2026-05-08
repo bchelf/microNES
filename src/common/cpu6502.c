@@ -82,7 +82,7 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
     cpu->pc = (uint16_t)(pc + 1u);
     if (pc >= 0x8000u) {
         off = (uint32_t)(pc - 0x8000u);
-        if (nes->cartridge.mapper == 4) {
+        if (nes->cartridge.mapper >= 4) {
             return nes->cartridge.prg_banks_8k[off >> 13][off & 0x1fffu];
         }
         if (off < 0x4000u) {
@@ -111,7 +111,7 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
     if (pc >= 0x8000u && (uint16_t)(pc + 1u) >= 0x8000u) {
         lo_off = (uint32_t)(pc - 0x8000u);
         hi_off = (uint32_t)((uint16_t)(pc + 1u) - 0x8000u);
-        if (nes->cartridge.mapper == 4) {
+        if (nes->cartridge.mapper >= 4) {
             lo = nes->cartridge.prg_banks_8k[lo_off >> 13][lo_off & 0x1fffu];
             hi = nes->cartridge.prg_banks_8k[hi_off >> 13][hi_off & 0x1fffu];
         } else {
@@ -311,6 +311,20 @@ static inline void cpu_lax(Cpu6502 *cpu, uint8_t value) {
 /* SAX: store A & X.  No flag effects. */
 static inline void cpu_sax(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
     cpu_write(cpu, nes, addr, (uint8_t)(cpu->a & cpu->x));
+}
+
+/* AXS/SBX: X = (A & X) - imm.  Flags are set like CMP on the subtraction. */
+static inline void cpu_axs(Cpu6502 *cpu, uint8_t value) {
+    uint8_t ax = (uint8_t)(cpu->a & cpu->x);
+    uint8_t result = (uint8_t)(ax - value);
+
+    if (ax >= value) {
+        cpu->p |= CPU6502_FLAG_C;
+    } else {
+        cpu->p &= (uint8_t)~CPU6502_FLAG_C;
+    }
+    cpu->x = result;
+    cpu_set_zn(cpu, result);
 }
 
 /* SLO: M = ASL(M), then A |= M.  C flag from ASL; N,Z from ORA result. */
@@ -1330,8 +1344,12 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     case 0x6b: cycles = 1; break;
     case 0x8b: cycles = 1; break;
     case 0xab: cycles = 1; break;
-    case 0xcb: cycles = 1; break;
     case 0xeb: cycles = 1; break;
+
+    case 0xcb:
+        cpu_axs(cpu, cpu_fetch8(cpu, nes));
+        cycles = 2;
+        break;
 
     default: {
         const Cpu6502OpcodeInfo *opcode_info = cpu6502_opcode_info(cpu->last_opcode);

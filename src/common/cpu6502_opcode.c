@@ -190,6 +190,7 @@ static const Cpu6502OpcodeInfo cpu6502_opcode_table[256] = {
     IL(0xe3, "ISB", "(ind,X)"), IL(0xe7, "ISB", "zp"),   IL(0xef, "ISB", "abs"),
     IL(0xf3, "ISB", "(ind),Y"), IL(0xf7, "ISB", "zp,X"), IL(0xfb, "ISB", "abs,Y"),
     IL(0xff, "ISB", "abs,X"),
+    IL(0xcb, "AXS", "#imm"),
 #undef IL
 #undef OP
 };

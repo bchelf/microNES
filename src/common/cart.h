@@ -57,6 +57,24 @@ typedef struct {
     bool mmc3_irq_reload;
     bool mmc3_irq_enabled;
     bool mmc3_a12_level;
+    /* MMC5 / mapper 5 state */
+    uint8_t mmc5_prg_mode;
+    uint8_t mmc5_chr_mode;
+    uint8_t mmc5_prg_ram_protect1;
+    uint8_t mmc5_prg_ram_protect2;
+    uint8_t mmc5_prg_bank[5];
+    uint8_t mmc5_chr_sprite_bank[8];
+    uint8_t mmc5_chr_bg_bank[4];
+    uint8_t mmc5_nametable_mapping;
+    uint8_t mmc5_fill_tile;
+    uint8_t mmc5_fill_attr;
+    uint8_t mmc5_irq_scanline;
+    uint8_t mmc5_irq_status;
+    bool mmc5_irq_enabled;
+    uint8_t mmc5_scanline;
+    uint8_t mmc5_mul_a;
+    uint8_t mmc5_mul_b;
+    uint8_t mmc5_exram[1024];
     bool irq_pending;
 } NesCartridge;
 

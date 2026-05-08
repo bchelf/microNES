@@ -9,6 +9,7 @@
 #include "input.h"
 #include "mmc1.h"
 #include "mmc3.h"
+#include "mmc5.h"
 #include "nrom.h"
 #include "ppu.h"
 #include "runtime_config.h"
@@ -67,7 +68,7 @@ typedef struct Nes {
     NesCartridge cartridge;
     NesController controllers[2];
     uint8_t cpu_ram[2048];
-    uint8_t wram[8192];   /* $6000-$7FFF battery-backed PRG-RAM (MMC1) */
+    uint8_t wram[32768];  /* $6000-$7FFF PRG-RAM; MMC5 can bank up to 32 KiB */
     NesExecutionStats stats;
     NesStopInfo stop_info;
     Cpu6502TraceEntry trace[NES_TRACE_CAPACITY];
@@ -128,7 +129,7 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
     // pointers updated on every bank switch; this keeps the hot path to a
     // single subtraction + compare + indexed load regardless of mapper.
     if (addr >= 0x8000u) {
-        if (nes->cartridge.mapper == 4) {
+        if (nes->cartridge.mapper >= 4) {
             uint32_t off = (uint32_t)(addr - 0x8000u);
             uint32_t bank = off >> 13;
             return nes->cartridge.prg_banks_8k[bank][off & 0x1fffu];
@@ -156,7 +157,14 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
     if (addr >= 0x4000u && addr <= 0x4017u) {
         return apu_cpu_read(&nes->apu, addr);
     }
+    if (nes->cartridge.mapper == 5 && addr >= 0x5000u && addr < 0x6000u) {
+        return mmc5_cpu_read(&nes->cartridge, addr);
+    }
     if (addr >= 0x6000u && addr < 0x8000u) {
+        if (nes->cartridge.mapper == 5) {
+            uint32_t bank = (uint32_t)(nes->cartridge.mmc5_prg_bank[0] & 0x03u);
+            return nes->wram[(bank << 13) | (uint32_t)(addr - 0x6000u)];
+        }
         return nes->wram[addr - 0x6000u];
     }
     return 0;
@@ -196,7 +204,19 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
         return;
     }
     if (addr >= 0x6000u && addr < 0x8000u) {
+        if (nes->cartridge.mapper == 5) {
+            if (nes->cartridge.mmc5_prg_ram_protect1 == 0x02u &&
+                nes->cartridge.mmc5_prg_ram_protect2 == 0x01u) {
+                uint32_t bank = (uint32_t)(nes->cartridge.mmc5_prg_bank[0] & 0x03u);
+                nes->wram[(bank << 13) | (uint32_t)(addr - 0x6000u)] = value;
+            }
+            return;
+        }
         nes->wram[addr - 0x6000u] = value;
+        return;
+    }
+    if (nes->cartridge.mapper == 5 && addr >= 0x5000u && addr < 0x6000u) {
+        mmc5_cpu_write(&nes->cartridge, addr, value);
         return;
     }
     if (addr >= 0x8000u) {
@@ -204,6 +224,8 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
             mmc1_cpu_write(&nes->cartridge, addr, value);
         } else if (nes->cartridge.mapper == 4) {
             mmc3_cpu_write(&nes->cartridge, addr, value);
+        } else if (nes->cartridge.mapper == 5) {
+            mmc5_cpu_write(&nes->cartridge, addr, value);
         }
         /* mapper 0 / NROM: writes to cartridge space are ignored */
         return;

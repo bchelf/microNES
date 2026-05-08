@@ -392,6 +392,21 @@ static uint16_t ppu_nametable_index(const NesCartridge *cartridge, uint16_t addr
     return (uint16_t)(physical * 0x0400u + inner);
 }
 
+static inline uint8_t ppu_nametable_read(const Ppu *ppu, const NesCartridge *cartridge, uint16_t addr) {
+    if (cartridge->mapper == 5) {
+        return mmc5_nametable_read(cartridge, ppu->nametables, addr);
+    }
+    return ppu->nametables[ppu_nametable_index(cartridge, addr)];
+}
+
+static inline void ppu_nametable_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uint8_t value) {
+    if (cartridge->mapper == 5) {
+        mmc5_nametable_write(cartridge, ppu->nametables, addr, value);
+        return;
+    }
+    ppu->nametables[ppu_nametable_index(cartridge, addr)] = value;
+}
+
 static void ppu_fill_render_tile_diag(
     const Ppu *ppu,
     const NesCartridge *cartridge,
@@ -414,7 +429,7 @@ static void ppu_fill_render_tile_diag(
     coarse_x &= 0x001fu;
     nametable_addr = (uint16_t)(0x2000u + name_table + coarse_y * 32u + coarse_x);
     attribute_addr = (uint16_t)(0x23c0u + name_table + ((coarse_y >> 2) * 8u) + (coarse_x >> 2));
-    tile_index = ppu->nametables[ppu_nametable_index(cartridge, nametable_addr)];
+    tile_index = ppu_nametable_read(ppu, cartridge, nametable_addr);
     pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
     pattern_addr = (uint16_t)(pattern_base + tile_index * 16u + fine_y);
 
@@ -440,7 +455,7 @@ static uint8_t ppu_vram_read(Ppu *ppu, NesCartridge *cartridge, uint16_t addr) {
         return nrom_ppu_read(cartridge, masked);
     }
     if (masked < 0x3f00u) {
-        return ppu->nametables[ppu_nametable_index(cartridge, masked)];
+        return ppu_nametable_read(ppu, cartridge, masked);
     }
     return ppu->palette[ppu_palette_index(masked)];
 }
@@ -453,7 +468,7 @@ static void ppu_vram_write(Ppu *ppu, NesCartridge *cartridge, uint16_t addr, uin
         return;
     }
     if (masked < 0x3f00u) {
-        ppu->nametables[ppu_nametable_index(cartridge, masked)] = value;
+        ppu_nametable_write(ppu, cartridge, masked, value);
         return;
     }
     ppu->palette[ppu_palette_index(masked)] = value;
@@ -471,8 +486,8 @@ static PpuPixelSample ppu_background_pixel(const Ppu *ppu, const NesCartridge *c
     uint16_t row = (base_v >> 12) & 0x0007u;
     uint16_t tile_index_addr = (uint16_t)(0x2000u + name_table + coarse_y * 32u + coarse_x);
     uint16_t attr_addr = (uint16_t)(0x23c0u + name_table + ((coarse_y >> 2) * 8u) + (coarse_x >> 2));
-    uint8_t tile = ppu->nametables[ppu_nametable_index(cartridge, tile_index_addr)];
-    uint8_t attr = ppu->nametables[ppu_nametable_index(cartridge, attr_addr)];
+    uint8_t tile = ppu_nametable_read(ppu, cartridge, tile_index_addr);
+    uint8_t attr = ppu_nametable_read(ppu, cartridge, attr_addr);
     uint16_t pattern_base = (ppu->ctrl & 0x10u) ? 0x1000u : 0x0000u;
     uint16_t pattern_addr = (uint16_t)(pattern_base + tile * 16u + row);
     const uint8_t *row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
@@ -676,7 +691,7 @@ static PpuSpritePixelSample ppu_sample_sprite_pixel_internal(
     }
 
     {
-        const uint8_t *row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
+        const uint8_t *row_pixels = nrom_ppu_row_pixels_sprite(cartridge, pattern_addr, true);
         if (row_pixels != NULL) {
             color_bits = row_pixels[local_x];
         } else {
@@ -906,8 +921,8 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                 (uint16_t)(0x2000u + name_table + bg_coarse_y * 32u + coarse_x);
             uint16_t attr_addr =
                 (uint16_t)(0x23c0u + name_table + ((bg_coarse_y >> 2) * 8u) + (coarse_x >> 2));
-            uint8_t tile = ppu->nametables[ppu_nametable_index(cartridge, tile_index_addr)];
-            uint8_t attr = ppu->nametables[ppu_nametable_index(cartridge, attr_addr)];
+            uint8_t tile = ppu_nametable_read(ppu, cartridge, tile_index_addr);
+            uint8_t attr = ppu_nametable_read(ppu, cartridge, attr_addr);
             uint8_t palette_select =
                 (uint8_t)((attr >> ((((bg_coarse_y & 0x02u) << 1) | (coarse_x & 0x02u)))) & 0x03u);
             uint16_t pattern_addr = (uint16_t)(bg_pattern_base + tile * 16u + bg_row);
@@ -1032,7 +1047,7 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
             continue;
         }
 
-        row_pixels = nrom_ppu_row_pixels(cartridge, pattern_addr);
+        row_pixels = nrom_ppu_row_pixels_sprite(cartridge, pattern_addr, true);
         if (row_pixels == NULL) {
             low = nrom_ppu_read(cartridge, pattern_addr);
             high = nrom_ppu_read(cartridge, (uint16_t)(pattern_addr + 8u));
@@ -1194,8 +1209,8 @@ static void MICRONES_HOT_FUNC(ppu_render_scanline)(Ppu *ppu, NesCartridge *cartr
                     (uint16_t)(0x2000u + name_table + bg_coarse_y * 32u + coarse_x);
                 uint16_t attr_addr =
                     (uint16_t)(0x23c0u + name_table + ((bg_coarse_y >> 2) * 8u) + (coarse_x >> 2));
-                uint8_t tile = ppu->nametables[ppu_nametable_index(cartridge, tile_index_addr)];
-                uint8_t attr = ppu->nametables[ppu_nametable_index(cartridge, attr_addr)];
+                uint8_t tile = ppu_nametable_read(ppu, cartridge, tile_index_addr);
+                uint8_t attr = ppu_nametable_read(ppu, cartridge, attr_addr);
                 uint16_t pattern_addr = (uint16_t)(bg_pattern_base + tile * 16u + bg_row);
 
                 cached_low = nrom_ppu_read(cartridge, pattern_addr);
@@ -1431,6 +1446,9 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
         } else {
             mmc3_ppu_a12_update(cartridge, false);
         }
+    } else if (cartridge->mapper == 5) {
+        bool visible = ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT;
+        mmc5_scanline_tick(cartridge, visible && ppu_rendering_enabled(ppu));
     }
 
     if (ppu->scanline >= 0 && ppu->scanline < NES_FRAME_HEIGHT) {
