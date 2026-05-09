@@ -54,6 +54,10 @@ bool fat32_is_mounted(void);
 /* Open the root directory for iteration. */
 bool fat32_open_root(Fat32DirIter *it);
 
+/* Open a subdirectory for iteration, given its first-cluster number (which
+ * comes from a Fat32Entry that has FAT32_ATTR_DIRECTORY set). */
+bool fat32_open_dir_at_cluster(Fat32DirIter *it, uint32_t first_cluster);
+
 /* Fetch the next non-deleted, non-volume-id, non-LFN entry.  Returns false
  * at end-of-directory or on read error. */
 bool fat32_dir_next(Fat32DirIter *it, Fat32Entry *out);

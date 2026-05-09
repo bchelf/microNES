@@ -146,6 +146,14 @@ bool fat32_open_root(Fat32DirIter *it) {
     return true;
 }
 
+bool fat32_open_dir_at_cluster(Fat32DirIter *it, uint32_t first_cluster) {
+    if (!s_fs.mounted) return false;
+    if (first_cluster < 2u || cluster_is_eof(first_cluster)) return false;
+    memset(it, 0, sizeof(*it));
+    it->cluster = first_cluster;
+    return true;
+}
+
 /* Convert a 13-char LFN slot into ASCII characters in *buf (advancing
  * *cursor).  Stops at the NUL/0xFFFF terminator. */
 static void lfn_extract_chunk(const uint8_t *entry, char *out, size_t *cursor) {

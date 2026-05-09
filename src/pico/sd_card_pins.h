@@ -68,9 +68,12 @@
 #endif
 
 /* If your card socket has no card-detect line, set this to 1 to skip the
- * presence check and assume a card is always inserted. */
+ * presence check and assume a card is always inserted.  The breadboard
+ * SD module we're prototyping with has no CD switch, so this defaults
+ * to 1; override with -DMICRONES_SD_CD_DISABLED=0 once a CD line is
+ * wired (and configure MICRONES_SD_PIN_CD accordingly). */
 #ifndef MICRONES_SD_CD_DISABLED
-#define MICRONES_SD_CD_DISABLED 0u
+#define MICRONES_SD_CD_DISABLED 1u
 #endif
 
 #endif

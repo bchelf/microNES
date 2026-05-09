@@ -3,6 +3,7 @@
 #include "fat32.h"
 #include "sd_spi.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -89,31 +90,29 @@ static int compare_name(const void *a, const void *b) {
     return strcmp(ea->meta.name, eb->meta.name);
 }
 
-static void sd_refresh(RomSource *self) {
-    SdState *st = (SdState *)self->user;
-    st->entry_count = 0;
-
-    /* Re-mount in case the card was changed.  Cheap if state is the same. */
-    if (!fat32_is_mounted()) {
-        if (sd_init() != SD_OK) {
-            set_error("SD init failed");
-            return;
-        }
-        if (!fat32_mount()) {
-            set_error("FAT32 mount failed");
-            return;
-        }
+static bool name_equals_ci(const char *a, const char *b) {
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
+        ++a; ++b;
     }
+    return *a == '\0' && *b == '\0';
+}
 
-    Fat32DirIter it;
-    if (!fat32_open_root(&it)) {
-        set_error("Failed to open root directory");
-        return;
-    }
-
+/* Walk one directory and append its .nes files to st->entries.  If
+ * out_roms_cluster is non-NULL, also looks for a subdirectory named
+ * "roms" (case-insensitive) and writes its first cluster there. */
+static void scan_dir_for_nes(SdState *st, Fat32DirIter *it,
+                             uint32_t *out_roms_cluster) {
     Fat32Entry e;
-    while (st->entry_count < SD_ROM_LIST_MAX && fat32_dir_next(&it, &e)) {
-        if ((e.attr & FAT32_ATTR_DIRECTORY) != 0u) continue;
+    while (st->entry_count < SD_ROM_LIST_MAX && fat32_dir_next(it, &e)) {
+        if ((e.attr & FAT32_ATTR_DIRECTORY) != 0u) {
+            /* Note the /roms subdirectory but don't recurse from here. */
+            if (out_roms_cluster != NULL && *out_roms_cluster == 0u &&
+                name_equals_ci(e.name, "roms")) {
+                *out_roms_cluster = e.first_cluster;
+            }
+            continue;
+        }
         if (!ends_with_nes_ci(e.name)) continue;
 
         SdRomEntry *entry = &st->entries[st->entry_count];
@@ -138,6 +137,40 @@ static void sd_refresh(RomSource *self) {
         }
 
         ++st->entry_count;
+    }
+}
+
+static void sd_refresh(RomSource *self) {
+    SdState *st = (SdState *)self->user;
+    st->entry_count = 0;
+
+    /* Re-mount in case the card was changed.  Cheap if state is the same. */
+    if (!fat32_is_mounted()) {
+        if (sd_init() != SD_OK) {
+            set_error("SD init failed");
+            return;
+        }
+        if (!fat32_mount()) {
+            set_error("FAT32 mount failed");
+            return;
+        }
+    }
+
+    /* Pass 1: root directory.  Collects .nes files at the top level and
+     * notes the first cluster of any subdirectory named "roms". */
+    Fat32DirIter it;
+    uint32_t roms_cluster = 0u;
+    if (fat32_open_root(&it)) {
+        scan_dir_for_nes(st, &it, &roms_cluster);
+    } else {
+        set_error("Failed to open root directory");
+        return;
+    }
+
+    /* Pass 2: /roms subdirectory if present.  No recursion past one
+     * level — anything else is intentionally ignored. */
+    if (roms_cluster != 0u && fat32_open_dir_at_cluster(&it, roms_cluster)) {
+        scan_dir_for_nes(st, &it, NULL);
     }
 
     qsort(st->entries, st->entry_count, sizeof(*st->entries), compare_name);

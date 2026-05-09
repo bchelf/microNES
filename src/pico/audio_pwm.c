@@ -1,9 +1,9 @@
 /*
- * audio_pwm.c  —  High-frequency PWM audio output on GP9
+ * audio_pwm.c  —  High-frequency PWM audio output (default GP16)
  *
  * Two PWM slices:
  *
- *   Carrier (GP9, slice 4):
+ *   Carrier (GP from MICRONES_AUDIO_PIN, slice = pwm_gpio_to_slice_num):
  *     clkdiv = 1.0, wrap = 255  →  315 MHz / 256 ≈ 1.23 MHz
  *     Free-running, no interrupt.  8-bit resolution (sufficient for NES audio).
  *
@@ -53,7 +53,7 @@ static uint8_t s_audio_last_level = 128u;   /* sample-and-hold across underruns 
  * Sample-rate timer interrupt handler (Core 0)
  *
  * Fires at 48,000 Hz from timer slice 0.  Pops one sample from the ring
- * buffer and writes the level to the carrier slice on GP9.
+ * buffer and writes the level to the carrier slice on MICRONES_AUDIO_PIN.
  *
  * Execution time: ~10-15 instructions ≈ 10-15 sys_clk cycles.
  * At 315 MHz / 48,000 Hz = 6,562.5 cycles between interrupts, the ISR
@@ -97,7 +97,7 @@ static void __isr pwm_audio_irq_handler(void) {
 void audio_pwm_init(uint32_t sample_rate) {
     (void)sample_rate;   /* actual rate is fixed by clock_config.h for this target */
 
-    /* --- Carrier PWM on GP9 (free-running, ~1.23 MHz, 8-bit) ------------- */
+    /* --- Carrier PWM on MICRONES_AUDIO_PIN (free-running, ~1.23 MHz, 8-bit) - */
     gpio_set_function(MICRONES_AUDIO_PIN, GPIO_FUNC_PWM);
     s_audio_slice = pwm_gpio_to_slice_num(MICRONES_AUDIO_PIN);
 
