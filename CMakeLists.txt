@@ -122,8 +122,8 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         hardware_clocks
         hardware_gpio
         hardware_irq
+        hardware_pio
         hardware_pwm
-        hardware_spi
         hardware_timer
         hardware_vreg
         m
@@ -184,6 +184,11 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         endif ()
         pico_enable_stdio_usb(${target_name} 1)
         pico_enable_stdio_uart(${target_name} 0)
+
+        # SD card driver runs SPI through PIO so the v0.1 board's pin map works.
+        pico_generate_pio_header(${target_name}
+            ${CMAKE_CURRENT_LIST_DIR}/src/pico/sd_spi.pio
+        )
 
         if (audio_backend_name STREQUAL "pwm")
             target_sources(${target_name} PRIVATE

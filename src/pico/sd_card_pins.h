@@ -41,10 +41,16 @@
 #define MICRONES_SD_PIN_CS   5u
 #endif
 
-/* Which SPI peripheral to use.  0 -> spi0, 1 -> spi1.  Override with
- * -DMICRONES_SD_SPI_INDEX=1 when the pin map dictates. */
-#ifndef MICRONES_SD_SPI_INDEX
-#define MICRONES_SD_SPI_INDEX 0u
+/* The SD driver runs on a PIO state machine, not the hardware SPI block,
+ * because the v0.1 board's GPIO assignment for the card cannot reach the
+ * silicon SPI mux on RP2350.  Any GPIOs are valid for PIO-SPI.
+ *
+ * Which PIO block to claim a state machine on.  0 -> pio0, 1 -> pio1,
+ * 2 -> pio2 (RP2350 only).  Override with -DMICRONES_SD_PIO_INDEX=N if the
+ * default conflicts with another PIO user (analog video uses pio0; the
+ * parallel-TFT display uses pio1; pio2 is generally unused). */
+#ifndef MICRONES_SD_PIO_INDEX
+#define MICRONES_SD_PIO_INDEX 1u
 #endif
 
 /* Card init must happen at 100..400 kHz; we run real I/O much faster. */

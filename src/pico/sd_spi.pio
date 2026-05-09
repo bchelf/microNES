@@ -1,0 +1,25 @@
+.program sd_spi_cpha0
+.side_set 1
+
+; SPI master, mode 0 (CPOL=0, CPHA=0), MSB first.
+;
+; Side-set drives SCK; OUT drives MOSI; IN reads MISO.  One iteration
+; transfers a single bit:
+;
+;   - OUT pins,1 with side 0:  drive SCK low and present a new MOSI bit
+;     during the low half of the clock.  The [1] holds setup time for one
+;     extra cycle so the slave sees a stable MOSI before SCK rises.
+;
+;   - IN pins,1 with side 1:   drive SCK high.  PIO samples MISO during
+;     this cycle, which is the moment the slave has presented its bit on
+;     the rising edge.  The [1] gives the slave one cycle of hold.
+;
+; Each bit therefore takes 4 PIO cycles, so PIO clock = 4 × SCK frequency.
+; Configure autopull and autopush at threshold 8 to transfer one byte per
+; FIFO push/pop, with the byte stored in the high 8 bits of the OSR (i.e.
+; push (byte << 24) and read the low 8 bits of the RX word).
+
+.wrap_target
+    out pins, 1     side 0 [1]
+    in  pins, 1     side 1 [1]
+.wrap
