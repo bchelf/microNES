@@ -32,6 +32,7 @@ typedef struct {
     size_t chr_row_count;
     bool chr_is_ram;
     bool is_nes2;
+    bool has_battery;        /* iNES flags6 bit 1: battery-backed PRG-RAM at $6000 */
     uint8_t mapper;
     uint8_t submapper;
     uint8_t prg_banks;

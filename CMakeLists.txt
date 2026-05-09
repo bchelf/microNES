@@ -34,15 +34,18 @@ endif ()
 
 set(MICRONES_COMMON_SOURCES
     ${MICRONES_APU_SOURCE}
+    src/common/app_shell.c
     src/common/cart.c
     src/common/cpu6502.c
     src/common/cpu6502_opcode.c
+    src/common/font_5x7.c
     src/common/frame_pacer.c
     src/common/input.c
     src/common/mmc1.c
     src/common/nes.c
     src/common/nrom.c
     src/common/ppu.c
+    src/common/rom_menu.c
     src/common/smb1_bg_classifier.c
 )
 
@@ -77,9 +80,18 @@ if (MICRONES_PLATFORM STREQUAL "host")
         micrones_core
     )
 
+    add_executable(micrones_menu_smoke
+        tests/menu_smoke.c
+    )
+
+    target_link_libraries(micrones_menu_smoke PRIVATE
+        micrones_core
+    )
+
     if (SDL3_FOUND)
         add_executable(micrones
             src/host/audio_sdl.c
+            src/host/rom_source_posix.c
             src/host/run_main.c
             src/host/wav_write.c
             src/host/window_sdl.c
