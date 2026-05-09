@@ -36,6 +36,15 @@ static void shell_unload_running(AppShell *shell) {
     }
     nes_destroy(shell->nes);
     nes_init(shell->nes);
+
+    /* The cart was loaded zero-copy via nes_load_cartridge_const_memory, so
+     * cart_unload (called by nes_destroy) did not free our buffer.  Release
+     * it now that the cart no longer points into it. */
+    if (shell->current_rom_buf != NULL && shell->source != NULL) {
+        shell->source->free_buf(shell->source, shell->current_rom_buf);
+    }
+    shell->current_rom_buf = NULL;
+    shell->current_rom_size = 0;
     shell->running_index = -1;
 }
 
@@ -62,7 +71,10 @@ static bool shell_launch(AppShell *shell, int index) {
     nes_destroy(shell->nes);
     nes_init(shell->nes);
 
-    if (!nes_load_cartridge_memory(shell->nes, buf, sz)) {
+    /* Use the zero-copy cart loader so the cart points directly into our
+     * buffer.  This saves a transient peak of ROM-size bytes during launch,
+     * which matters on the Pico where SRAM is tight. */
+    if (!nes_load_cartridge_const_memory(shell->nes, buf, sz)) {
         char msg[160];
         snprintf(msg, sizeof(msg), "%s", nes_last_error(shell->nes));
         shell->source->free_buf(shell->source, buf);
@@ -70,8 +82,10 @@ static bool shell_launch(AppShell *shell, int index) {
         return false;
     }
 
-    /* cart copied the buffer; we can release ours immediately. */
-    shell->source->free_buf(shell->source, buf);
+    /* Hold onto the buffer until the cart is unloaded.  The cart's prg_rom
+     * and chr_data pointers are aliases into this region. */
+    shell->current_rom_buf  = buf;
+    shell->current_rom_size = sz;
 
     nes_reset(shell->nes);
 

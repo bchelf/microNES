@@ -44,6 +44,27 @@ bool emulator_video_adapter_init(
     return true;
 }
 
+bool emulator_video_adapter_init_empty(PicoEmulatorVideoAdapter *adapter) {
+    memset(adapter, 0, sizeof(*adapter));
+    nes_init(&adapter->nes);
+    nes_set_profile_clock(&adapter->nes, emulator_video_adapter_now_us, NULL);
+    adapter->initialized = true;
+    adapter->last_frame_first_visible_x = -1;
+    adapter->last_frame_first_visible_y = -1;
+    emulator_video_adapter_set_error(adapter, "");
+    return true;
+}
+
+void emulator_video_adapter_present_framebuffer(
+    PicoEmulatorVideoAdapter *adapter,
+    const NesFrameBuffer *fb
+) {
+    if (fb == NULL) return;
+    uint64_t t0 = time_us_64();
+    video_tft_present_frame(fb);
+    adapter->profile_render_frame_us_total += time_us_64() - t0;
+}
+
 bool emulator_video_adapter_step_frame(PicoEmulatorVideoAdapter *adapter) {
     uint64_t t0;
 

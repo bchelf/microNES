@@ -30,6 +30,12 @@ typedef struct {
     /* Index of the running ROM, -1 when nothing is running. */
     int           running_index;
 
+    /* The cart was loaded zero-copy via nes_load_cartridge_const_memory and
+     * the cart's prg_rom/chr_data pointers alias into this buffer.  Held
+     * here until the cart is unloaded; freed via source->free_buf. */
+    uint8_t      *current_rom_buf;
+    size_t        current_rom_size;
+
     /* Transient text shown above the menu footer (e.g. error from a load
      * attempt).  Cleared on the next selection change. */
     char          status[160];

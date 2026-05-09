@@ -6,6 +6,27 @@
 #include <stdio.h>
 #include <string.h>
 
+static size_t empty_count(RomSource *self) { (void)self; return 0; }
+static const RomSourceEntry *empty_entry(RomSource *self, size_t i) {
+    (void)self; (void)i; return NULL;
+}
+static bool empty_load(RomSource *self, size_t i, uint8_t **buf, size_t *sz,
+                       char *err, size_t err_size) {
+    (void)self; (void)i; (void)buf; (void)sz;
+    if (err && err_size) snprintf(err, err_size, "no source");
+    return false;
+}
+static void empty_free(RomSource *self, uint8_t *buf) { (void)self; (void)buf; }
+
+void rom_source_make_empty(RomSource *out) {
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+    out->count    = empty_count;
+    out->entry    = empty_entry;
+    out->load     = empty_load;
+    out->free_buf = empty_free;
+}
+
 /* NES palette indices used for the menu.  These map through the host's
  * built-in 64-entry palette table:
  *   0x0F  pure black

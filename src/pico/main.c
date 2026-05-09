@@ -1,3 +1,4 @@
+#include "app_shell.h"
 #include "clock_config.h"
 #include "emulator_video_adapter.h"
 #include "frame_pacer.h"
@@ -7,6 +8,8 @@
 #include "pico_time.h"
 #include "pico_video_backend.h"
 #include "pico_input.h"
+#include "rom_source.h"
+#include "rom_source_sd.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
 #include "display/video_tft.h"
 #endif
@@ -18,9 +21,9 @@
 int main(void) {
     const uint32_t audio_sample_rate = pico_audio_backend_preferred_sample_rate();
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
-    extern unsigned char micrones_pico_embedded_rom[];
-    extern unsigned int micrones_pico_embedded_rom_len;
     static PicoEmulatorVideoAdapter emulator_video;
+    static AppShell                 shell;
+    static RomSource                rom_source;
     MicronesFramePacer frame_pacer;
 #if MICRONES_ENABLE_PERF_LOG
     uint64_t report_started_us = 0;
@@ -99,11 +102,27 @@ int main(void) {
     pico_audio_backend_init(audio_sample_rate);
 
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
-    if (emulator_video_adapter_init(
-            &emulator_video,
-            micrones_pico_embedded_rom,
-            (size_t)micrones_pico_embedded_rom_len)) {
+    /* Bring up the adapter with no cart loaded — the ROM picker (AppShell)
+     * will load cartridges on demand from the SD card. */
+    if (emulator_video_adapter_init_empty(&emulator_video)) {
         printf("video mode: emulator (%s)\n", pico_video_backend_name());
+
+        /* Initialize the SD-card-backed ROM source.  If the card is missing
+         * or the volume can't be mounted, the menu still runs and shows
+         * "No ROMs found" until the user inserts a card and we can refresh. */
+        if (rom_source_sd_init(&rom_source)) {
+            printf("SD: mounted, %u ROM(s) listed\n",
+                   (unsigned)rom_source.count(&rom_source));
+        } else {
+            printf("SD: %s\n", rom_source_sd_last_error());
+            /* Fallback: empty source so the menu renders the "no ROMs"
+             * screen.  Hot-insert support would re-init the SD source on
+             * an explicit user trigger; not implemented here. */
+            rom_source_make_empty(&rom_source);
+        }
+
+        app_shell_init(&shell, &rom_source, &emulator_video.nes);
+
         pico_video_backend_start_emulator();
         micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
 
@@ -135,7 +154,21 @@ int main(void) {
 #endif
             }
 
-            nes_set_controller_state(&emulator_video.nes, 0, pico_input_read());
+            /* Drive the AppShell state machine (menu vs. running).  When in
+             * MENU the shell renders into its own framebuffer and we just
+             * present that — no NES step, no audio.  When in RUNNING the
+             * shell forwards (and combo-masks) the input and we run the
+             * normal step+present path below. */
+            NesControllerState live_input = pico_input_read();
+            AppShellFrame frame = app_shell_begin_frame(&shell, live_input);
+            if (!frame.stepping_nes) {
+                emulator_video_adapter_present_framebuffer(
+                    &emulator_video, app_shell_menu_framebuffer(&shell));
+                micrones_frame_pacer_frame_done(&frame_pacer,
+                                                micrones_pico_clock_now_ns());
+                continue;
+            }
+            nes_set_controller_state(&emulator_video.nes, 0, frame.forwarded);
 
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
             /* TFT path: step and present are separated so audio is pushed

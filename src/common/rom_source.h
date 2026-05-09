@@ -76,4 +76,9 @@ static inline bool rom_source_mapper_supported(uint16_t mapper) {
     return mapper == 0u || mapper == 1u;
 }
 
+/* Construct a no-op RomSource that exposes zero entries and rejects loads.
+ * Useful as a fallback when storage init fails so the menu still renders
+ * an "empty" state. */
+void rom_source_make_empty(RomSource *out);
+
 #endif

@@ -8,7 +8,6 @@ set(MICRONES_PICO_TFT_BACKEND "spi_ili9341" CACHE STRING "Pico TFT backend: spi_
 set_property(CACHE MICRONES_PICO_TFT_BACKEND PROPERTY STRINGS spi_ili9341 parallel_8080)
 set(MICRONES_PICO_TFT_CONTROLLER "ili9341" CACHE STRING "Pico TFT controller init: ili9341, ili9486, or ili9488")
 set_property(CACHE MICRONES_PICO_TFT_CONTROLLER PROPERTY STRINGS ili9341 ili9486 ili9488)
-set(MICRONES_PICO_ROM_PATH "" CACHE FILEPATH "Path to an iNES ROM image to embed for Pico emulator video mode")
 set(MICRONES_APU_ENGINE "micrones" CACHE STRING "APU engine: micrones (cycle-accurate, default) or infones (InfoNES DDS)")
 set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS micrones infones)
 option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic logging" OFF)
@@ -111,39 +110,28 @@ if (MICRONES_PLATFORM STREQUAL "host")
 elseif (MICRONES_PLATFORM STREQUAL "pico")
     pico_sdk_init()
     set(MICRONES_PICO_COMMON_SOURCES
+        src/pico/fat32.c
         src/pico/main.c
         src/pico/nes_hw_controller.c
         src/pico/pico_input.c
         src/pico/pico_time.c
+        src/pico/rom_source_sd.c
+        src/pico/sd_spi.c
     )
     set(MICRONES_PICO_COMMON_LIBS
         hardware_clocks
         hardware_gpio
         hardware_irq
         hardware_pwm
+        hardware_spi
         hardware_timer
         hardware_vreg
         m
         pico_stdlib
     )
+    # ROMs now load from the SD card at runtime; no embedded image, no
+    # MICRONES_PICO_ROM_PATH needed.
     set(MICRONES_PICO_ROM_SOURCES)
-
-    if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")
-        if (MICRONES_PICO_ROM_PATH STREQUAL "")
-            message(FATAL_ERROR "MICRONES_PICO_ROM_PATH must be set when MICRONES_PICO_VIDEO_MODE=emulator")
-        endif ()
-
-        file(READ "${MICRONES_PICO_ROM_PATH}" MICRONES_PICO_ROM_HEX HEX)
-        string(LENGTH "${MICRONES_PICO_ROM_HEX}" MICRONES_PICO_ROM_HEX_LEN)
-        math(EXPR MICRONES_PICO_ROM_BYTE_COUNT "${MICRONES_PICO_ROM_HEX_LEN} / 2")
-        string(REGEX REPLACE "([0-9A-Fa-f][0-9A-Fa-f])" "0x\\1, " MICRONES_PICO_ROM_BYTES "${MICRONES_PICO_ROM_HEX}")
-        set(MICRONES_PICO_ROM_C "${CMAKE_CURRENT_BINARY_DIR}/micrones_pico_embedded_rom.c")
-        file(WRITE "${MICRONES_PICO_ROM_C}"
-"unsigned char micrones_pico_embedded_rom[] = { ${MICRONES_PICO_ROM_BYTES} };\nunsigned int micrones_pico_embedded_rom_len = ${MICRONES_PICO_ROM_BYTE_COUNT}u;\n")
-        list(APPEND MICRONES_PICO_ROM_SOURCES
-            "${MICRONES_PICO_ROM_C}"
-        )
-    endif ()
 
     function(micrones_add_pico_core target_name framebuffer_enabled)
         add_library(${target_name} STATIC
