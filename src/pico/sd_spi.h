@@ -47,4 +47,10 @@ SdResult sd_read_block(uint32_t lba, uint8_t *buf);
  * card finishes its internal write (busy line cleared). */
 SdResult sd_write_block(uint32_t lba, const uint8_t *buf);
 
+/* Print the saved state from the last sd_init() attempt to stdout —
+ * pin map, the 10 MISO warmup bytes, and the R1 byte from each CMD0
+ * attempt.  Cheap; safe to call any number of times.  Prints nothing if
+ * sd_init() has never run. */
+void sd_print_init_diag(void);
+
 #endif

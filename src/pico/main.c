@@ -48,6 +48,10 @@ static void log_sd_status(RomSource *src) {
     printf("SD status: init=%d type=%s blocks=%u fat=%d roms=%u err=\"%s\"\n",
            init ? 1 : 0, sd_type_name(t), (unsigned)blk,
            mounted ? 1 : 0, (unsigned)roms, err != NULL ? err : "");
+    /* Replay the per-step state captured during the most recent
+     * sd_init() so a late `screen` attach catches the warmup byte
+     * stream and CMD0 R1 history. */
+    sd_print_init_diag();
 }
 
 int main(void) {

@@ -21,6 +21,19 @@
 #define MICRONES_SD_INIT_DEBUG 1
 #endif
 
+/* Diagnostic snapshot of the most recent sd_init() attempt.  Captured
+ * unconditionally so a periodic logger (see sd_print_init_diag) can
+ * replay the state long after the boot-time printf has scrolled away. */
+typedef struct {
+    bool     attempted;
+    uint8_t  warmup[10];      /* MISO bytes during the 10-byte CS-high warmup */
+    int      cmd0_attempts;   /* 0..8 */
+    uint8_t  cmd0_responses[8];
+    SdResult last_result;
+} SdInitDiag;
+
+static SdInitDiag s_diag;
+
 /* SD-over-SPI command set (subset). */
 enum {
     CMD0  = 0,   /* GO_IDLE_STATE */
@@ -276,22 +289,19 @@ void sd_deinit(void) {
 SdResult sd_init(void) {
     sd_deinit();
 
-    sd_pins_init();
+    /* Reset the diagnostic snapshot at the start of every attempt so a
+     * later sd_print_init_diag() reflects the most recent run. */
+    memset(&s_diag, 0, sizeof(s_diag));
+    s_diag.attempted = true;
+    s_diag.last_result = SD_ERR_NOT_INITIALIZED;
+    memset(s_diag.warmup, 0xFFu, sizeof(s_diag.warmup));
+    memset(s_diag.cmd0_responses, 0xFFu, sizeof(s_diag.cmd0_responses));
 
-#if MICRONES_SD_INIT_DEBUG
-    printf("SD init: pins MISO=%u SCK=%u MOSI=%u CS=%u, PIO=%u\n",
-           (unsigned)MICRONES_SD_PIN_MISO,
-           (unsigned)MICRONES_SD_PIN_SCK,
-           (unsigned)MICRONES_SD_PIN_MOSI,
-           (unsigned)MICRONES_SD_PIN_CS,
-           (unsigned)MICRONES_SD_PIO_INDEX);
-#endif
+    sd_pins_init();
 
     PIO pio = sd_pio_block();
     if (!pio_can_add_program(pio, &sd_spi_cpha0_program)) {
-#if MICRONES_SD_INIT_DEBUG
-        printf("SD init: pio_can_add_program returned false\n");
-#endif
+        s_diag.last_result = SD_ERR_NOT_INITIALIZED;
         return SD_ERR_NOT_INITIALIZED;
     }
     s_sd.program_offset = pio_add_program(pio, &sd_spi_cpha0_program);
@@ -299,9 +309,7 @@ SdResult sd_init(void) {
 
     int sm = pio_claim_unused_sm(pio, false);
     if (sm < 0) {
-#if MICRONES_SD_INIT_DEBUG
-        printf("SD init: no free PIO state machine\n");
-#endif
+        s_diag.last_result = SD_ERR_NOT_INITIALIZED;
         sd_deinit();
         return SD_ERR_NOT_INITIALIZED;
     }
@@ -312,54 +320,31 @@ SdResult sd_init(void) {
                       pio_clkdiv_for_sck(MICRONES_SD_INIT_BAUD_HZ));
 
     if (!sd_card_present()) {
-#if MICRONES_SD_INIT_DEBUG
-        printf("SD init: card-detect says no card\n");
-#endif
+        s_diag.last_result = SD_ERR_NO_CARD;
         return SD_ERR_NO_CARD;
     }
 
     /* Power-up sequence: CS high, send 80+ clocks at < 400 kHz with MOSI
-     * held high.  Each spi_xfer of 0xFF drives MOSI high for 8 clocks. */
+     * held high.  Each spi_xfer of 0xFF drives MOSI high for 8 clocks.
+     * Capture the MISO bytes seen during the warmup — they're the cheapest
+     * sanity check on the bus. */
     cs_deassert();
     sleep_ms(2);
-
-#if MICRONES_SD_INIT_DEBUG
-    {
-        /* The 80-clock warmup is the cheapest sanity check on the bus.
-         * MISO should idle high (FF) because:
-         *   - the card hasn't been selected yet (CS high), so it's not
-         *     driving MISO;
-         *   - the SD module's onboard pullup (typ 47k) plus our internal
-         *     pull-up holds the line high.
-         * What we see here narrows the diagnosis fast:
-         *   FF FF FF FF ... ─ wiring + pullup OK, card just hasn't
-         *                     responded yet.  Proceed to CMD0.
-         *   00 00 00 00 ... ─ MISO stuck low.  Most likely MISO/MOSI
-         *                     swapped at the breakout, or MISO shorted.
-         *   mixed garbage   ─ MISO floating with no pullup, or SCK not
-         *                     reaching the card. */
-        printf("SD init: warmup MISO bytes:");
-        for (int i = 0; i < 10; ++i) {
-            uint8_t b = spi_xfer(0xFFu);
-            printf(" %02X", b);
-        }
-        printf("\n");
+    for (int i = 0; i < 10; ++i) {
+        s_diag.warmup[i] = spi_xfer(0xFFu);
     }
-#else
-    spi_send_dummy(10);
-#endif
 
     /* CMD0 must be sent with CS asserted. */
     cs_assert();
     SdResult result = SD_OK;
     bool got_idle = false;
-    uint8_t last_r1 = 0xFFu;
     for (int attempt = 0; attempt < 8; ++attempt) {
         uint8_t r = send_cmd(CMD0, 0);
-        last_r1 = r;
-#if MICRONES_SD_INIT_DEBUG
-        printf("SD init: CMD0 attempt %d -> R1=%02X\n", attempt, r);
-#endif
+        if (s_diag.cmd0_attempts < (int)(sizeof(s_diag.cmd0_responses)
+                                         / sizeof(s_diag.cmd0_responses[0]))) {
+            s_diag.cmd0_responses[s_diag.cmd0_attempts] = r;
+        }
+        ++s_diag.cmd0_attempts;
         if (r == R1_IDLE) {
             got_idle = true;
             break;
@@ -367,9 +352,7 @@ SdResult sd_init(void) {
         sleep_ms(10);
     }
     if (!got_idle) {
-#if MICRONES_SD_INIT_DEBUG
-        printf("SD init: CMD0 failed, last R1=%02X\n", last_r1);
-#endif
+        s_diag.last_result = SD_ERR_CMD0;
         result = SD_ERR_CMD0;
         goto fail;
     }
@@ -443,13 +426,42 @@ SdResult sd_init(void) {
     pio_spi_apply_clkdiv(MICRONES_SD_RUN_BAUD_HZ);
 
     s_sd.initialized = true;
+    s_diag.last_result = SD_OK;
     return SD_OK;
 
 fail:
     cs_deassert();
     spi_send_dummy(1);
     s_sd.initialized = false;
+    s_diag.last_result = result;
     return result;
+}
+
+void sd_print_init_diag(void) {
+    if (!s_diag.attempted) {
+        printf("SD diag: sd_init() not yet called\n");
+        return;
+    }
+    printf("SD diag: pins MISO=%u SCK=%u MOSI=%u CS=%u PIO=%u  result=%d\n",
+           (unsigned)MICRONES_SD_PIN_MISO,
+           (unsigned)MICRONES_SD_PIN_SCK,
+           (unsigned)MICRONES_SD_PIN_MOSI,
+           (unsigned)MICRONES_SD_PIN_CS,
+           (unsigned)MICRONES_SD_PIO_INDEX,
+           (int)s_diag.last_result);
+    printf("SD diag: warmup MISO");
+    for (int i = 0; i < (int)(sizeof(s_diag.warmup) / sizeof(s_diag.warmup[0])); ++i) {
+        printf(" %02X", s_diag.warmup[i]);
+    }
+    printf("\n");
+    printf("SD diag: CMD0 attempts=%d responses", s_diag.cmd0_attempts);
+    int n = s_diag.cmd0_attempts;
+    int cap = (int)(sizeof(s_diag.cmd0_responses) / sizeof(s_diag.cmd0_responses[0]));
+    if (n > cap) n = cap;
+    for (int i = 0; i < n; ++i) {
+        printf(" %02X", s_diag.cmd0_responses[i]);
+    }
+    printf("\n");
 }
 
 static uint32_t lba_to_address(uint32_t lba) {
