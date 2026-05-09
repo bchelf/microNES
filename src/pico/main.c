@@ -1,6 +1,7 @@
 #include "app_shell.h"
 #include "clock_config.h"
 #include "emulator_video_adapter.h"
+#include "fat32.h"
 #include "frame_pacer.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
@@ -10,6 +11,7 @@
 #include "pico_input.h"
 #include "rom_source.h"
 #include "rom_source_sd.h"
+#include "sd_spi.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
 #include "display/video_tft.h"
 #endif
@@ -17,6 +19,36 @@
 #include "pico/stdlib.h"
 
 #include <stdio.h>
+
+static const char *sd_type_name(SdCardType t) {
+    switch (t) {
+    case SD_TYPE_NONE: return "none";
+    case SD_TYPE_SDV1: return "SDv1";
+    case SD_TYPE_SDV2: return "SDv2";
+    case SD_TYPE_SDHC: return "SDHC";
+    default:           return "?";
+    }
+}
+
+static void log_sd_status(RomSource *src) {
+    bool init    = sd_is_initialized();
+    bool mounted = fat32_is_mounted();
+    SdCardType t = sd_card_type();
+    uint32_t blk = sd_block_count();
+    size_t   roms = (src != NULL && src->count != NULL) ? src->count(src) : 0u;
+    const char *err = rom_source_sd_last_error();
+    /* Re-printed every ~5 s by the main loop so a slow `screen` attach
+     * still catches the SD state.  Fields:
+     *   init    - sd_init() succeeded
+     *   type    - card class detected during init
+     *   blocks  - capacity in 512 B sectors (×512 = bytes)
+     *   fat     - FAT32 partition mounted
+     *   roms    - .nes entries enumerated by the ROM source
+     *   err     - last error text (empty on success) */
+    printf("SD status: init=%d type=%s blocks=%u fat=%d roms=%u err=\"%s\"\n",
+           init ? 1 : 0, sd_type_name(t), (unsigned)blk,
+           mounted ? 1 : 0, (unsigned)roms, err != NULL ? err : "");
+}
 
 int main(void) {
     const uint32_t audio_sample_rate = pico_audio_backend_preferred_sample_rate();
@@ -126,11 +158,27 @@ int main(void) {
         pico_video_backend_start_emulator();
         micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
 
+        /* Print the SD status once at the very start of the run loop, then
+         * re-print every 5 seconds below.  Both the initial log and the
+         * periodic one go through the same helper so the format matches. */
+        uint64_t next_sd_log_us = time_us_64();
+
 #if MICRONES_ENABLE_PERF_LOG
         report_started_us = time_us_64();
 #endif
 
         while (true) {
+            /* Periodic SD status log so a late `screen` attach can still
+             * see whether the card initialised, what type it is, and how
+             * many ROMs were enumerated. */
+            {
+                uint64_t now_us = time_us_64();
+                if ((int64_t)(now_us - next_sd_log_us) >= 0) {
+                    log_sd_status(&rom_source);
+                    next_sd_log_us = now_us + 5ull * 1000ull * 1000ull;
+                }
+            }
+
             /* Pace emulation to the NTSC NES frame cadence (~16.639 ms,
              * 60.10 Hz) so wall-clock audio production stays aligned with the
              * 48 kHz backend. On the TFT path, capture the next frame
