@@ -460,6 +460,36 @@ fail:
     return result;
 }
 
+static void probe_one_pin(const char *name, unsigned pin) {
+    gpio_set_function(pin, GPIO_FUNC_SIO);
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_OUT);
+    for (int rep = 0; rep < 3; ++rep) {
+        gpio_put(pin, 1);
+        sleep_ms(500);
+        bool h = gpio_get(pin);
+        gpio_put(pin, 0);
+        sleep_ms(500);
+        bool l = gpio_get(pin);
+        printf("SD probe: %s (GP%u) drive=1 read=%d, drive=0 read=%d\n",
+               name, pin, h ? 1 : 0, l ? 1 : 0);
+    }
+    /* Leave pin idle-high (matches CS deasserted state) for whichever
+     * pin this is; sd_init() will reconfigure as needed. */
+    gpio_put(pin, 1);
+}
+
+void sd_run_gpio_probe(void) {
+    /* Tear down any PIO/SD state so the pins are owned by SIO. */
+    sd_deinit();
+
+    printf("SD probe: starting GPIO walk (15 s).  Multimeter / LED on each pin in turn.\n");
+    probe_one_pin("CS",   MICRONES_SD_PIN_CS);
+    probe_one_pin("SCK",  MICRONES_SD_PIN_SCK);
+    probe_one_pin("MOSI", MICRONES_SD_PIN_MOSI);
+    printf("SD probe: done\n");
+}
+
 void sd_print_init_diag(void) {
     if (!s_diag.attempted) {
         printf("SD diag: sd_init() not yet called\n");

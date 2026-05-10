@@ -53,4 +53,19 @@ SdResult sd_write_block(uint32_t lba, const uint8_t *buf);
  * sd_init() has never run. */
 void sd_print_init_diag(void);
 
+/* Slowly toggle each SD pin (CS, SCK, MOSI) as a plain GPIO output,
+ * reading back the line state with gpio_get() to verify that the chip
+ * itself can drive the pin.  Each pin holds high for 500 ms then low
+ * for 500 ms, repeated 3 times — long enough for a multimeter or LED
+ * to register.  Tears down any prior PIO/SD state and leaves the pins
+ * configured for the next sd_init() to take over.
+ *
+ * What the readback tells you:
+ *   - log says "drive=1 read=1, drive=0 read=0" → pin works on the chip
+ *     side; if breakout still doesn't see it, suspect the wire or solder.
+ *   - log says "drive=0 read=1" → pin is being pulled high by something
+ *     downstream (short to power, wrong wire).
+ *   - log says "drive=1 read=0" → pin shorted to ground. */
+void sd_run_gpio_probe(void);
+
 #endif

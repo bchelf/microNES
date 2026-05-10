@@ -143,6 +143,12 @@ int main(void) {
     if (emulator_video_adapter_init_empty(&emulator_video)) {
         printf("video mode: emulator (%s)\n", pico_video_backend_name());
 
+        /* One-shot GPIO probe so a multimeter / LED can confirm each SD
+         * pin actually toggles externally.  Runs before sd_init() and
+         * leaves the pins ready for it to take over.  Remove this once
+         * the card is up. */
+        sd_run_gpio_probe();
+
         /* Initialize the SD-card-backed ROM source.  If the card is missing
          * or the volume can't be mounted, the menu still runs and shows
          * "No ROMs found" until the user inserts a card and we can refresh. */
