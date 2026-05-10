@@ -3,54 +3,40 @@
 
 /* SD-card pin configuration for the RP2350.
  *
- * All pin numbers and the chosen SPI block are individually overridable at
- * build time, e.g.
- *     -DMICRONES_SD_PIN_CS=9 -DMICRONES_SD_SPI_INDEX=1
- * so this header should never be edited unless the defaults change for a
- * new board revision.
+ * This branch uses the **hardware SPI peripheral**, which on RP2350 ties
+ * each SPI signal to a fixed GPIO offset (offset%4 selects RX/CS/SCK/TX).
+ * The pin map below is a silicon-correct SPI0 set on the upper GPIO
+ * bank (16-23), chosen so that:
+ *   - it doesn't collide with video (GP10-14), audio (GP16), or
+ *     controllers (GP6-8);
+ *   - the four signals are physically adjacent on the Pico header for a
+ *     clean breadboard run;
+ *   - GP21 is also a valid SPI0 CSn pin if you ever want hardware-driven
+ *     CS — we drive it as plain GPIO for flexibility.
  *
- * Defaults match the current board's silkscreen labeling, which uses the
- * SD-bus signal names (CD/DAT0/CLK/CMD/DAT3) rather than the SPI signal
- * names.  Mapped to SPI:
- *   CARD_CD   = GP1   -> card-detect (plain GPIO input)
- *   CARD_DAT0 = GP2   -> SPI MISO
- *   CARD_CLK  = GP3   -> SPI SCK
- *   CARD_CMD  = GP4   -> SPI MOSI
- *   CARD_DAT3 = GP5   -> SPI CS
- *
- * NOTE: On RP2350 the SPI peripheral's IO mux ties each signal to a fixed
- * GPIO offset (offset%4 selects RX/CS/SCK/TX), so the pin set above is not
- * a valid hardware-SPI pinout.  The pico-sdk will still configure the
- * mux, but the signals will be scrambled until the next board revision
- * routes the silicon-correct GPIOs.  This file lets you override every
- * pin from CMake when that day comes — no source edits required. */
+ * Per-pin overrides are honoured: -DMICRONES_SD_PIN_*=N from CMake. */
 
-#ifndef MICRONES_SD_PIN_CD
-#define MICRONES_SD_PIN_CD   1u
-#endif
 #ifndef MICRONES_SD_PIN_MISO
-#define MICRONES_SD_PIN_MISO 2u
+#define MICRONES_SD_PIN_MISO 20u   /* SPI0 RX  (GP20 % 4 == 0) */
 #endif
 #ifndef MICRONES_SD_PIN_SCK
-#define MICRONES_SD_PIN_SCK  3u
+#define MICRONES_SD_PIN_SCK  18u   /* SPI0 SCK (GP18 % 4 == 2) */
 #endif
 #ifndef MICRONES_SD_PIN_MOSI
-#define MICRONES_SD_PIN_MOSI 4u
+#define MICRONES_SD_PIN_MOSI 19u   /* SPI0 TX  (GP19 % 4 == 3) */
 #endif
 #ifndef MICRONES_SD_PIN_CS
-#define MICRONES_SD_PIN_CS   5u
+#define MICRONES_SD_PIN_CS   21u   /* plain GPIO output */
+#endif
+#ifndef MICRONES_SD_PIN_CD
+#define MICRONES_SD_PIN_CD   17u   /* plain GPIO input; only consulted when
+                                      MICRONES_SD_CD_DISABLED == 0 */
 #endif
 
-/* The SD driver runs on a PIO state machine, not the hardware SPI block,
- * because the v0.1 board's GPIO assignment for the card cannot reach the
- * silicon SPI mux on RP2350.  Any GPIOs are valid for PIO-SPI.
- *
- * Which PIO block to claim a state machine on.  0 -> pio0, 1 -> pio1,
- * 2 -> pio2 (RP2350 only).  Override with -DMICRONES_SD_PIO_INDEX=N if the
- * default conflicts with another PIO user (analog video uses pio0; the
- * parallel-TFT display uses pio1; pio2 is generally unused). */
-#ifndef MICRONES_SD_PIO_INDEX
-#define MICRONES_SD_PIO_INDEX 1u
+/* Which hardware SPI block.  0 -> spi0, 1 -> spi1.  GP18-21 are SPI0,
+ * which is the default. */
+#ifndef MICRONES_SD_SPI_INDEX
+#define MICRONES_SD_SPI_INDEX 0u
 #endif
 
 /* Card init must happen at 100..400 kHz; we run real I/O much faster. */
@@ -76,14 +62,5 @@
 #define MICRONES_SD_CD_DISABLED 1u
 #endif
 
-/* Some SD breakouts (notably some HW-125 clones) gate the level-shifter
- * /OE to host CS — buffers only pass signals when CS is low.  That breaks
- * the SD spec's CS-high 74-clock warmup because no clocks reach the card.
- * Setting this to 1 sends the warmup with CS low; the card frames it as
- * idle bytes (0xFF = no command) and it usually works.  Off-spec on
- * compliant breakouts but harmless. */
-#ifndef MICRONES_SD_WARMUP_CS_LOW
-#define MICRONES_SD_WARMUP_CS_LOW 0u
-#endif
 
 #endif

@@ -124,6 +124,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         hardware_irq
         hardware_pio
         hardware_pwm
+        hardware_spi
         hardware_timer
         hardware_vreg
         m
@@ -185,10 +186,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         pico_enable_stdio_usb(${target_name} 1)
         pico_enable_stdio_uart(${target_name} 0)
 
-        # SD card driver runs SPI through PIO so the v0.1 board's pin map works.
-        pico_generate_pio_header(${target_name}
-            ${CMAKE_CURRENT_LIST_DIR}/src/pico/sd_spi.pio
-        )
+        # SD card driver uses the hardware SPI peripheral on this branch.
 
         # Forward any -DMICRONES_SD_* override the user passed at configure
         # time into the compile.  sd_card_pins.h #ifndefs the names so a
@@ -197,10 +195,9 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         foreach (_sd_var
             MICRONES_SD_PIN_CD MICRONES_SD_PIN_MISO MICRONES_SD_PIN_SCK
             MICRONES_SD_PIN_MOSI MICRONES_SD_PIN_CS
-            MICRONES_SD_PIO_INDEX
+            MICRONES_SD_SPI_INDEX
             MICRONES_SD_INIT_BAUD_HZ MICRONES_SD_RUN_BAUD_HZ
             MICRONES_SD_CD_ACTIVE_LOW MICRONES_SD_CD_DISABLED
-            MICRONES_SD_WARMUP_CS_LOW
             MICRONES_SD_INIT_DEBUG)
             if (DEFINED ${_sd_var})
                 target_compile_definitions(${target_name} PRIVATE
