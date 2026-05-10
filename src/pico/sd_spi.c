@@ -147,12 +147,16 @@ static uint8_t send_acmd(uint8_t cmd, uint32_t arg) {
     return send_cmd(cmd, arg);
 }
 
-static SdResult read_data_block(uint8_t *buf) {
+/* Wait for the SD data token, then read exactly `len` bytes into buf
+ * followed by the 2 CRC bytes (which we discard).  `len` is 512 for
+ * CMD17/18 block reads and 16 for CMD9 CSD reads — getting this wrong
+ * silently overruns the caller's buffer. */
+static SdResult read_data_block(uint8_t *buf, size_t len) {
     absolute_time_t deadline = make_timeout_time_ms(200);
     while (!time_reached(deadline)) {
         uint8_t t = spi_xfer(0xFFu);
         if (t == DATA_TOKEN_BLOCK_READ_WRITE) {
-            for (int i = 0; i < 512; ++i) {
+            for (size_t i = 0; i < len; ++i) {
                 buf[i] = spi_xfer(0xFFu);
             }
             (void)spi_xfer(0xFFu);  /* CRC hi */
@@ -347,7 +351,7 @@ SdResult sd_init(void) {
     /* CMD9: SEND_CSD. */
     if (send_cmd(CMD9, 0) == 0u) {
         uint8_t csd[16];
-        if (read_data_block(csd) == SD_OK) {
+        if (read_data_block(csd, sizeof(csd)) == SD_OK) {
             (void)parse_csd_block_count(csd);
         }
     }
@@ -445,7 +449,7 @@ SdResult sd_read_block(uint32_t lba, uint8_t *buf) {
     if (send_cmd(CMD17, lba_to_address(lba)) != 0u) {
         r = SD_ERR_READ;
     } else {
-        r = read_data_block(buf);
+        r = read_data_block(buf, 512);
     }
     cs_deassert();
     spi_send_dummy(1);
