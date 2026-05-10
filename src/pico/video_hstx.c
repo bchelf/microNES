@@ -50,6 +50,7 @@
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
 #include "hardware/structs/hstx_fifo.h"
+#include "pico/platform.h"
 #include "pico/time.h"
 
 #include <stdio.h>
@@ -149,11 +150,17 @@ static uint32_t s_line_buf[2][HSTX_LINE_WORDS] __attribute__((aligned(8)));
 static uint8_t s_present_indexed[NES_FRAME_WIDTH * NES_FRAME_HEIGHT];
 static volatile bool s_present_valid = false;
 
-/* RGB565 little-endian palette (HSTX consumes native words). */
+/* RGB565 little-endian palette (HSTX consumes native words).
+ *
+ * Placed in SRAM (`__not_in_flash`) so the line-fill ISR never stalls on an
+ * XIP cache miss reading the palette.  Const-correctness is sacrificed for
+ * latency determinism — pico-sdk's `__not_in_flash` decoration forces the
+ * variable into a .data section in RAM. */
 #define RGB565_LE(r, g, b)                                                 \
     ((uint16_t)((((r) & 0xF8u) << 8) | (((g) & 0xFCu) << 3) | ((b) >> 3)))
 
-static const uint16_t k_nes_palette_rgb565_le[64] = {
+static const uint16_t __not_in_flash("hstx_palette")
+    k_nes_palette_rgb565_le[64] = {
     RGB565_LE( 84,  84,  84), RGB565_LE(  0,  30, 116), RGB565_LE(  8,  16, 144), RGB565_LE( 48,   0, 136),
     RGB565_LE( 68,   0, 100), RGB565_LE( 92,   0,  48), RGB565_LE( 84,   4,   0), RGB565_LE( 60,  24,   0),
     RGB565_LE( 32,  42,   0), RGB565_LE(  8,  58,   0), RGB565_LE(  0,  64,   0), RGB565_LE(  0,  60,   0),
@@ -226,8 +233,9 @@ const char *video_hstx_last_error(void) {
  *   - V-blank (front porch, back porch — 43 lines total): blanking.
  */
 
-static void hstx_build_blank_line(uint32_t *buf, uint32_t sym_no_active,
-                                  uint32_t sym_hsync) {
+static void __not_in_flash_func(hstx_build_blank_line)(uint32_t *buf,
+                                                       uint32_t sym_no_active,
+                                                       uint32_t sym_hsync) {
     /* Header: HBP duration */
     buf[0] = hstx_cmd(HSTX_CMD_RAW_REPEAT, HSTX_MODE_H_BACK_PORCH);
     buf[1] = sym_no_active;
@@ -249,7 +257,8 @@ static void hstx_build_blank_line(uint32_t *buf, uint32_t sym_no_active,
     buf[t + 3] = sym_hsync;
 }
 
-static void hstx_build_active_line_pixels(uint32_t *buf, uint32_t nes_y) {
+static void __not_in_flash_func(hstx_build_active_line_pixels)(uint32_t *buf,
+                                                                uint32_t nes_y) {
     /* Header: HBP, then the TMDS-encode-N command for 640 pixels. */
     buf[0] = hstx_cmd(HSTX_CMD_RAW_REPEAT, HSTX_MODE_H_BACK_PORCH);
     buf[1] = HSTX_SYM_NO_SYNC;
@@ -310,7 +319,8 @@ static void hstx_build_active_line_pixels(uint32_t *buf, uint32_t nes_y) {
     buf[t + 3] = HSTX_SYM_HSYNC;
 }
 
-static void hstx_build_line(uint32_t *buf, uint32_t line) {
+static void __not_in_flash_func(hstx_build_line)(uint32_t *buf,
+                                                  uint32_t line) {
     /* V layout: [VFP 10][VSYNC 2][VBP 33][active 480] = 525 */
     if (line < HSTX_MODE_V_FRONT_PORCH) {
         hstx_build_blank_line(buf, HSTX_SYM_NO_SYNC, HSTX_SYM_HSYNC);
@@ -337,16 +347,23 @@ static void hstx_build_line(uint32_t *buf, uint32_t line) {
     }
 }
 
-/* DMA-completion ISR — runs once per DVI line. */
-static void __attribute__((hot)) hstx_dma_irq_handler(void) {
+/* DMA-completion ISR — runs once per DVI line.
+ *
+ * Placed in RAM (__not_in_flash_func) so an XIP cache miss can never delay
+ * the handler past the 31.7 µs per-line budget.  At ~250 MHz a flash miss
+ * costs hundreds of cycles plus a worst-case ~10 µs XIP read, which alone
+ * would consume a third of the budget. */
+static void __not_in_flash_func(hstx_dma_irq_handler)(void) {
     /* Acknowledge the IRQ */
     if (s_ch_pixel >= 0) {
         dma_hw->ints0 = 1u << (uint32_t)s_ch_pixel;
     }
 
-    /* The buffer that just finished is the OPPOSITE of s_dma_buf_idx,
-     * because ch_cmd advanced to the new buffer when ch_pixel finished. */
-    uint32_t finished_idx = s_dma_buf_idx ^ 1u;
+    /* s_dma_buf_idx tracks which buffer just FINISHED in the most recent
+     * IRQ.  Initial value 0 is correct because the priming sequence
+     * (dma_channel_start(s_ch_cmd) → desc[0] → ch_pixel streams buffer 0)
+     * makes buffer 0 the first to finish. */
+    uint32_t finished_idx = s_dma_buf_idx;
 
     /* Advance the V counter — what HSTX is streaming RIGHT NOW. */
     uint32_t next_line = s_line_being_streamed + 1u;
@@ -364,6 +381,7 @@ static void __attribute__((hot)) hstx_dma_irq_handler(void) {
         fill_line = 0u;
     }
 
+#if MICRONES_ENABLE_PERF_LOG
     uint64_t t0 = time_us_64();
     hstx_build_line(s_line_buf[finished_idx], fill_line);
     uint64_t dt = time_us_64() - t0;
@@ -372,6 +390,10 @@ static void __attribute__((hot)) hstx_dma_irq_handler(void) {
     if (dt > s_stats.fill_us_max_per_line) {
         s_stats.fill_us_max_per_line = dt;
     }
+#else
+    hstx_build_line(s_line_buf[finished_idx], fill_line);
+    s_stats.lines_filled++;
+#endif
 }
 
 /* ---- Peripheral configuration ---------------------------------------- */
@@ -532,22 +554,27 @@ bool video_hstx_init(void) {
     return true;
 }
 
-void video_hstx_present_frame(const NesFrameBuffer *frame) {
+void __not_in_flash_func(video_hstx_present_frame)(const NesFrameBuffer *frame) {
     if (frame == NULL) return;
 
     /* The fill ISR reads s_present_indexed at LINE rate (every ~31 µs).
-     * memcpy of 60 KB ≈ 50 µs at 252 MHz; a torn read by the ISR during
-     * the copy is short-lived and at most produces one frame of mixed
-     * content at the top of the screen — same visible behaviour as the
-     * existing TFT path. */
-    s_present_valid = false;
-    asm volatile("" ::: "memory");
+     * memcpy of 60 KB ≈ 50 µs at 252 MHz, which crosses 1–2 HDMI lines.
+     *
+     * We deliberately do NOT gate the ISR on a "valid" flag during the
+     * copy.  A flag-gate would paint those 1–2 lines black on every
+     * present, producing a visible flicker band at the tear point.  By
+     * letting the ISR read the half-updated buffer instead, the worst
+     * case is 1–2 lines of mixed old/new pixels — an ordinary tear, not
+     * a flash, and far less perceptible.
+     *
+     * s_present_valid stays true for the lifetime of the link after the
+     * first present.  Before the first present it gates blanking so the
+     * boot screen is black instead of garbage. */
     memcpy(s_present_indexed, frame->pixels, sizeof(s_present_indexed));
-    asm volatile("" ::: "memory");
     s_present_valid = true;
 }
 
-void video_hstx_draw_test_pattern(void) {
+void __not_in_flash_func(video_hstx_draw_test_pattern)(void) {
     static const uint8_t k_test_palette[8] = {
         0x30, /* white */
         0x28, /* yellow */
@@ -564,7 +591,6 @@ void video_hstx_draw_test_pattern(void) {
             row[x] = k_test_palette[(x * 8u) / NES_FRAME_WIDTH];
         }
     }
-    asm volatile("" ::: "memory");
     s_present_valid = true;
 }
 
