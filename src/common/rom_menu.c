@@ -45,14 +45,29 @@ enum {
     MENU_TEXT_ERROR  = 0x16u,
 };
 
+/* Overscan inset.  CRT TVs vary widely in how much of the 256x240 NES
+ * frame actually reaches the visible glass — 10 pixels of safe-area
+ * padding on every edge keeps menu chrome away from the bezel and
+ * pulls the layout off the absolute screen edges.  All menu drawing is
+ * relative to MENU_SAFE_LEFT/TOP/RIGHT/BOTTOM. */
 enum {
+    MENU_INSET_X         = 10,
+    MENU_INSET_Y         = 10,
+    MENU_SAFE_LEFT       = MENU_INSET_X,
+    MENU_SAFE_TOP        = MENU_INSET_Y,
+    MENU_SAFE_RIGHT      = NES_FRAME_WIDTH  - MENU_INSET_X,
+    MENU_SAFE_BOTTOM     = NES_FRAME_HEIGHT - MENU_INSET_Y,
+    MENU_SAFE_WIDTH      = MENU_SAFE_RIGHT  - MENU_SAFE_LEFT,
+    MENU_SAFE_HEIGHT     = MENU_SAFE_BOTTOM - MENU_SAFE_TOP,
+
     MENU_HEADER_H        = 14,
-    MENU_LIST_TOP_Y      = 18,
+    MENU_HEADER_TOP_Y    = MENU_SAFE_TOP,
+    MENU_LIST_TOP_Y      = MENU_HEADER_TOP_Y + MENU_HEADER_H + 4,
     MENU_ITEM_H          = 8,
-    MENU_VISIBLE_ROWS    = 24,
+    MENU_VISIBLE_ROWS    = 23,
     MENU_LIST_BOTTOM_Y   = MENU_LIST_TOP_Y + MENU_VISIBLE_ROWS * MENU_ITEM_H,
-    MENU_STATUS_Y        = 214,
-    MENU_FOOTER_Y        = 230,
+    MENU_STATUS_Y        = MENU_LIST_BOTTOM_Y + 3,
+    MENU_FOOTER_Y        = MENU_SAFE_BOTTOM - 7,
     MENU_HOLD_INITIAL_DELAY = 18,
     MENU_HOLD_REPEAT_RATE   = 4,
 };
@@ -215,8 +230,8 @@ static void format_mapper_tag(const RomSourceEntry *e, char *out, size_t out_siz
 
 static void draw_centered_text(NesFrameBuffer *fb, int y, const char *text, uint8_t color) {
     int w = font5x7_text_width(text);
-    int x = (NES_FRAME_WIDTH - w) / 2;
-    if (x < 0) x = 0;
+    int x = MENU_SAFE_LEFT + (MENU_SAFE_WIDTH - w) / 2;
+    if (x < MENU_SAFE_LEFT) x = MENU_SAFE_LEFT;
     font5x7_draw_text(fb, x, y, text, color);
 }
 
@@ -230,20 +245,27 @@ void rom_menu_render(const RomMenu *menu,
 
     clear_fb(fb, MENU_BG);
 
-    /* Header bar. */
-    fill_rect(fb, 0, 0, NES_FRAME_WIDTH, MENU_HEADER_H, MENU_BAR);
-    font5x7_draw_text(fb, 4, 4, "microNES", MENU_TEXT);
+    /* Header bar — confined to the safe area so a CRT bezel doesn't
+     * eat the title or the ROM count. */
+    fill_rect(fb, MENU_SAFE_LEFT, MENU_HEADER_TOP_Y,
+              MENU_SAFE_WIDTH, MENU_HEADER_H, MENU_BAR);
+    font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, MENU_HEADER_TOP_Y + 4,
+                      "microNES", MENU_TEXT);
 
     int n = source != NULL ? (int)source->count(source) : 0;
     char count_buf[24];
     snprintf(count_buf, sizeof(count_buf), "%d ROM%s", n, n == 1 ? "" : "s");
     int cw = font5x7_text_width(count_buf);
-    font5x7_draw_text(fb, NES_FRAME_WIDTH - cw - 4, 4, count_buf, MENU_TEXT);
+    font5x7_draw_text(fb, MENU_SAFE_RIGHT - cw - 4, MENU_HEADER_TOP_Y + 4,
+                      count_buf, MENU_TEXT);
 
     if (n <= 0) {
-        draw_centered_text(fb, 100, "No ROMs found.", MENU_TEXT);
-        draw_centered_text(fb, 112, "Add some .nes files to your directory.", MENU_TEXT_FAINT);
-        /* Footer hint. */
+        int empty_msg_y    = MENU_LIST_TOP_Y + 70;
+        int empty_detail_y = empty_msg_y + 12;
+        draw_centered_text(fb, empty_msg_y, "No ROMs found.", MENU_TEXT);
+        draw_centered_text(fb, empty_detail_y,
+                           "Add some .nes files to your directory.",
+                           MENU_TEXT_FAINT);
         const char *footer = "Quit the host to retry.";
         draw_centered_text(fb, MENU_FOOTER_Y, footer, MENU_TEXT_FAINT);
         return;
@@ -264,7 +286,8 @@ void rom_menu_render(const RomMenu *menu,
         bool supported = e != NULL && e->supported;
 
         if (is_selected) {
-            fill_rect(fb, 0, y, NES_FRAME_WIDTH, MENU_ITEM_H, MENU_BAR);
+            fill_rect(fb, MENU_SAFE_LEFT, y,
+                      MENU_SAFE_WIDTH, MENU_ITEM_H, MENU_BAR);
         }
 
         uint8_t name_color;
@@ -281,13 +304,13 @@ void rom_menu_render(const RomMenu *menu,
         }
 
         const char *name = e != NULL ? e->name : "";
-        /* Truncate to fit in the available pixel width. */
+        /* Truncate to fit in the safe-area pixel width. */
         char trim[ROM_SOURCE_NAME_MAX];
         snprintf(trim, sizeof(trim), "%s", name);
         char tag[8];
         format_mapper_tag(e, tag, sizeof(tag));
         int tag_w = font5x7_text_width(tag);
-        int max_name_px = NES_FRAME_WIDTH - 4 - tag_w - 8 - 4;
+        int max_name_px = MENU_SAFE_WIDTH - 4 - tag_w - 8 - 4;
         int max_chars = max_name_px / FONT5X7_CELL_W;
         if (max_chars < 1) max_chars = 1;
         if ((int)strlen(trim) > max_chars) {
@@ -296,13 +319,13 @@ void rom_menu_render(const RomMenu *menu,
             }
         }
 
-        font5x7_draw_text(fb, 4, y + 1, trim, name_color);
-        font5x7_draw_text(fb, NES_FRAME_WIDTH - tag_w - 4, y + 1, tag, info_color);
+        font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, y + 1, trim, name_color);
+        font5x7_draw_text(fb, MENU_SAFE_RIGHT - tag_w - 4, y + 1, tag, info_color);
     }
 
     /* Scroll bar hint on the right when list is taller than window. */
     if (n > MENU_VISIBLE_ROWS) {
-        int track_x = NES_FRAME_WIDTH - 2;
+        int track_x = MENU_SAFE_RIGHT - 2;
         fill_rect(fb, track_x, MENU_LIST_TOP_Y, 2,
                   MENU_VISIBLE_ROWS * MENU_ITEM_H, MENU_TEXT_DIM);
         int track_h = MENU_VISIBLE_ROWS * MENU_ITEM_H;
