@@ -21,19 +21,15 @@
 
 void nes_hw_controller_init(void)
 {
-    // CLOCK and LATCH are outputs, idle low.  Drive strength bumped to
-    // 12 mA (default 4 mA) to sharpen rising edges through breadboard-
-    // length wiring; cleaner edges mean more of each clock pulse spends
-    // its time clearly above the 4021's V_ih threshold and the chip is
-    // less likely to miss a shift.
+    // CLOCK and LATCH are outputs, idle low.  Default 4 mA drive — the
+    // 12 mA bump made things worse on the breadboard (likely overshoot
+    // / reflections on long jumpers).
     gpio_init(PICO_NES_CTL_CLOCK);
     gpio_set_dir(PICO_NES_CTL_CLOCK, GPIO_OUT);
-    gpio_set_drive_strength(PICO_NES_CTL_CLOCK, GPIO_DRIVE_STRENGTH_12MA);
     gpio_put(PICO_NES_CTL_CLOCK, 0);
 
     gpio_init(PICO_NES_CTL_LATCH);
     gpio_set_dir(PICO_NES_CTL_LATCH, GPIO_OUT);
-    gpio_set_drive_strength(PICO_NES_CTL_LATCH, GPIO_DRIVE_STRENGTH_12MA);
     gpio_put(PICO_NES_CTL_LATCH, 0);
 
     // DATA is an input with pull-up (guards against floating when no controller

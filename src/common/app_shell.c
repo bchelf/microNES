@@ -113,6 +113,13 @@ void app_shell_init(AppShell *shell, RomSource *source, Nes *nes) {
     shell->nes = nes;
     shell->running_index = -1;
     shell->state = APP_SHELL_STATE_MENU;
+    /* Treat the very first controller read as already-pressed for every
+     * button, so no spurious "press event" fires before the user has
+     * touched anything.  Without this, a flaky controller bus that
+     * reads 0xFF (all-pressed) on first poll — which is exactly what
+     * we see at boot when the 4021 hasn't fully stabilised — would
+     * edge-trigger Start and instant-launch the first ROM. */
+    shell->prev_buttons = 0xFFu;
     rom_menu_init(&shell->menu);
     if (source != NULL && source->refresh != NULL) {
         source->refresh(source);
