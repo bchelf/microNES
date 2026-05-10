@@ -8,7 +8,6 @@ set(MICRONES_PICO_TFT_BACKEND "spi_ili9341" CACHE STRING "Pico TFT backend: spi_
 set_property(CACHE MICRONES_PICO_TFT_BACKEND PROPERTY STRINGS spi_ili9341 parallel_8080)
 set(MICRONES_PICO_TFT_CONTROLLER "ili9341" CACHE STRING "Pico TFT controller init: ili9341, ili9486, or ili9488")
 set_property(CACHE MICRONES_PICO_TFT_CONTROLLER PROPERTY STRINGS ili9341 ili9486 ili9488)
-set(MICRONES_PICO_ROM_PATH "" CACHE FILEPATH "Path to an iNES ROM image to embed for Pico emulator video mode")
 set(MICRONES_APU_ENGINE "micrones" CACHE STRING "APU engine: micrones (cycle-accurate, default) or infones (InfoNES DDS)")
 set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS micrones infones)
 option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic logging" OFF)
@@ -34,15 +33,18 @@ endif ()
 
 set(MICRONES_COMMON_SOURCES
     ${MICRONES_APU_SOURCE}
+    src/common/app_shell.c
     src/common/cart.c
     src/common/cpu6502.c
     src/common/cpu6502_opcode.c
+    src/common/font_5x7.c
     src/common/frame_pacer.c
     src/common/input.c
     src/common/mmc1.c
     src/common/nes.c
     src/common/nrom.c
     src/common/ppu.c
+    src/common/rom_menu.c
     src/common/smb1_bg_classifier.c
 )
 
@@ -77,9 +79,18 @@ if (MICRONES_PLATFORM STREQUAL "host")
         micrones_core
     )
 
+    add_executable(micrones_menu_smoke
+        tests/menu_smoke.c
+    )
+
+    target_link_libraries(micrones_menu_smoke PRIVATE
+        micrones_core
+    )
+
     if (SDL3_FOUND)
         add_executable(micrones
             src/host/audio_sdl.c
+            src/host/rom_source_posix.c
             src/host/run_main.c
             src/host/wav_write.c
             src/host/window_sdl.c
@@ -99,39 +110,28 @@ if (MICRONES_PLATFORM STREQUAL "host")
 elseif (MICRONES_PLATFORM STREQUAL "pico")
     pico_sdk_init()
     set(MICRONES_PICO_COMMON_SOURCES
+        src/pico/fat32.c
         src/pico/main.c
         src/pico/nes_hw_controller.c
         src/pico/pico_input.c
         src/pico/pico_time.c
+        src/pico/rom_source_sd.c
+        src/pico/sd_spi.c
     )
     set(MICRONES_PICO_COMMON_LIBS
         hardware_clocks
         hardware_gpio
         hardware_irq
+        hardware_pio
         hardware_pwm
         hardware_timer
         hardware_vreg
         m
         pico_stdlib
     )
+    # ROMs now load from the SD card at runtime; no embedded image, no
+    # MICRONES_PICO_ROM_PATH needed.
     set(MICRONES_PICO_ROM_SOURCES)
-
-    if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")
-        if (MICRONES_PICO_ROM_PATH STREQUAL "")
-            message(FATAL_ERROR "MICRONES_PICO_ROM_PATH must be set when MICRONES_PICO_VIDEO_MODE=emulator")
-        endif ()
-
-        file(READ "${MICRONES_PICO_ROM_PATH}" MICRONES_PICO_ROM_HEX HEX)
-        string(LENGTH "${MICRONES_PICO_ROM_HEX}" MICRONES_PICO_ROM_HEX_LEN)
-        math(EXPR MICRONES_PICO_ROM_BYTE_COUNT "${MICRONES_PICO_ROM_HEX_LEN} / 2")
-        string(REGEX REPLACE "([0-9A-Fa-f][0-9A-Fa-f])" "0x\\1, " MICRONES_PICO_ROM_BYTES "${MICRONES_PICO_ROM_HEX}")
-        set(MICRONES_PICO_ROM_C "${CMAKE_CURRENT_BINARY_DIR}/micrones_pico_embedded_rom.c")
-        file(WRITE "${MICRONES_PICO_ROM_C}"
-"unsigned char micrones_pico_embedded_rom[] = { ${MICRONES_PICO_ROM_BYTES} };\nunsigned int micrones_pico_embedded_rom_len = ${MICRONES_PICO_ROM_BYTE_COUNT}u;\n")
-        list(APPEND MICRONES_PICO_ROM_SOURCES
-            "${MICRONES_PICO_ROM_C}"
-        )
-    endif ()
 
     function(micrones_add_pico_core target_name framebuffer_enabled)
         add_library(${target_name} STATIC
@@ -184,6 +184,29 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         endif ()
         pico_enable_stdio_usb(${target_name} 1)
         pico_enable_stdio_uart(${target_name} 0)
+
+        # SD card driver runs SPI through PIO so the v0.1 board's pin map works.
+        pico_generate_pio_header(${target_name}
+            ${CMAKE_CURRENT_LIST_DIR}/src/pico/sd_spi.pio
+        )
+
+        # Forward any -DMICRONES_SD_* override the user passed at configure
+        # time into the compile.  sd_card_pins.h #ifndefs the names so a
+        # symbol defined here wins over the default; symbols not passed are
+        # simply absent and the header default applies.
+        foreach (_sd_var
+            MICRONES_SD_PIN_CD MICRONES_SD_PIN_MISO MICRONES_SD_PIN_SCK
+            MICRONES_SD_PIN_MOSI MICRONES_SD_PIN_CS
+            MICRONES_SD_PIO_INDEX
+            MICRONES_SD_INIT_BAUD_HZ MICRONES_SD_RUN_BAUD_HZ
+            MICRONES_SD_CD_ACTIVE_LOW MICRONES_SD_CD_DISABLED
+            MICRONES_SD_WARMUP_CS_LOW
+            MICRONES_SD_INIT_DEBUG)
+            if (DEFINED ${_sd_var})
+                target_compile_definitions(${target_name} PRIVATE
+                    ${_sd_var}=${${_sd_var}})
+            endif ()
+        endforeach ()
 
         if (audio_backend_name STREQUAL "pwm")
             target_sources(${target_name} PRIVATE

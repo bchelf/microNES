@@ -7,14 +7,14 @@
 /*
  * 4-bit binary-weighted composite DAC — hardware pin assignment
  *
- *   GP0–GP3 : DAC bits 0–3 (driven by PIO state machine 0 on PIO0)
- *   GP4     : sync clamp gate (2N7002 N-MOSFET, active-high, driven by CPU)
+ *   GP10–GP13 : DAC bits 0–3 (driven by PIO state machine 0 on PIO0)
+ *   GP14      : sync clamp gate (2N7002 N-MOSFET, active-high, driven by CPU)
  *
  * Resistor network (R-series = 75.5 Ω, R-load = 75 Ω TV termination):
- *   GP0 → 1000 Ω → summing node → 75.5 Ω → RCA jack → 75 Ω
- *   GP1 →  485 Ω → summing node
- *   GP2 →  242 Ω → summing node
- *   GP3 →  120 Ω → summing node
+ *   GP10 → 1000 Ω → summing node → 75.5 Ω → RCA jack → 75 Ω
+ *   GP11 →  485 Ω → summing node
+ *   GP12 →  242 Ω → summing node
+ *   GP13 →  120 Ω → summing node
  *
  * Analytically derived DAC codes (no R_bias at summing node):
  *   blank_code  = 4   (306 mV ≈ 300 mV NTSC blank)
@@ -23,9 +23,9 @@
  *   LSB ≈ 74 mV/code
  */
 
-#define MICRONES_VIDEO_PIN_BASE     0u    /* GP0: first DAC bit */
-#define MICRONES_VIDEO_PIN_COUNT    4u    /* GP0-GP3 */
-#define MICRONES_VIDEO_SYNC_GPIO    4u    /* GP4: N-MOSFET sync clamp, active HIGH */
+#define MICRONES_VIDEO_PIN_BASE     10u   /* GP10: first DAC bit */
+#define MICRONES_VIDEO_PIN_COUNT    4u    /* GP10-GP13 */
+#define MICRONES_VIDEO_SYNC_GPIO    14u   /* GP14: N-MOSFET sync clamp, active HIGH */
 
 /* Visible dimensions (unchanged from original) */
 enum {

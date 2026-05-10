@@ -1,6 +1,9 @@
+#include "app_shell.h"
 #include "audio_sdl.h"
 #include "frame_pacer.h"
 #include "nes.h"
+#include "rom_source.h"
+#include "rom_source_posix.h"
 #include "smb1_bg_classifier.h"
 #include "wav_write.h"
 #include "window_sdl.h"
@@ -24,6 +27,7 @@ enum {
 
 typedef struct {
     const char *rom_path;
+    const char *rom_dir;
     int scale;
     bool enable_vsync;
     bool enable_color;
@@ -46,7 +50,7 @@ typedef struct {
 
 static void print_usage(const char *argv0) {
     printf(
-        "Usage: %s [rom_path] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--transparent-bg] [--opacity 0-100] [--dump-wav path] [--dump-wav-seconds N]\n",
+        "Usage: %s [rom_path | --rom-dir DIR] [--scale N] [--vsync] [--no-vsync] [--color] [--grayscale] [--audio] [--no-audio] [--throttled] [--unthrottled] [--max-frames N] [--audio-solo channel] [--audio-mute channel] [--apu-test-tone mode] [--apu-stats] [--apu-write-summary] [--transparent-bg] [--opacity 0-100] [--dump-wav path] [--dump-wav-seconds N]\n",
         argv0
     );
 }
@@ -121,6 +125,7 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
     bool rom_set = false;
 
     options->rom_path = "roms/smb1.nes";
+    options->rom_dir = NULL;
     options->scale = HOST_DEFAULT_SCALE;
     options->enable_vsync = false;
     options->enable_color = true;
@@ -142,6 +147,14 @@ static bool parse_args(int argc, char **argv, RunOptions *options) {
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
             print_usage(argv[0]);
             return false;
+        }
+        if (strcmp(arg, "--rom-dir") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--rom-dir requires a directory path\n");
+                return false;
+            }
+            options->rom_dir = argv[++i];
+            continue;
         }
         if (strcmp(arg, "--scale") == 0) {
             if (i + 1 >= argc || !parse_int_arg(argv[i + 1], &options->scale) || options->scale <= 0) {
@@ -558,19 +571,36 @@ int main(int argc, char **argv) {
     }
 
     nes_init(&nes);
-    if (!nes_load_cartridge_file(&nes, options.rom_path)) {
-        fprintf(stderr, "ROM load failed: %s\n", nes_last_error(&nes));
-        host_sdl_window_destroy(window);
-        return 3;
+    AppShell shell;
+    RomSource rom_source;
+    bool using_shell = (options.rom_dir != NULL);
+    bool shell_initialized = false;
+    bool source_initialized = false;
+    if (using_shell) {
+        if (!rom_source_posix_init(&rom_source, options.rom_dir)) {
+            fprintf(stderr, "Failed to open ROM directory: %s\n", options.rom_dir);
+            host_sdl_window_destroy(window);
+            return 3;
+        }
+        source_initialized = true;
+        app_shell_init(&shell, &rom_source, &nes);
+        shell_initialized = true;
+        printf("ROM directory: %s (%zu entries)\n",
+               options.rom_dir, rom_source.count(&rom_source));
+    } else {
+        if (!nes_load_cartridge_file(&nes, options.rom_path)) {
+            fprintf(stderr, "ROM load failed: %s\n", nes_last_error(&nes));
+            host_sdl_window_destroy(window);
+            return 3;
+        }
+        nes_reset(&nes);
+        if (options.transparent_bg) {
+            ppu_set_bg_tile_classifier(&nes.ppu, smb1_bg_tile_is_interactive, &nes);
+        }
+        nes_audio_set_mix_enable_mask(&nes, options.audio_mix_mask);
+        nes_audio_set_test_tone(&nes, options.test_tone);
+        nes_audio_debug_reset_metrics(&nes);
     }
-
-    nes_reset(&nes);
-    if (options.transparent_bg) {
-        ppu_set_bg_tile_classifier(&nes.ppu, smb1_bg_tile_is_interactive, &nes);
-    }
-    nes_audio_set_mix_enable_mask(&nes, options.audio_mix_mask);
-    nes_audio_set_test_tone(&nes, options.test_tone);
-    nes_audio_debug_reset_metrics(&nes);
     audio = host_audio_sdl_create((int)nes_audio_sample_rate(&nes), options.enable_audio);
     if (audio == NULL) {
         fprintf(stderr, "SDL audio init failed: %s\n", host_audio_sdl_last_error());
@@ -583,7 +613,9 @@ int main(int argc, char **argv) {
     micrones_frame_pacer_init(&pacer, options.throttled, now_ns);
     stats_window_start_ns = now_ns;
 
-    printf("ROM: %s\n", options.rom_path);
+    if (!using_shell) {
+        printf("ROM: %s\n", options.rom_path);
+    }
     printf("window scale: %d\n", options.scale);
     printf("pacing: %s\n", options.throttled ? "throttled" : "unthrottled");
     printf("target fps: %.4f\n", micrones_frame_pacer_target_fps());
@@ -633,7 +665,51 @@ int main(int argc, char **argv) {
         if (!host_process_events(&running, &input)) {
             break;
         }
-        nes_set_controller_state(&nes, 0, host_read_controller_state());
+
+        NesControllerState live_input = host_read_controller_state();
+        NesControllerState forwarded = live_input;
+        if (using_shell) {
+            AppShellFrame f = app_shell_begin_frame(&shell, live_input);
+            if (f.just_entered_run) {
+                if (options.transparent_bg) {
+                    ppu_set_bg_tile_classifier(&nes.ppu, smb1_bg_tile_is_interactive, &nes);
+                }
+                nes_audio_set_mix_enable_mask(&nes, options.audio_mix_mask);
+                nes_audio_set_test_tone(&nes, options.test_tone);
+                nes_audio_debug_reset_metrics(&nes);
+            }
+            if (!f.stepping_nes) {
+                /* Menu frame: skip the emulator step entirely and just
+                 * present the framebuffer the shell rendered. */
+                const NesFrameBuffer *menu_fb = app_shell_menu_framebuffer(&shell);
+                if (menu_fb != NULL) {
+                    if (!host_sdl_window_upload_frame(window, menu_fb->pixels,
+                                                      NES_FRAME_WIDTH, NES_FRAME_HEIGHT)) {
+                        fprintf(stderr, "Frame upload failed: %s\n", host_sdl_window_last_error());
+                        running = false;
+                        break;
+                    }
+                }
+                if (!host_sdl_window_present(window)) {
+                    fprintf(stderr, "Render failed: %s\n", host_sdl_window_last_error());
+                    running = false;
+                    break;
+                }
+                ++presented_frames;
+                now_ns = host_now_ns();
+                micrones_frame_pacer_frame_done(&pacer, now_ns);
+                continue;
+            }
+            forwarded = f.forwarded;
+            /* nes_init under the hood resets ppu.completed_frame_count to 0;
+             * recompute the per-frame targets so the inner step loop runs
+             * exactly one frame on the just-launched ROM. */
+            if (f.just_entered_run) {
+                target_completed_frame = nes.ppu.completed_frame_count + 1;
+                target_render_frame = nes.ppu.completed_frame_count;
+            }
+        }
+        nes_set_controller_state(&nes, 0, forwarded);
 
         while (running && nes.ppu.completed_frame_count < target_completed_frame) {
             if (!nes_step_instruction(&nes)) {
@@ -789,6 +865,12 @@ int main(int argc, char **argv) {
     }
 
     free(wav_samples);
+    if (shell_initialized) {
+        app_shell_destroy(&shell);
+    }
+    if (source_initialized) {
+        rom_source_posix_destroy(&rom_source);
+    }
     nes_destroy(&nes);
     host_audio_sdl_destroy(audio);
     host_sdl_window_destroy(window);

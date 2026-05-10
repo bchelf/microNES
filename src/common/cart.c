@@ -122,6 +122,7 @@ static bool cart_parse_ines_image(
     is_nes2 = (flags7 & 0x0cu) == 0x08u;
 
     cartridge->is_nes2 = is_nes2;
+    cartridge->has_battery = (flags6 & 0x02u) != 0;
 
     mapper = (uint32_t)(flags6 >> 4) | (uint32_t)(flags7 & 0xf0u);
     if (is_nes2) {

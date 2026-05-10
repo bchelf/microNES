@@ -91,6 +91,57 @@ bool emulator_video_adapter_init(
     return true;
 }
 
+bool emulator_video_adapter_init_empty(PicoEmulatorVideoAdapter *adapter) {
+    memset(adapter, 0, sizeof(*adapter));
+    nes_init(&adapter->nes);
+    nes_set_profile_clock(&adapter->nes, emulator_video_adapter_now_us, NULL);
+    adapter->initialized = true;
+    adapter->last_frame_first_visible_x = -1;
+    adapter->last_frame_first_visible_y = -1;
+    emulator_video_adapter_set_error(adapter, "");
+    return true;
+}
+
+bool emulator_video_adapter_step_frame(PicoEmulatorVideoAdapter *adapter) {
+    /* Provided so the analog adapter exposes the same step/present split
+     * the TFT adapter does.  The analog backend's render_frame couples
+     * step and scanline-push, so step alone runs the NES without pushing
+     * pixels — useful primarily as an API parity stub.  Most callers on
+     * the analog target should use render_frame. */
+    if (!adapter->initialized) {
+        emulator_video_adapter_set_error(adapter, "emulator video adapter is not initialized");
+        return false;
+    }
+    if (!nes_step_frame(&adapter->nes)) {
+        emulator_video_adapter_set_error(adapter, nes_last_error(&adapter->nes));
+        return false;
+    }
+    ++adapter->rendered_frames;
+    adapter->rendered_scanlines += NES_FRAME_HEIGHT;
+    return true;
+}
+
+void emulator_video_adapter_present_frame(PicoEmulatorVideoAdapter *adapter) {
+    if (adapter == NULL || !adapter->initialized) return;
+    const NesFrameBuffer *fb = nes_framebuffer(&adapter->nes);
+    emulator_video_adapter_present_framebuffer(adapter, fb);
+}
+
+void emulator_video_adapter_present_framebuffer(
+    PicoEmulatorVideoAdapter *adapter,
+    const NesFrameBuffer *fb
+) {
+    if (adapter == NULL || fb == NULL) return;
+    /* Push every visible scanline to the queue.  Core 1 will pick them up
+     * and convert to composite as usual. */
+    ScanlineQueue *queue = core1_video_get_queue();
+    for (int y = 0; y < NES_FRAME_HEIGHT; ++y) {
+        scanline_queue_push(queue, &fb->pixels[y * NES_FRAME_WIDTH], (uint16_t)y);
+        ++adapter->rendered_scanlines;
+    }
+    ++adapter->rendered_frames;
+}
+
 bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter) {
     uint64_t frame_started_us;
 #if MICRONES_ENABLE_STEP_PROFILING

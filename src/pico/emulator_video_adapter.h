@@ -39,9 +39,18 @@ bool emulator_video_adapter_init(
     const uint8_t *rom_image,
     size_t rom_image_size
 );
+/* Initialize the adapter with a bare Nes (no cart loaded).  Use this when
+ * an app shell will load cartridges on demand. */
+bool emulator_video_adapter_init_empty(PicoEmulatorVideoAdapter *adapter);
 bool emulator_video_adapter_render_frame(PicoEmulatorVideoAdapter *adapter);
 bool emulator_video_adapter_step_frame(PicoEmulatorVideoAdapter *adapter);
 void emulator_video_adapter_present_frame(PicoEmulatorVideoAdapter *adapter);
+/* Present an arbitrary NES-framebuffer-shaped image (for the ROM-picker
+ * menu).  Behaves like present_frame but reads from the supplied buffer
+ * instead of the PPU's internal one. */
+void emulator_video_adapter_present_framebuffer(
+    PicoEmulatorVideoAdapter *adapter,
+    const NesFrameBuffer *fb);
 const char *emulator_video_adapter_last_error(const PicoEmulatorVideoAdapter *adapter);
 
 #endif
