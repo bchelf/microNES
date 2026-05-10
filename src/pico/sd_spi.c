@@ -165,16 +165,32 @@ static bool wait_not_busy(uint32_t timeout_ms) {
     return false;
 }
 
-/* Standard CRC7 used by CMD0 / CMD8 / CMD58. */
+/* SD CRC7.  Polynomial G(x) = x^7 + x^3 + 1, encoded as 0x89.
+ *
+ * Per the SD physical layer spec example: at each bit, conditionally
+ * XOR with the polynomial when bit 7 is set, then shift left.  Shifting
+ * BEFORE the XOR (as an earlier broken version of this function did)
+ * is *not* equivalent — it leaves bit 7 of the result toggled wrong.
+ *
+ * After processing all input bytes the CRC7 occupies bits 7..1 of the
+ * register and bit 0 is 0; ORing 0x01 sets the SD command-frame stop
+ * bit and yields the byte the card expects.
+ *
+ * Cross-check expected outputs (verify if you ever touch this):
+ *   crc7({0x40,0x00,0x00,0x00,0x00})   == 0x95   (CMD0)
+ *   crc7({0x48,0x00,0x00,0x01,0xAA})   == 0x87   (CMD8 voltage check) */
 static uint8_t crc7(const uint8_t *data, size_t len) {
     uint8_t crc = 0;
     for (size_t i = 0; i < len; ++i) {
         crc ^= data[i];
         for (int b = 0; b < 8; ++b) {
-            crc = (uint8_t)((crc & 0x80u) ? (uint8_t)((crc << 1) ^ 0x09u) : (uint8_t)(crc << 1));
+            if (crc & 0x80u) {
+                crc ^= 0x89u;
+            }
+            crc = (uint8_t)(crc << 1);
         }
     }
-    return (uint8_t)((crc << 1) | 0x01u);
+    return (uint8_t)(crc | 0x01u);
 }
 
 static uint8_t send_cmd(uint8_t cmd, uint32_t arg) {
@@ -213,12 +229,18 @@ static uint8_t send_acmd(uint8_t cmd, uint32_t arg) {
     return send_cmd(cmd, arg);
 }
 
-static SdResult read_data_block(uint8_t *buf) {
+/* Wait for the SD data token, then read exactly `len` bytes into buf
+ * followed by the 2 CRC bytes (which we discard).  `len` is 512 for
+ * CMD17/18 block reads and 16 for CMD9 CSD reads — getting this wrong
+ * silently overruns the caller's buffer (the original version of this
+ * function had a hard-coded 512 byte loop, and sd_init() handed it a
+ * 16-byte stack array for the CSD read; it stomped 496 bytes of stack). */
+static SdResult read_data_block(uint8_t *buf, size_t len) {
     absolute_time_t deadline = make_timeout_time_ms(200);
     while (!time_reached(deadline)) {
         uint8_t t = spi_xfer(0xFFu);
         if (t == DATA_TOKEN_BLOCK_READ_WRITE) {
-            for (int i = 0; i < 512; ++i) {
+            for (size_t i = 0; i < len; ++i) {
                 buf[i] = spi_xfer(0xFFu);
             }
             (void)spi_xfer(0xFFu);  /* CRC hi */
@@ -443,7 +465,7 @@ SdResult sd_init(void) {
     /* CMD9: SEND_CSD to learn capacity. */
     if (send_cmd(CMD9, 0) == 0u) {
         uint8_t csd[16];
-        if (read_data_block(csd) == SD_OK) {
+        if (read_data_block(csd, sizeof(csd)) == SD_OK) {
             (void)parse_csd_block_count(csd);
         }
     }
@@ -547,7 +569,7 @@ SdResult sd_read_block(uint32_t lba, uint8_t *buf) {
     if (send_cmd(CMD17, lba_to_address(lba)) != 0u) {
         r = SD_ERR_READ;
     } else {
-        r = read_data_block(buf);
+        r = read_data_block(buf, 512);
     }
     cs_deassert();
     spi_send_dummy(1);
