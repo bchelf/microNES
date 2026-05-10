@@ -46,28 +46,30 @@ enum {
 };
 
 /* Overscan inset.  CRT TVs vary widely in how much of the 256x240 NES
- * frame actually reaches the visible glass — 10 pixels of safe-area
- * padding on every edge keeps menu chrome away from the bezel and
- * pulls the layout off the absolute screen edges.  All menu drawing is
- * relative to MENU_SAFE_LEFT/TOP/RIGHT/BOTTOM. */
+ * frame actually reaches the visible glass.  We keep ~10 px on the
+ * sides and top, and 20 px on the bottom — many CRTs lose more on the
+ * bottom edge than the top, and a wider bottom margin gives the
+ * footer hint visible breathing room from the safe-area boundary.
+ * All menu drawing is relative to MENU_SAFE_LEFT/TOP/RIGHT/BOTTOM. */
 enum {
-    MENU_INSET_X         = 10,
-    MENU_INSET_Y         = 10,
-    MENU_SAFE_LEFT       = MENU_INSET_X,
-    MENU_SAFE_TOP        = MENU_INSET_Y,
-    MENU_SAFE_RIGHT      = NES_FRAME_WIDTH  - MENU_INSET_X,
-    MENU_SAFE_BOTTOM     = NES_FRAME_HEIGHT - MENU_INSET_Y,
-    MENU_SAFE_WIDTH      = MENU_SAFE_RIGHT  - MENU_SAFE_LEFT,
-    MENU_SAFE_HEIGHT     = MENU_SAFE_BOTTOM - MENU_SAFE_TOP,
+    MENU_INSET_X            = 10,
+    MENU_INSET_Y_TOP        = 10,
+    MENU_INSET_Y_BOTTOM     = 20,
+    MENU_SAFE_LEFT          = MENU_INSET_X,
+    MENU_SAFE_TOP           = MENU_INSET_Y_TOP,
+    MENU_SAFE_RIGHT         = NES_FRAME_WIDTH  - MENU_INSET_X,
+    MENU_SAFE_BOTTOM        = NES_FRAME_HEIGHT - MENU_INSET_Y_BOTTOM,
+    MENU_SAFE_WIDTH         = MENU_SAFE_RIGHT  - MENU_SAFE_LEFT,
+    MENU_SAFE_HEIGHT        = MENU_SAFE_BOTTOM - MENU_SAFE_TOP,
 
-    MENU_HEADER_H        = 14,
-    MENU_HEADER_TOP_Y    = MENU_SAFE_TOP,
-    MENU_LIST_TOP_Y      = MENU_HEADER_TOP_Y + MENU_HEADER_H + 4,
-    MENU_ITEM_H          = 8,
-    MENU_VISIBLE_ROWS    = 23,
-    MENU_LIST_BOTTOM_Y   = MENU_LIST_TOP_Y + MENU_VISIBLE_ROWS * MENU_ITEM_H,
-    MENU_STATUS_Y        = MENU_LIST_BOTTOM_Y + 3,
-    MENU_FOOTER_Y        = MENU_SAFE_BOTTOM - 7,
+    MENU_HEADER_H           = 14,
+    MENU_HEADER_TOP_Y       = MENU_SAFE_TOP,
+    MENU_LIST_TOP_Y         = MENU_HEADER_TOP_Y + MENU_HEADER_H + 4,
+    MENU_ITEM_H             = 8,
+    MENU_VISIBLE_ROWS       = 22,
+    MENU_LIST_BOTTOM_Y      = MENU_LIST_TOP_Y + MENU_VISIBLE_ROWS * MENU_ITEM_H,
+    MENU_STATUS_Y           = MENU_LIST_BOTTOM_Y + 3,
+    MENU_FOOTER_Y           = MENU_SAFE_BOTTOM - 7,
     MENU_HOLD_INITIAL_DELAY = 18,
     MENU_HOLD_REPEAT_RATE   = 4,
 };
