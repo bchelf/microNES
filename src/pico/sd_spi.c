@@ -29,6 +29,15 @@ typedef struct {
     uint8_t  warmup[10];      /* MISO bytes during the 10-byte CS-high warmup */
     int      cmd0_attempts;   /* 0..8 */
     uint8_t  cmd0_responses[8];
+    /* PIO-output verification probe: a 4-byte pattern shifted out before
+     * the SPI-spec warmup, with CS still high.  In a MOSI->MISO loopback
+     * the receive column should match the transmit column exactly; on a
+     * real card it usually all reads FF (card not driving, MISO pulled
+     * up).  The pattern includes a clean low byte and an alternating
+     * pattern so we can tell "MOSI driving correctly both ways" from
+     * "MOSI floating + pullup on MISO". */
+    uint8_t  probe_tx[4];
+    uint8_t  probe_rx[4];
     SdResult last_result;
 } SdInitDiag;
 
@@ -330,6 +339,20 @@ SdResult sd_init(void) {
      * sanity check on the bus. */
     cs_deassert();
     sleep_ms(2);
+
+    /* PIO-output verification probe.  CS is still high here so a real
+     * card is deselected and won't be perturbed.  In a hardware loopback
+     * (MOSI jumpered to MISO) the receive bytes should equal the transmit
+     * bytes; if they all come back FF the PIO isn't actually driving MOSI
+     * low. */
+    {
+        static const uint8_t probe[4] = { 0xFFu, 0x00u, 0xA5u, 0x55u };
+        for (int i = 0; i < 4; ++i) {
+            s_diag.probe_tx[i] = probe[i];
+            s_diag.probe_rx[i] = spi_xfer(probe[i]);
+        }
+    }
+
     for (int i = 0; i < 10; ++i) {
         s_diag.warmup[i] = spi_xfer(0xFFu);
     }
@@ -449,6 +472,11 @@ void sd_print_init_diag(void) {
            (unsigned)MICRONES_SD_PIN_CS,
            (unsigned)MICRONES_SD_PIO_INDEX,
            (int)s_diag.last_result);
+    printf("SD diag: probe (TX->RX):");
+    for (int i = 0; i < (int)(sizeof(s_diag.probe_tx) / sizeof(s_diag.probe_tx[0])); ++i) {
+        printf(" %02X->%02X", s_diag.probe_tx[i], s_diag.probe_rx[i]);
+    }
+    printf("\n");
     printf("SD diag: warmup MISO");
     for (int i = 0; i < (int)(sizeof(s_diag.warmup) / sizeof(s_diag.warmup[0])); ++i) {
         printf(" %02X", s_diag.warmup[i]);
