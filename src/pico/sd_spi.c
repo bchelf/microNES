@@ -483,7 +483,15 @@ void sd_run_gpio_probe(void) {
     /* Tear down any PIO/SD state so the pins are owned by SIO. */
     sd_deinit();
 
-    printf("SD probe: starting GPIO walk (15 s).  Multimeter / LED on each pin in turn.\n");
+    /* 10-second countdown so a multimeter probe can be in position
+     * before any pin toggles, and so a late `screen` attach catches the
+     * start. */
+    for (int i = 10; i > 0; --i) {
+        printf("SD probe: starting in %d s...\n", i);
+        sleep_ms(1000);
+    }
+
+    printf("SD probe: starting GPIO walk (9 s).  Multimeter / LED on each pin in turn.\n");
     probe_one_pin("CS",   MICRONES_SD_PIN_CS);
     probe_one_pin("SCK",  MICRONES_SD_PIN_SCK);
     probe_one_pin("MOSI", MICRONES_SD_PIN_MOSI);
