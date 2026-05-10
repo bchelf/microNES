@@ -36,9 +36,9 @@
 //    GPIO 13 → DATA
 //
 //  RP2350 / Pico 2 – defined in pico_input.h:
-//    GP3 → CLOCK
-//    GP4 → LATCH
-//    GP6 → DATA    (GP0/1 video, GP2 spare button, GP5 audio remain free)
+//    GP20 → CLOCK
+//    GP19 → LATCH
+//    GP18 → DATA
 
 // Minimum pulse widths for the 4021.
 // NES hardware spec requires ≥ 12 µs; 6 µs works reliably with all known
