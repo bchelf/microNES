@@ -40,11 +40,15 @@
 //    GP19 → LATCH
 //    GP18 → DATA
 
-// Minimum pulse widths for the 4021.
-// NES hardware spec requires ≥ 12 µs; 6 µs works reliably with all known
-// original controllers and gives plenty of margin at embedded clock rates.
-#define NES_HW_CTL_LATCH_US  6u
-#define NES_HW_CTL_CLOCK_US  2u
+// Pulse widths for the 4021.  Original NES spec is ≥ 12 µs LATCH and
+// 6 µs CLOCK half-period (12 µs full period, ~83 kHz).  Earlier values
+// (6 / 2 µs) ran clean on the bench but turned out to be marginal on
+// breadboard wiring — the shift register would catch the first one or
+// two bits and then DATA would latch low for the rest of the read.
+// Going to spec gives plenty of margin and only costs ~108 µs/read,
+// negligible against the 16.6 ms frame budget.
+#define NES_HW_CTL_LATCH_US  12u
+#define NES_HW_CTL_CLOCK_US  6u
 
 // Initialise GPIO pins.  Call once at startup before nes_hw_controller_read.
 void nes_hw_controller_init(void);
