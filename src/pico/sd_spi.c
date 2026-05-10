@@ -86,16 +86,32 @@ static bool wait_not_busy(uint32_t timeout_ms) {
     return false;
 }
 
-/* Standard CRC7 used by CMD0 / CMD8 / CMD58. */
+/* SD CRC7.  Polynomial G(x) = x^7 + x^3 + 1, encoded as 0x89.
+ *
+ * Per the SD physical layer spec example: at each bit, conditionally
+ * XOR with the polynomial when bit 7 is set, then shift left.  Shifting
+ * BEFORE the XOR (as an earlier broken version of this function did)
+ * is *not* equivalent — it leaves bit 7 of the result toggled wrong.
+ *
+ * After processing all input bytes the CRC7 occupies bits 7..1 of the
+ * register and bit 0 is 0; ORing 0x01 sets the SD command-frame stop
+ * bit and yields the byte the card expects.
+ *
+ * Cross-check expected outputs (verify if you ever touch this):
+ *   crc7({0x40,0x00,0x00,0x00,0x00})   == 0x95   (CMD0)
+ *   crc7({0x48,0x00,0x00,0x01,0xAA})   == 0x87   (CMD8 voltage check) */
 static uint8_t crc7(const uint8_t *data, size_t len) {
     uint8_t crc = 0;
     for (size_t i = 0; i < len; ++i) {
         crc ^= data[i];
         for (int b = 0; b < 8; ++b) {
-            crc = (uint8_t)((crc & 0x80u) ? (uint8_t)((crc << 1) ^ 0x09u) : (uint8_t)(crc << 1));
+            if (crc & 0x80u) {
+                crc ^= 0x89u;
+            }
+            crc = (uint8_t)(crc << 1);
         }
     }
-    return (uint8_t)((crc << 1) | 0x01u);
+    return (uint8_t)(crc | 0x01u);
 }
 
 static uint8_t send_cmd(uint8_t cmd, uint32_t arg) {
