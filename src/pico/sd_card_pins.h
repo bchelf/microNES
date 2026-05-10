@@ -76,4 +76,14 @@
 #define MICRONES_SD_CD_DISABLED 1u
 #endif
 
+/* Some SD breakouts (notably some HW-125 clones) gate the level-shifter
+ * /OE to host CS — buffers only pass signals when CS is low.  That breaks
+ * the SD spec's CS-high 74-clock warmup because no clocks reach the card.
+ * Setting this to 1 sends the warmup with CS low; the card frames it as
+ * idle bytes (0xFF = no command) and it usually works.  Off-spec on
+ * compliant breakouts but harmless. */
+#ifndef MICRONES_SD_WARMUP_CS_LOW
+#define MICRONES_SD_WARMUP_CS_LOW 0u
+#endif
+
 #endif

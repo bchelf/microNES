@@ -333,18 +333,24 @@ SdResult sd_init(void) {
         return SD_ERR_NO_CARD;
     }
 
-    /* Power-up sequence: CS high, send 80+ clocks at < 400 kHz with MOSI
-     * held high.  Each spi_xfer of 0xFF drives MOSI high for 8 clocks.
-     * Capture the MISO bytes seen during the warmup — they're the cheapest
-     * sanity check on the bus. */
+    /* Power-up sequence: send 80+ clocks at < 400 kHz with MOSI held high.
+     * Each spi_xfer of 0xFF drives MOSI high for 8 clocks.  Capture the
+     * MISO bytes seen during the warmup — they're the cheapest sanity
+     * check on the bus.  Spec says CS should be high during the warmup;
+     * MICRONES_SD_WARMUP_CS_LOW overrides this for HW-125 clones whose
+     * level shifter is /OE-gated to CS. */
+#if MICRONES_SD_WARMUP_CS_LOW
+    cs_assert();
+#else
     cs_deassert();
+#endif
     sleep_ms(2);
 
-    /* PIO-output verification probe.  CS is still high here so a real
-     * card is deselected and won't be perturbed.  In a hardware loopback
-     * (MOSI jumpered to MISO) the receive bytes should equal the transmit
-     * bytes; if they all come back FF the PIO isn't actually driving MOSI
-     * low. */
+    /* PIO-output verification probe.  CS state matches the warmup
+     * configuration above; on a real card with CS-high warmup the card
+     * stays deselected and won't be perturbed.  In a hardware loopback
+     * (MOSI jumpered to MISO) the receive bytes should equal the
+     * transmit bytes. */
     {
         static const uint8_t probe[4] = { 0xFFu, 0x00u, 0xA5u, 0x55u };
         for (int i = 0; i < 4; ++i) {
