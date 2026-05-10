@@ -378,6 +378,109 @@ The IRQ disable is required because the DMA ISR (`audio_i2s_fill_dma_block`) als
 - `pack_symbols` loop: **15** iterations — 16 would shift d[0] off the top of the uint32_t word
 - `shift_right = false` (MSB first, left-shift OSR)
 
+## Pico HDMI / HSTX Implementation Notes
+
+### Target
+
+`micrones_pico_hdmi` outputs DVI-format HDMI via the RP2350 HSTX peripheral.
+Mode is **640×480 @ 60 Hz** (CEA-861 / VESA DMT) with the NES picture
+rendered at 2× integer scale (512×480) centred in 64-px black pillarboxes.
+
+### Clock
+
+The HDMI target overrides `MICRONES_SYS_CLK_MHZ` to **252 MHz** (PLL VCO
+1260 / div 5,1; same VCO as the 315 MHz analog target).  HSTX runs at
+sys_clk/2 = 126 MHz with DDR shift=2 → TMDS bit-rate 252 Mbps/lane → pixel
+clock 25.2 MHz exactly.
+
+The analog target stays at 315 MHz (unchanged) because composite NTSC
+needs 14.318182 MHz exactly, which only works at 315 / 22 or 157.5 / 11.
+
+### Pin Map
+
+HSTX is hard-wired to GP12..GP19 on RP2350.  Pinout follows the
+Pico-DVI-Sock convention (clock pair on the lowest two pins):
+
+- GP12 / GP13 — TMDS clock+ / clock-
+- GP14 / GP15 — TMDS data 0 (B)+ / -
+- GP16 / GP17 — TMDS data 1 (G)+ / -
+- GP18 / GP19 — TMDS data 2 (R)+ / -
+
+Default PWM audio pin GP16 collides with HSTX, so the HDMI build remaps
+audio carrier to **GP10** via the `MICRONES_PICO_HDMI_AUDIO_PIN` CMake
+cache variable.  Override at configure time with
+`-DMICRONES_PICO_HDMI_AUDIO_PIN=N`.
+
+SD card pins (GP1..GP5 by default) are clear of HSTX.
+
+### Architecture (`video_hstx.c`)
+
+Driver shape mirrors `pico-examples/hstx/dvi_out_hstx_encoder`, adapted
+for micrones' indexed NES framebuffer.
+
+Two ping-pong "complete-line" buffers each hold the 327 HSTX command
+words that produce one DVI scanline (HBP raw symbols + 320 packed RGB565
+pairs + HFP + HSYNC).
+
+- **`ch_pixel`** DMA channel streams 327 words/line into the HSTX FIFO
+  (paced by `DREQ_HSTX`).  Chains to `ch_cmd` on completion.
+- **`ch_cmd`** reads a 2-entry ring of `(read_addr, transfer_count)`
+  descriptors and writes them into `ch_pixel`'s `al3_transfer_count`
+  alias, alternating between buffers 0 and 1 forever.
+- **Line-completion ISR** fires once per line (~31.7 µs cadence).  It
+  rebuilds the just-finished buffer with the V-line that is two ahead of
+  the wire (one ahead is already queued in the other buffer).
+
+Per-line refill cost: ~1–2 µs at 252 MHz (256 indexed → 512 RGB565 +
+pillarboxing).  Total ~1 ms / frame, well under the 16.6 ms emulator
+budget.
+
+`bus_ctrl_hw->priority` is set so the DMA controller wins arbitration
+against the CPUs — HSTX must never underrun.
+
+### Performance Contract
+
+- HSTX serialises pixels in hardware; pixel DMA is purely DMA-driven.
+- Line-fill ISR runs on core 0, briefly (~2 µs / 31.7 µs ≈ 6%).
+- Emulator runs on core 0 unimpeded; no core 1 launch is needed.
+- 60 fps is achievable because `video_hstx_present_frame` is a single
+  ~50 µs memcpy (no SPI bus, no per-line CPU work for the emulator path).
+
+### Pixel Format
+
+Same NES master palette as the TFT path, but stored in **little-endian
+RGB565** because HSTX consumes native little-endian words.  Each NES
+indexed pixel is duplicated horizontally in the line buffer (low and
+high halves of the 32-bit pixel-pair word both hold the same RGB565
+value), and each NES row is rendered into two consecutive HDMI lines for
+2× vertical scaling.  Clean integer scaling, no filtering.
+
+### Test Pattern
+
+`video_hstx_draw_test_pattern()` paints 8 vertical NES-palette colour
+bars into the present buffer.  Useful for confirming the link is alive
+before loading a ROM.
+
+### Build
+
+```sh
+cd /Users/bchelf/microNES
+source ~/.zshrc
+cmake -S . -B build-pico-hdmi \
+  -DMICRONES_PLATFORM=pico \
+  -DMICRONES_PICO_VIDEO_MODE=emulator \
+  -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
+cmake --build build-pico-hdmi --target micrones_pico_hdmi -j
+```
+
+### Future Work
+
+Dual composite + HDMI output from a single sys_clk is achievable at
+315 MHz (HDMI then runs at 640×480@72 Hz = 31.5 MHz pixel), but requires
+relocating the composite DAC pins (currently GP10..14) out of the HSTX
+block (GP12..19).  Not implemented yet — single-output HDMI target
+first, dual variant afterwards.
+
 ## ESP32-S3 Implementation Notes
 
 ### Scope

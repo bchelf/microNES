@@ -4,7 +4,7 @@
 /*
  * clock_config.h — single toggle for system clock speed.
  *
- * Set MICRONES_SYS_CLK_MHZ to 315, 250, or 157.
+ * Set MICRONES_SYS_CLK_MHZ to 315, 252, 250, or 157.
  *
  *   315 MHz  — full speed analog target.  Requires VREG 1.20 V.
  *              NTSC: 315 MHz / 22 = 14.318182 MHz  ✓
@@ -114,8 +114,45 @@
 #  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  0u
 #  define MICRONES_AUDIO_PWM_WRAP         5207u
 
+#elif MICRONES_SYS_CLK_MHZ == 252
+
+/*
+ * 252 MHz  —  PLL: VCO=1260 MHz, post_div1=5, post_div2=1
+ *   sys_clk = 1260 / (5×1) = 252 MHz
+ *
+ * Used by the HDMI/HSTX target.  The HSTX peripheral runs at sys_clk/2
+ * (126 MHz) with DDR shift=2, producing TMDS bit rate of 252 MHz per lane,
+ * i.e. a 25.2 MHz pixel clock — exactly VESA / CEA-861 640x480 @ 60 Hz.
+ *   pixel_clk = 25.200 MHz
+ *   H total   = 800   (640 active + 16 fp + 96 sync + 48 bp)
+ *   V total   = 525   (480 active + 10 fp +  2 sync + 33 bp)
+ *   refresh   = 25.2e6 / (800 * 525) = 60.000 Hz
+ *
+ * Same VCO as the 315 MHz analog target, so this clock can coexist with
+ * (future) dual-output builds that drive both composite and HDMI.
+ */
+#  define MICRONES_PLL_VCO_HZ       1260000000u
+#  define MICRONES_PLL_DIV1         5u
+#  define MICRONES_PLL_DIV2         1u
+#  define MICRONES_VREG             VREG_VOLTAGE_1_20
+#  define MICRONES_VREG_SETTLE_MS   20u
+
+/*
+ * PIO: not used for video on the HDMI target, but the analog NTSC PIO
+ * program would be off-cadence at this clock.  Keep a benign default.
+ */
+#  define MICRONES_PIO_CLKDIV       2.0f
+
+/*
+ * Audio PWM sample-rate timer: clkdiv=1.0, wrap=5249
+ * → f_sample = 252,000,000 / 5250 = 48,000 Hz exact.
+ */
+#  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
+#  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  0u
+#  define MICRONES_AUDIO_PWM_WRAP         5249u
+
 #else
-#  error "MICRONES_SYS_CLK_MHZ must be 315, 250, or 157"
+#  error "MICRONES_SYS_CLK_MHZ must be 315, 252, 250, or 157"
 #endif
 
 /*

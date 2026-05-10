@@ -35,7 +35,12 @@
  * budget (~6,500 cycles between interrupts at 315 MHz / 48 kHz).
  */
 
+/* Default carrier pin: GP16.  Override at build time via -DMICRONES_AUDIO_PIN=N
+ * for targets where GP16 conflicts with another peripheral.  The HDMI/HSTX
+ * target requires this remap because HSTX is hard-wired to GP12..GP19. */
+#ifndef MICRONES_AUDIO_PIN
 #define MICRONES_AUDIO_PIN  16u  /* GP16 */
+#endif
 
 /*
  * Initialise PWM audio.  sample_rate is stored but the actual PWM rate is

@@ -4,6 +4,10 @@ set(MICRONES_PLATFORM "pico" CACHE STRING "Build platform: host, pico, or web")
 set_property(CACHE MICRONES_PLATFORM PROPERTY STRINGS host pico web)
 set(MICRONES_PICO_VIDEO_MODE "test_pattern" CACHE STRING "Pico video mode: test_pattern or emulator")
 set_property(CACHE MICRONES_PICO_VIDEO_MODE PROPERTY STRINGS test_pattern emulator)
+# When the hdmi target is built, the HSTX peripheral occupies GP12..GP19, so
+# the default PWM audio pin (GP16) must be moved.  Anything outside that block
+# works; GP10 is the convention for the hdmi build.
+set(MICRONES_PICO_HDMI_AUDIO_PIN 10 CACHE STRING "PWM audio GPIO for the HDMI target")
 set(MICRONES_PICO_TFT_BACKEND "spi_ili9341" CACHE STRING "Pico TFT backend: spi_ili9341 or parallel_8080")
 set_property(CACHE MICRONES_PICO_TFT_BACKEND PROPERTY STRINGS spi_ili9341 parallel_8080)
 set(MICRONES_PICO_TFT_CONTROLLER "ili9341" CACHE STRING "Pico TFT controller init: ili9341, ili9486, or ili9488")
@@ -328,6 +332,28 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                     src/pico/emulator_video_adapter_tft.c
                 )
             endif ()
+        elseif (backend_name STREQUAL "hdmi")
+            target_sources(${target_name} PRIVATE
+                src/pico/pico_video_backend_hdmi.c
+                src/pico/video_hstx.c
+            )
+            target_link_libraries(${target_name} PRIVATE
+                hardware_dma
+            )
+            target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_HDMI=1)
+            # HSTX hard-wired to GP12..GP19 on RP2350 with sys_clk=252 MHz
+            # giving 25.2 MHz pixel clock = exact 640x480@60Hz.
+            target_compile_definitions(${target_name} PRIVATE MICRONES_SYS_CLK_MHZ=252)
+            # PWM audio default GP16 collides with HSTX; remap to a free pin
+            # outside GP12..GP19.
+            target_compile_definitions(${target_name} PRIVATE
+                MICRONES_AUDIO_PIN=${MICRONES_PICO_HDMI_AUDIO_PIN}u)
+
+            if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")
+                target_sources(${target_name} PRIVATE
+                    src/pico/emulator_video_adapter_hdmi.c
+                )
+            endif ()
         else ()
             message(FATAL_ERROR "Unknown Pico backend '${backend_name}'")
         endif ()
@@ -337,9 +363,11 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
 
     micrones_add_pico_core(micrones_core_pico_analog 0)
     micrones_add_pico_core(micrones_core_pico_tft 1)
+    micrones_add_pico_core(micrones_core_pico_hdmi 1)
     micrones_add_pico_target(micrones_pico_analog analog micrones_core_pico_analog pwm)
     micrones_add_pico_target(micrones_pico_tft tft micrones_core_pico_tft pwm)
     micrones_add_pico_target(micrones_pico_tft_max98357 tft micrones_core_pico_tft max98357)
+    micrones_add_pico_target(micrones_pico_hdmi hdmi micrones_core_pico_hdmi pwm)
 elseif (MICRONES_PLATFORM STREQUAL "web")
     add_executable(micrones_wasm
         src/web/web_main.c
