@@ -142,6 +142,30 @@ micrones_wasm/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_wasm.dir/build.make CMakeFiles/micrones_wasm.dir/build
 .PHONY : micrones_wasm/fast
 
+src/common/app_shell.o: src/common/app_shell.c.o
+.PHONY : src/common/app_shell.o
+
+# target to build an object file
+src/common/app_shell.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/app_shell.c.o
+.PHONY : src/common/app_shell.c.o
+
+src/common/app_shell.i: src/common/app_shell.c.i
+.PHONY : src/common/app_shell.i
+
+# target to preprocess a source file
+src/common/app_shell.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/app_shell.c.i
+.PHONY : src/common/app_shell.c.i
+
+src/common/app_shell.s: src/common/app_shell.c.s
+.PHONY : src/common/app_shell.s
+
+# target to generate assembly for a file
+src/common/app_shell.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/app_shell.c.s
+.PHONY : src/common/app_shell.c.s
+
 src/common/apu_micrones.o: src/common/apu_micrones.c.o
 .PHONY : src/common/apu_micrones.o
 
@@ -238,6 +262,30 @@ src/common/cpu6502_opcode.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.s
 .PHONY : src/common/cpu6502_opcode.c.s
 
+src/common/font_5x7.o: src/common/font_5x7.c.o
+.PHONY : src/common/font_5x7.o
+
+# target to build an object file
+src/common/font_5x7.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/font_5x7.c.o
+.PHONY : src/common/font_5x7.c.o
+
+src/common/font_5x7.i: src/common/font_5x7.c.i
+.PHONY : src/common/font_5x7.i
+
+# target to preprocess a source file
+src/common/font_5x7.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/font_5x7.c.i
+.PHONY : src/common/font_5x7.c.i
+
+src/common/font_5x7.s: src/common/font_5x7.c.s
+.PHONY : src/common/font_5x7.s
+
+# target to generate assembly for a file
+src/common/font_5x7.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/font_5x7.c.s
+.PHONY : src/common/font_5x7.c.s
+
 src/common/frame_pacer.o: src/common/frame_pacer.c.o
 .PHONY : src/common/frame_pacer.o
 
@@ -309,54 +357,6 @@ src/common/mmc1.s: src/common/mmc1.c.s
 src/common/mmc1.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc1.c.s
 .PHONY : src/common/mmc1.c.s
-
-src/common/mmc3.o: src/common/mmc3.c.o
-.PHONY : src/common/mmc3.o
-
-# target to build an object file
-src/common/mmc3.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.o
-.PHONY : src/common/mmc3.c.o
-
-src/common/mmc3.i: src/common/mmc3.c.i
-.PHONY : src/common/mmc3.i
-
-# target to preprocess a source file
-src/common/mmc3.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.i
-.PHONY : src/common/mmc3.c.i
-
-src/common/mmc3.s: src/common/mmc3.c.s
-.PHONY : src/common/mmc3.s
-
-# target to generate assembly for a file
-src/common/mmc3.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.s
-.PHONY : src/common/mmc3.c.s
-
-src/common/mmc5.o: src/common/mmc5.c.o
-.PHONY : src/common/mmc5.o
-
-# target to build an object file
-src/common/mmc5.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc5.c.o
-.PHONY : src/common/mmc5.c.o
-
-src/common/mmc5.i: src/common/mmc5.c.i
-.PHONY : src/common/mmc5.i
-
-# target to preprocess a source file
-src/common/mmc5.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc5.c.i
-.PHONY : src/common/mmc5.c.i
-
-src/common/mmc5.s: src/common/mmc5.c.s
-.PHONY : src/common/mmc5.s
-
-# target to generate assembly for a file
-src/common/mmc5.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc5.c.s
-.PHONY : src/common/mmc5.c.s
 
 src/common/nes.o: src/common/nes.c.o
 .PHONY : src/common/nes.o
@@ -430,6 +430,54 @@ src/common/ppu.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/ppu.c.s
 .PHONY : src/common/ppu.c.s
 
+src/common/rom_menu.o: src/common/rom_menu.c.o
+.PHONY : src/common/rom_menu.o
+
+# target to build an object file
+src/common/rom_menu.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o
+.PHONY : src/common/rom_menu.c.o
+
+src/common/rom_menu.i: src/common/rom_menu.c.i
+.PHONY : src/common/rom_menu.i
+
+# target to preprocess a source file
+src/common/rom_menu.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/rom_menu.c.i
+.PHONY : src/common/rom_menu.c.i
+
+src/common/rom_menu.s: src/common/rom_menu.c.s
+.PHONY : src/common/rom_menu.s
+
+# target to generate assembly for a file
+src/common/rom_menu.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/rom_menu.c.s
+.PHONY : src/common/rom_menu.c.s
+
+src/common/smb1_bg_classifier.o: src/common/smb1_bg_classifier.c.o
+.PHONY : src/common/smb1_bg_classifier.o
+
+# target to build an object file
+src/common/smb1_bg_classifier.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o
+.PHONY : src/common/smb1_bg_classifier.c.o
+
+src/common/smb1_bg_classifier.i: src/common/smb1_bg_classifier.c.i
+.PHONY : src/common/smb1_bg_classifier.i
+
+# target to preprocess a source file
+src/common/smb1_bg_classifier.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.i
+.PHONY : src/common/smb1_bg_classifier.c.i
+
+src/common/smb1_bg_classifier.s: src/common/smb1_bg_classifier.c.s
+.PHONY : src/common/smb1_bg_classifier.s
+
+# target to generate assembly for a file
+src/common/smb1_bg_classifier.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.s
+.PHONY : src/common/smb1_bg_classifier.c.s
+
 src/web/web_main.o: src/web/web_main.c.o
 .PHONY : src/web/web_main.o
 
@@ -464,6 +512,9 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... micrones_core"
 	@echo "... micrones_wasm"
+	@echo "... src/common/app_shell.o"
+	@echo "... src/common/app_shell.i"
+	@echo "... src/common/app_shell.s"
 	@echo "... src/common/apu_micrones.o"
 	@echo "... src/common/apu_micrones.i"
 	@echo "... src/common/apu_micrones.s"
@@ -476,6 +527,9 @@ help:
 	@echo "... src/common/cpu6502_opcode.o"
 	@echo "... src/common/cpu6502_opcode.i"
 	@echo "... src/common/cpu6502_opcode.s"
+	@echo "... src/common/font_5x7.o"
+	@echo "... src/common/font_5x7.i"
+	@echo "... src/common/font_5x7.s"
 	@echo "... src/common/frame_pacer.o"
 	@echo "... src/common/frame_pacer.i"
 	@echo "... src/common/frame_pacer.s"
@@ -485,12 +539,6 @@ help:
 	@echo "... src/common/mmc1.o"
 	@echo "... src/common/mmc1.i"
 	@echo "... src/common/mmc1.s"
-	@echo "... src/common/mmc3.o"
-	@echo "... src/common/mmc3.i"
-	@echo "... src/common/mmc3.s"
-	@echo "... src/common/mmc5.o"
-	@echo "... src/common/mmc5.i"
-	@echo "... src/common/mmc5.s"
 	@echo "... src/common/nes.o"
 	@echo "... src/common/nes.i"
 	@echo "... src/common/nes.s"
@@ -500,6 +548,12 @@ help:
 	@echo "... src/common/ppu.o"
 	@echo "... src/common/ppu.i"
 	@echo "... src/common/ppu.s"
+	@echo "... src/common/rom_menu.o"
+	@echo "... src/common/rom_menu.i"
+	@echo "... src/common/rom_menu.s"
+	@echo "... src/common/smb1_bg_classifier.o"
+	@echo "... src/common/smb1_bg_classifier.i"
+	@echo "... src/common/smb1_bg_classifier.s"
 	@echo "... src/web/web_main.o"
 	@echo "... src/web/web_main.i"
 	@echo "... src/web/web_main.s"

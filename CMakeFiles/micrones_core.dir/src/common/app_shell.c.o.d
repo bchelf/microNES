@@ -1,12 +1,14 @@
-CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o: \
-  /home/runner/work/microNES/microNES/src/common/cpu6502.c \
-  /home/runner/work/microNES/microNES/src/common/cpu6502.h \
-  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/stdbool.h \
-  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/stdbool.h \
+CMakeFiles/micrones_core.dir/src/common/app_shell.c.o: \
+  /home/runner/work/microNES/microNES/src/common/app_shell.c \
+  /home/runner/work/microNES/microNES/src/common/app_shell.h \
+  /home/runner/work/microNES/microNES/src/common/framebuffer.h \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/stdint.h \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/stdint.h \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/alltypes.h \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/stdint.h \
+  /home/runner/work/microNES/microNES/src/common/input.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/stdbool.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/stdbool.h \
   /home/runner/work/microNES/microNES/src/common/nes.h \
   /home/runner/work/microNES/microNES/src/common/apu.h \
   /home/runner/work/microNES/microNES/src/common/apu_micrones.h \
@@ -21,13 +23,26 @@ CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o: \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stddef_max_align_t.h \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stddef_offsetof.h \
   /home/runner/work/microNES/microNES/src/common/cart.h \
+  /home/runner/work/microNES/microNES/src/common/cpu6502.h \
   /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.h \
-  /home/runner/work/microNES/microNES/src/common/framebuffer.h \
-  /home/runner/work/microNES/microNES/src/common/input.h \
   /home/runner/work/microNES/microNES/src/common/mmc1.h \
   /home/runner/work/microNES/microNES/src/common/nrom.h \
   /home/runner/work/microNES/microNES/src/common/ppu.h \
   /home/runner/work/microNES/microNES/src/common/scanline.h \
+  /home/runner/work/microNES/microNES/src/common/rom_menu.h \
+  /home/runner/work/microNES/microNES/src/common/rom_source.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/stdarg.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/stdarg.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/stdarg.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stdarg_header_macro.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stdarg___gnuc_va_list.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_list.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_arg.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stdarg___va_copy.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_copy.h \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/stdio.h \
   /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/wasi/api.h \
-  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/features.h
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/features.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/string.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/string.h \
+  /home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot/include/strings.h
