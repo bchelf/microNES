@@ -190,6 +190,24 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             ${CMAKE_CURRENT_LIST_DIR}/src/pico/sd_spi.pio
         )
 
+        # Forward any -DMICRONES_SD_* override the user passed at configure
+        # time into the compile.  sd_card_pins.h #ifndefs the names so a
+        # symbol defined here wins over the default; symbols not passed are
+        # simply absent and the header default applies.
+        foreach (_sd_var
+            MICRONES_SD_PIN_CD MICRONES_SD_PIN_MISO MICRONES_SD_PIN_SCK
+            MICRONES_SD_PIN_MOSI MICRONES_SD_PIN_CS
+            MICRONES_SD_PIO_INDEX
+            MICRONES_SD_INIT_BAUD_HZ MICRONES_SD_RUN_BAUD_HZ
+            MICRONES_SD_CD_ACTIVE_LOW MICRONES_SD_CD_DISABLED
+            MICRONES_SD_WARMUP_CS_LOW
+            MICRONES_SD_INIT_DEBUG)
+            if (DEFINED ${_sd_var})
+                target_compile_definitions(${target_name} PRIVATE
+                    ${_sd_var}=${${_sd_var}})
+            endif ()
+        endforeach ()
+
         if (audio_backend_name STREQUAL "pwm")
             target_sources(${target_name} PRIVATE
                 src/pico/audio_pwm.c
