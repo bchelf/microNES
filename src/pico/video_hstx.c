@@ -44,6 +44,7 @@
 #include "video_hstx.h"
 #include "clock_config.h"
 
+#include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
@@ -96,11 +97,11 @@ _Static_assert(HSTX_MODE_V_ACTIVE_LINES == NES_FRAME_HEIGHT * 2,
  * select a "command" that controls how the lower 28 bits are interpreted.
  * Commands documented in the RP2350 datasheet § "HSTX".
  */
-#define HSTX_CMD_NOP         (0x0u << 12)
-#define HSTX_CMD_RAW         (0x1u << 12)
-#define HSTX_CMD_RAW_REPEAT  (0x2u << 12)
-#define HSTX_CMD_TMDS        (0x3u << 12)
-#define HSTX_CMD_TMDS_REPEAT (0x4u << 12)
+#define HSTX_CMD_RAW         (0x0u << 12)
+#define HSTX_CMD_RAW_REPEAT  (0x1u << 12)
+#define HSTX_CMD_TMDS        (0x2u << 12)
+#define HSTX_CMD_TMDS_REPEAT (0x3u << 12)
+#define HSTX_CMD_NOP         (0xfu << 12)
 
 static inline uint32_t hstx_cmd(uint32_t cmd, uint32_t count) {
     return cmd | (count & 0xfffu);
@@ -114,10 +115,13 @@ static inline uint32_t hstx_cmd(uint32_t cmd, uint32_t count) {
 
 /* 30-bit RAW symbols for the three TMDS lanes.  Lane 0 carries the sync
  * bits in DVI; lanes 1 and 2 stay at the "no signal" control symbol. */
-#define HSTX_SYM_NO_SYNC ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_00)
-#define HSTX_SYM_HSYNC   ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_01)
-#define HSTX_SYM_VSYNC   ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_10)
-#define HSTX_SYM_VHSYNC  ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_11)
+/* 640x480@60 uses negative H/V sync polarity.  During blanking, inactive
+ * syncs are encoded as V=1,H=1; asserted sync pulses drive the relevant bit
+ * low.  Lanes 1 and 2 always carry CTRL_00 in DVI control periods. */
+#define HSTX_SYM_NO_SYNC ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_11)
+#define HSTX_SYM_HSYNC   ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_10)
+#define HSTX_SYM_VSYNC   ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_01)
+#define HSTX_SYM_VHSYNC  ((TMDS_CTRL_00 << 20) | (TMDS_CTRL_00 << 10) | TMDS_CTRL_00)
 
 /* ---- Per-line buffer layout ------------------------------------------
  *
@@ -185,33 +189,20 @@ static const uint16_t __not_in_flash("hstx_palette")
 
 /* ---- DMA chain --------------------------------------------------------
  *
- * Two channels:
- *   - ch_pixel : pushes 327 words of one line buffer into the HSTX FIFO
- *                per transfer.  Chains to ch_cmd on completion.
- *   - ch_cmd   : reads a 2-entry ring of {read_addr,count} descriptors
- *                and writes them into ch_pixel's AL3 trigger alias to
- *                start the next line transfer.
+ * Two channels are configured as symmetric pixel-DMA ping/pong channels.  Each
+ * streams one complete HSTX line buffer into the FIFO, then chains to the
+ * other channel.  The line-completion IRQ rearms the channel that just
+ * finished while the other channel is already streaming the next line.
  */
-static int s_ch_pixel = -1;
-static int s_ch_cmd = -1;
-
-typedef struct {
-    const void *read_addr;
-    uint32_t    transfer_count;
-} HstxDmaDesc;
-
-/* Two descriptors → ping-pong forever.  Aligned for the ring config below. */
-static HstxDmaDesc s_descs[2] __attribute__((aligned(16)));
+static int s_dma_ch[2] = { -1, -1 };
 
 /* Line counter advanced on every line-completion IRQ.
  *
- * Convention: at the moment the IRQ fires, HSTX has JUST finished
- * streaming s_descs[s_dma_buf_finished_idx], and ch_cmd has chained to
- * trigger the OTHER buffer for the next line.  So we need to refill the
- * just-finished buffer with the line that is "current+1" (i.e. two lines
- * ahead of what the wire shows). */
+ * Convention: at the moment the IRQ fires, HSTX has JUST finished one line
+ * and channel chaining has already triggered the other DMA channel for the
+ * next line.  So we need to refill the just-finished buffer with the line
+ * that is "current+1" (i.e. two lines ahead of what the wire shows). */
 static volatile uint32_t s_line_being_streamed = 0u; /* line index in V frame */
-static volatile uint32_t s_dma_buf_idx = 0u;          /* 0 or 1, ping-pong */
 
 static VideoHstxStats s_stats;
 static char s_last_error[96];
@@ -355,16 +346,18 @@ static void __not_in_flash_func(hstx_build_line)(uint32_t *buf,
  * costs hundreds of cycles plus a worst-case ~10 µs XIP read, which alone
  * would consume a third of the budget. */
 static void __not_in_flash_func(hstx_dma_irq_handler)(void) {
-    /* Acknowledge the IRQ */
-    if (s_ch_pixel >= 0) {
-        dma_hw->ints0 = 1u << (uint32_t)s_ch_pixel;
+    uint32_t pending = dma_hw->ints0;
+    int finished_idx = -1;
+
+    if (s_dma_ch[0] >= 0 && (pending & (1u << (uint32_t)s_dma_ch[0]))) {
+        finished_idx = 0;
+    } else if (s_dma_ch[1] >= 0 && (pending & (1u << (uint32_t)s_dma_ch[1]))) {
+        finished_idx = 1;
+    } else {
+        return;
     }
 
-    /* s_dma_buf_idx tracks which buffer just FINISHED in the most recent
-     * IRQ.  Initial value 0 is correct because the priming sequence
-     * (dma_channel_start(s_ch_cmd) → desc[0] → ch_pixel streams buffer 0)
-     * makes buffer 0 the first to finish. */
-    uint32_t finished_idx = s_dma_buf_idx;
+    dma_hw->ints0 = 1u << (uint32_t)s_dma_ch[finished_idx];
 
     /* Advance the V counter — what HSTX is streaming RIGHT NOW. */
     uint32_t next_line = s_line_being_streamed + 1u;
@@ -373,7 +366,6 @@ static void __not_in_flash_func(hstx_dma_irq_handler)(void) {
         s_stats.frames_presented++;
     }
     s_line_being_streamed = next_line;
-    s_dma_buf_idx ^= 1u;
 
     /* Refill the just-finished buffer with the line AFTER the one HSTX
      * is now streaming.  i.e. (next_line + 1) mod V_TOTAL. */
@@ -395,6 +387,11 @@ static void __not_in_flash_func(hstx_dma_irq_handler)(void) {
     hstx_build_line(s_line_buf[finished_idx], fill_line);
     s_stats.lines_filled++;
 #endif
+
+    dma_channel_set_read_addr((uint)s_dma_ch[finished_idx],
+                              s_line_buf[finished_idx], false);
+    dma_channel_set_trans_count((uint)s_dma_ch[finished_idx],
+                                HSTX_LINE_WORDS, false);
 }
 
 /* ---- Peripheral configuration ---------------------------------------- */
@@ -407,6 +404,16 @@ static void hstx_configure_peripheral(void) {
      * 3.3 V, the other at 0 V) — no TMDS output at all. */
     reset_unreset_block_num_wait_blocking(RESET_HSTX);
 
+    const uint32_t sys_hz = MICRONES_PLL_VCO_HZ /
+                            (MICRONES_PLL_DIV1 * MICRONES_PLL_DIV2);
+
+    /* Drive clk_hstx at sys_clk / 2.  The HSTX CSR below then emits two bits
+     * per HSTX clock, five shifts per 10-bit TMDS symbol:
+     *   pixel_clk = (clk_hstx * 2) / 10 = sys_clk / 10 = 25.2 MHz. */
+    clock_configure(clk_hstx, 0,
+                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
+                    sys_hz, sys_hz / 2u);
+
     /* Pin map (relative to GP12, the HSTX pin base):
      *   offset 0/1 — clock pair      (CLK + INV)
      *   offset 2/3 — D0 (B) pair     (lane 0)
@@ -415,30 +422,35 @@ static void hstx_configure_peripheral(void) {
     hstx_ctrl_hw->bit[0] = HSTX_CTRL_BIT0_CLK_BITS;
     hstx_ctrl_hw->bit[1] = HSTX_CTRL_BIT0_CLK_BITS | HSTX_CTRL_BIT0_INV_BITS;
 
-    hstx_ctrl_hw->bit[2] = (0u << HSTX_CTRL_BIT0_SEL_P_LSB);
+    hstx_ctrl_hw->bit[2] = (0u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (1u << HSTX_CTRL_BIT0_SEL_N_LSB);
     hstx_ctrl_hw->bit[3] = (0u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (1u << HSTX_CTRL_BIT0_SEL_N_LSB) |
                            HSTX_CTRL_BIT0_INV_BITS;
 
-    hstx_ctrl_hw->bit[4] = (1u << HSTX_CTRL_BIT0_SEL_P_LSB);
-    hstx_ctrl_hw->bit[5] = (1u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+    hstx_ctrl_hw->bit[4] = (10u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (11u << HSTX_CTRL_BIT0_SEL_N_LSB);
+    hstx_ctrl_hw->bit[5] = (10u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (11u << HSTX_CTRL_BIT0_SEL_N_LSB) |
                            HSTX_CTRL_BIT0_INV_BITS;
 
-    hstx_ctrl_hw->bit[6] = (2u << HSTX_CTRL_BIT0_SEL_P_LSB);
-    hstx_ctrl_hw->bit[7] = (2u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+    hstx_ctrl_hw->bit[6] = (20u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (21u << HSTX_CTRL_BIT0_SEL_N_LSB);
+    hstx_ctrl_hw->bit[7] = (20u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (21u << HSTX_CTRL_BIT0_SEL_N_LSB) |
                            HSTX_CTRL_BIT0_INV_BITS;
 
-    /* RGB565 layout (bits 15..0): RRRRR GGGGGG BBBBB
-     *   l0 (B): 5 bits at rotation 0
-     *   l1 (G): 6 bits at rotation 5
-     *   l2 (R): 5 bits at rotation 11
+    /* RGB565 layout (bits 15..0): RRRRR GGGGGG BBBBB.
+     * The HSTX TMDS encoder reads each lane starting at bit 7 after the
+     * configured right-rotate, so the rotations move B0/G0/R0 to bit 7.
      * `nbits` field is encoded as `bits-1`. */
     hstx_ctrl_hw->expand_tmds =
         (4u << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB) |
-        (11u << HSTX_CTRL_EXPAND_TMDS_L2_ROT_LSB) |
+        (4u << HSTX_CTRL_EXPAND_TMDS_L2_ROT_LSB) |
         (5u << HSTX_CTRL_EXPAND_TMDS_L1_NBITS_LSB) |
-        (5u << HSTX_CTRL_EXPAND_TMDS_L1_ROT_LSB) |
+        (30u << HSTX_CTRL_EXPAND_TMDS_L1_ROT_LSB) |
         (4u << HSTX_CTRL_EXPAND_TMDS_L0_NBITS_LSB) |
-        (0u << HSTX_CTRL_EXPAND_TMDS_L0_ROT_LSB);
+        (25u << HSTX_CTRL_EXPAND_TMDS_L0_ROT_LSB);
 
     /* Two pixels per FIFO word, shift 16 bits between them. */
     hstx_ctrl_hw->expand_shift =
@@ -478,43 +490,22 @@ static void hstx_configure_pins(void) {
 }
 
 static void hstx_configure_dma(void) {
-    s_ch_pixel = dma_claim_unused_channel(true);
-    s_ch_cmd = dma_claim_unused_channel(true);
+    s_dma_ch[0] = dma_claim_unused_channel(true);
+    s_dma_ch[1] = dma_claim_unused_channel(true);
 
-    /* Pixel channel: writes 32-bit words into HSTX FIFO, paced by DREQ.
-     * Source is one of the two line buffers; reprogrammed each line by
-     * ch_cmd via the AL3 trigger alias. */
-    {
-        dma_channel_config c = dma_channel_get_default_config(s_ch_pixel);
+    for (uint32_t i = 0; i < 2u; ++i) {
+        dma_channel_config c = dma_channel_get_default_config((uint)s_dma_ch[i]);
         channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
         channel_config_set_read_increment(&c, true);
         channel_config_set_write_increment(&c, false);
         channel_config_set_dreq(&c, DREQ_HSTX);
-        channel_config_set_chain_to(&c, s_ch_cmd);
+        channel_config_set_chain_to(&c, (uint)s_dma_ch[i ^ 1u]);
         channel_config_set_irq_quiet(&c, false);
-        dma_channel_configure(s_ch_pixel, &c,
-                              &hstx_fifo_hw->fifo, /* write */
-                              NULL,                /* read — set by ch_cmd */
-                              0,                   /* count — set by ch_cmd */
-                              false);
-    }
-
-    /* Command channel: 2-descriptor ring → write {addr,count} pair into
-     * ch_pixel's AL3 alias.  Each descriptor is 8 bytes; ring of 16 bytes
-     * (set_ring(true, 4)) wraps after every two descriptors. */
-    {
-        dma_channel_config c = dma_channel_get_default_config(s_ch_cmd);
-        channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
-        channel_config_set_read_increment(&c, true);
-        channel_config_set_write_increment(&c, true);
-        /* 4-bit ring on read addr (16 bytes = 2 descriptors).  Wraps the
-         * read pointer through the s_descs[] array forever. */
-        channel_config_set_ring(&c, false /* read */, 4);
-        channel_config_set_irq_quiet(&c, true);
-        dma_channel_configure(s_ch_cmd, &c,
-                              &dma_hw->ch[s_ch_pixel].al3_transfer_count,
-                              s_descs,
-                              2, /* 2 × 32-bit words per descriptor */
+        channel_config_set_high_priority(&c, true);
+        dma_channel_configure((uint)s_dma_ch[i], &c,
+                              &hstx_fifo_hw->fifo,
+                              s_line_buf[i],
+                              HSTX_LINE_WORDS,
                               false);
     }
 
@@ -524,8 +515,9 @@ static void hstx_configure_dma(void) {
     bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_DMA_R_BITS |
                             BUSCTRL_BUS_PRIORITY_DMA_W_BITS;
 
-    /* IRQ on every ch_pixel completion = once per line. */
-    dma_channel_set_irq0_enabled(s_ch_pixel, true);
+    /* IRQ on every line completion. */
+    dma_channel_set_irq0_enabled((uint)s_dma_ch[0], true);
+    dma_channel_set_irq0_enabled((uint)s_dma_ch[1], true);
     irq_set_exclusive_handler(DMA_IRQ_0, hstx_dma_irq_handler);
     irq_set_enabled(DMA_IRQ_0, true);
 }
@@ -537,7 +529,6 @@ bool video_hstx_init(void) {
     memset(s_present_indexed, 0, sizeof(s_present_indexed));
     s_present_valid = false;
     s_line_being_streamed = 0u;
-    s_dma_buf_idx = 0u;
     memset(&s_stats, 0, sizeof(s_stats));
 
     /* Pre-build the first two lines (V0 and V1) so the chain has valid
@@ -545,19 +536,13 @@ bool video_hstx_init(void) {
     hstx_build_line(s_line_buf[0], 0);
     hstx_build_line(s_line_buf[1], 1);
 
-    /* Descriptor ring: alternates between line buffer 0 and 1, forever. */
-    s_descs[0].read_addr = s_line_buf[0];
-    s_descs[0].transfer_count = HSTX_LINE_WORDS;
-    s_descs[1].read_addr = s_line_buf[1];
-    s_descs[1].transfer_count = HSTX_LINE_WORDS;
-
     hstx_configure_peripheral();
     hstx_configure_pins();
     hstx_configure_dma();
 
-    /* Kick off ch_cmd, which loads the first descriptor into ch_pixel
-     * and triggers it. */
-    dma_channel_start(s_ch_cmd);
+    dma_hw->ints0 = (1u << (uint32_t)s_dma_ch[0]) |
+                    (1u << (uint32_t)s_dma_ch[1]);
+    dma_channel_start((uint)s_dma_ch[0]);
 
     return true;
 }
