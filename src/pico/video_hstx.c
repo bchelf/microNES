@@ -47,6 +47,7 @@
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
+#include "hardware/resets.h"
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
 #include "hardware/structs/hstx_fifo.h"
@@ -399,6 +400,13 @@ static void __not_in_flash_func(hstx_dma_irq_handler)(void) {
 /* ---- Peripheral configuration ---------------------------------------- */
 
 static void hstx_configure_peripheral(void) {
+    /* CRITICAL: on RP2350 the HSTX block boots in RESET state.  Register
+     * writes to it are silently dropped until we explicitly unreset.
+     * Symptom of skipping this step: GPIOs configured to GPIO_FUNC_HSTX
+     * sit at their pad defaults (one pin of each differential pair at
+     * 3.3 V, the other at 0 V) — no TMDS output at all. */
+    reset_unreset_block_num_wait_blocking(RESET_HSTX);
+
     /* Pin map (relative to GP12, the HSTX pin base):
      *   offset 0/1 — clock pair      (CLK + INV)
      *   offset 2/3 — D0 (B) pair     (lane 0)
