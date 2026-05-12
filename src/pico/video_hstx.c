@@ -525,6 +525,19 @@ static void hstx_configure_dma(void) {
 bool video_hstx_init(void) {
     hstx_set_error("");
 
+    /* Boot diagnostics — single contiguous block so a serial capture from
+     * the first power-on tells us whether the firmware reached HSTX init,
+     * what clock the silicon actually settled on, and what the HSTX CSR
+     * register contains AFTER we wrote it (proving the writes took).
+     *
+     * If the serial console shows the "init complete" line but the screen
+     * is still dark, the firmware side is doing its job and the problem
+     * is downstream (wiring / cable / sink).  If you don't see these
+     * lines at all, the firmware isn't even reaching init. */
+    printf("[hstx] init: starting\n");
+    printf("[hstx] sys_clk_hz     = %lu\n", (unsigned long)clock_get_hz(clk_sys));
+    printf("[hstx] clk_hstx (pre) = %lu\n", (unsigned long)clock_get_hz(clk_hstx));
+
     memset(s_line_buf, 0, sizeof(s_line_buf));
     memset(s_present_indexed, 0, sizeof(s_present_indexed));
     s_present_valid = false;
@@ -540,9 +553,31 @@ bool video_hstx_init(void) {
     hstx_configure_pins();
     hstx_configure_dma();
 
+    /* Read back the HSTX registers AFTER configuration.  If these don't
+     * contain what we just wrote, either the unreset didn't take or the
+     * struct address is wrong — both fatal and worth catching here. */
+    printf("[hstx] clk_hstx (post)= %lu (expected %lu = sys_clk / 2)\n",
+           (unsigned long)clock_get_hz(clk_hstx),
+           (unsigned long)(clock_get_hz(clk_sys) / 2u));
+    printf("[hstx] CSR          = 0x%08lx\n",
+           (unsigned long)hstx_ctrl_hw->csr);
+    printf("[hstx] expand_shift = 0x%08lx\n",
+           (unsigned long)hstx_ctrl_hw->expand_shift);
+    printf("[hstx] expand_tmds  = 0x%08lx\n",
+           (unsigned long)hstx_ctrl_hw->expand_tmds);
+    for (uint32_t i = 0; i < 8u; ++i) {
+        printf("[hstx] bit[%lu]       = 0x%08lx\n",
+               (unsigned long)i,
+               (unsigned long)hstx_ctrl_hw->bit[i]);
+    }
+    printf("[hstx] dma ch        = pixel0=%d pixel1=%d\n",
+           s_dma_ch[0], s_dma_ch[1]);
+
     dma_hw->ints0 = (1u << (uint32_t)s_dma_ch[0]) |
                     (1u << (uint32_t)s_dma_ch[1]);
     dma_channel_start((uint)s_dma_ch[0]);
+
+    printf("[hstx] init: complete (DMA chain running)\n");
 
     return true;
 }
@@ -568,20 +603,81 @@ void __not_in_flash_func(video_hstx_present_frame)(const NesFrameBuffer *frame) 
 }
 
 void __not_in_flash_func(video_hstx_draw_test_pattern)(void) {
-    static const uint8_t k_test_palette[8] = {
-        0x30, /* white */
-        0x28, /* yellow */
-        0x2A, /* green */
-        0x21, /* blue */
-        0x16, /* red */
-        0x14, /* magenta */
-        0x2C, /* cyan */
-        0x0F  /* black */
+    /*
+     * Diagnostic test pattern designed to expose common bring-up failures:
+     *
+     *   ┌─────────────────────────────────────┐
+     *   │ ░  WHT YEL CYN GRN MAG RED BLU BLK ░ │  <- top half: NES palette bars
+     *   │ ░                                ░ │     (one bar per ~32 px column)
+     *   │ ░  WHT YEL CYN GRN MAG RED BLU BLK ░ │
+     *   │ ░ ═══════════════════════════════ ░ │  <- horizontal divider (white)
+     *   │ ░ ██░░██░░██░░██░░██░░██░░██░░██░░░ │  <- bottom half: checkerboard
+     *   │ ░ ░░██░░██░░██░░██░░██░░██░░██░░██░ │     of 8x8 NES pixels (16x16 HDMI
+     *   │ ░ ██░░██░░██░░██░░██░░██░░██░░██░░░ │     pixels after 2x scaling)
+     *   │ ░                                ░ │
+     *   └─────────────────────────────────────┘
+     *
+     * The 1-px white BORDER around the entire 256x240 frame is the most
+     * useful single diagnostic — if you don't see all four edges, the
+     * sync/timing is wrong.  If only horizontal edges are missing, V
+     * timing is off.  If only vertical edges, H timing.  If corners are
+     * cut, scaling is wrong.
+     *
+     * The CHECKERBOARD in the bottom half makes pixel-perfect alignment
+     * visible — uniform squares means 2x scaling is correct, distorted
+     * squares mean the pixel-doubling code has a bug.
+     *
+     * The COLOUR BARS in the top half let you verify each TMDS lane is
+     * decoding correctly.  Swapped lanes show up as wrong-colour bars in
+     * a predictable pattern (yellow becomes cyan, etc.).
+     */
+
+    /* NES palette indices for clear, distinct test colours.  These are
+     * the closest NES palette matches to white/primaries/secondaries —
+     * not perfectly pure R/G/B because the NES palette doesn't have
+     * those, but distinctive enough to spot lane swaps. */
+    static const uint8_t k_bar_colours[8] = {
+        0x30, /* white     — all three lanes maximum */
+        0x28, /* yellow    — R + G high, B low */
+        0x2C, /* cyan      — G + B high, R low */
+        0x2A, /* green     — G high only */
+        0x24, /* magenta   — R + B high, G low */
+        0x16, /* red       — R high only */
+        0x21, /* blue      — B high only */
+        0x0F, /* black     — all three lanes minimum */
     };
+    const uint8_t border_colour = 0x30; /* white */
+    const uint8_t checker_a = 0x30;     /* white */
+    const uint8_t checker_b = 0x0F;     /* black */
+
+    const uint32_t mid_y = NES_FRAME_HEIGHT / 2u;
+    const uint32_t checker_size = 8u; /* 8x8 NES pixels = 16x16 HDMI pixels */
+
     for (uint32_t y = 0; y < NES_FRAME_HEIGHT; ++y) {
         uint8_t *row = &s_present_indexed[y * NES_FRAME_WIDTH];
         for (uint32_t x = 0; x < NES_FRAME_WIDTH; ++x) {
-            row[x] = k_test_palette[(x * 8u) / NES_FRAME_WIDTH];
+            /* 1-pixel border on all four edges. */
+            if (y == 0 || y == NES_FRAME_HEIGHT - 1u ||
+                x == 0 || x == NES_FRAME_WIDTH - 1u) {
+                row[x] = border_colour;
+                continue;
+            }
+
+            /* Horizontal divider at the midline. */
+            if (y == mid_y) {
+                row[x] = border_colour;
+                continue;
+            }
+
+            if (y < mid_y) {
+                /* Top half: colour bars. */
+                row[x] = k_bar_colours[(x * 8u) / NES_FRAME_WIDTH];
+            } else {
+                /* Bottom half: checkerboard. */
+                uint32_t cell_x = x / checker_size;
+                uint32_t cell_y = (y - mid_y - 1u) / checker_size;
+                row[x] = ((cell_x ^ cell_y) & 1u) ? checker_a : checker_b;
+            }
         }
     }
     s_present_valid = true;
