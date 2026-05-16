@@ -5,12 +5,17 @@
 #include <stdint.h>
 
 /*
- * PWM audio output on GP16.
+ * PWM audio output.
  *
- * Hardware:
+ * Hardware (default breadboard wiring; GP16):
  *   GP16 → two-pole RC low-pass filter (R=1kΩ, C=10nF each pole, f_c=15.9 kHz)
  *        → 100µF DC-blocking cap → 10kΩ bleeder to GND → output jack.
  *   BAT85 ESD diode pair on the output.
+ *
+ * Hardware (v0.1 PCB; build with -DMICRONES_BOARD=v0_1):
+ *   GP23 (GP_ADAC_IN in the schematic) → on-board analog DAC / filter
+ *        → AUD_A / AUD_B line outputs.  The two-pole RC filter is on the
+ *        PCB; this code only drives the PWM input.
  *
  * Two PWM slices are used:
  *
@@ -35,7 +40,17 @@
  * budget (~6,500 cycles between interrupts at 315 MHz / 48 kHz).
  */
 
-#define MICRONES_AUDIO_PIN  16u  /* GP16 */
+#ifdef MICRONES_BOARD_V0_1
+#include "board_pinout_v0_1.h"
+#endif
+
+#ifndef MICRONES_AUDIO_PIN
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_AUDIO_PIN  MICRONES_V0_1_PIN_AUDIO_PWM
+#else
+#define MICRONES_AUDIO_PIN  16u  /* GP16, breadboard default */
+#endif
+#endif
 
 /*
  * Initialise PWM audio.  sample_rate is stored but the actual PWM rate is
