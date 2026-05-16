@@ -10,6 +10,15 @@ set(MICRONES_PICO_TFT_CONTROLLER "ili9341" CACHE STRING "Pico TFT controller ini
 set_property(CACHE MICRONES_PICO_TFT_CONTROLLER PROPERTY STRINGS ili9341 ili9486 ili9488)
 set(MICRONES_APU_ENGINE "micrones" CACHE STRING "APU engine: micrones (cycle-accurate, default) or infones (InfoNES DDS)")
 set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS micrones infones)
+# Select which physical board the Pico firmware should target.
+#   breadboard  -> legacy breadboard rig (see SCHEMATIC.md, audio_pwm.h,
+#                  pico_input.h, video_ntsc.h defaults).
+#   v0_1        -> microNES PCB v0.1, sourced from
+#                  hardware/microNES_pcb_v0.1/microNES_pcb_v0.1.kicad_sch.
+#                  Drives MICRONES_BOARD_V0_1 into every pin header, which
+#                  then resolves to the schematic's pin assignments.
+set(MICRONES_BOARD "breadboard" CACHE STRING "Pico target board: breadboard or v0_1")
+set_property(CACHE MICRONES_BOARD PROPERTY STRINGS breadboard v0_1)
 option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic logging" OFF)
 
 if (MICRONES_PLATFORM STREQUAL "pico")
@@ -175,6 +184,12 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_MODE_EMULATOR=1)
         else ()
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_MODE_TEST_PATTERN=1)
+        endif ()
+
+        # Propagate the selected physical board into the pin headers, which
+        # then resolve to the matching schematic pin assignments.
+        if (MICRONES_BOARD STREQUAL "v0_1")
+            target_compile_definitions(${target_name} PRIVATE MICRONES_BOARD_V0_1=1)
         endif ()
 
         target_compile_definitions(${target_name} PRIVATE MICRONES_ENABLE_PICO_VIDEO_STATS=0)
