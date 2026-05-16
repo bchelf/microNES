@@ -158,9 +158,15 @@ int main(void) {
              * MENU the shell renders into its own framebuffer and we just
              * present that — no NES step, no audio.  When in RUNNING the
              * shell forwards (and combo-masks) the input and we run the
-             * normal step+present path below. */
-            NesControllerState live_input = pico_input_read();
-            AppShellFrame frame = app_shell_begin_frame(&shell, live_input);
+             * normal step+present path below.
+             *
+             * Player 1 drives the shell (menu navigation, exit combo).
+             * Player 2 bypasses the shell and is wired directly to NES
+             * controller port 2 — its state should not affect menu
+             * navigation, but games that support two players (e.g. SMB1's
+             * Luigi mode) will see it on $4017. */
+            PicoControllerPair input_pair = pico_input_read_pair();
+            AppShellFrame frame = app_shell_begin_frame(&shell, input_pair.players[0]);
             if (!frame.stepping_nes) {
                 emulator_video_adapter_present_framebuffer(
                     &emulator_video, app_shell_menu_framebuffer(&shell));
@@ -169,6 +175,7 @@ int main(void) {
                 continue;
             }
             nes_set_controller_state(&emulator_video.nes, 0, frame.forwarded);
+            nes_set_controller_state(&emulator_video.nes, 1, input_pair.players[1]);
 
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
             /* TFT path: step and present are separated so audio is pushed
