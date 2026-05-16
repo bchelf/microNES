@@ -65,3 +65,18 @@ NesControllerState nes_hw_controller_read(void)
 
     return (NesControllerState){ .buttons = buttons };
 }
+
+/* The ESP32-S3 reference board (board.h) wires a single NES controller
+ * port.  Provide the two-port API surface for source-compatibility with
+ * the v0.1 PCB driver, reporting "no buttons" on the absent port. */
+void nes_hw_controller_read_pair(NesControllerState *p1_out,
+                                 NesControllerState *p2_out)
+{
+    NesControllerState p1 = nes_hw_controller_read();
+    if (p1_out) {
+        *p1_out = p1;
+    }
+    if (p2_out) {
+        p2_out->buttons = 0;
+    }
+}
