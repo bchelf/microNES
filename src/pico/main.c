@@ -181,6 +181,8 @@ int main(void) {
 
     printf("pico init: controller input\n");
     pico_input_init();
+    printf("pico init: front panel (LED + reset button)\n");
+    pico_status_init();
     printf("pico init: video backend %s\n", pico_video_backend_name());
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
     printf("pico init: TFT controller %s\n", video_tft_controller_name());
