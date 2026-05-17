@@ -56,11 +56,40 @@ static inline void video_ntsc_program_init(
     // clk_div × 11 cycles = 14.318182 MHz NTSC sample rate
     sm_config_set_clkdiv(&c, clk_div);
 
-    // Claim and configure GPIO pins
+    // Claim and configure GPIO pins.
+    //
+    // Drive strength + slew on the DAC pins is a tuning decision that depends
+    // on the board:
+    //   - Breadboard (long jumper wires): 4 mA + slow slew, picked to limit
+    //     ringing/overshoot.  Adequate because the jumper wires add ~ohms of
+    //     series R and pF of capacitance that softens edges further.
+    //   - PCB v0.1 (short clean traces): the bit-3 resistor is 120 Ω, so a
+    //     full-scale step pulls ~12 mA through the GPIO.  At the 4 mA drive
+    //     setting the output saturates partway and the DAC code slews
+    //     instead of stepping — visually that's blurry/jittery bars and
+    //     unreadable small text.  12 mA + fast slew gives the GPIO the
+    //     headroom to deliver the current the resistor network actually wants.
+    //
+    // Both knobs are overridable from the build so we don't lose the
+    // breadboard tuning.
+#ifndef MICRONES_VIDEO_DAC_DRIVE_STRENGTH
+#  ifdef MICRONES_BOARD_V0_1
+#    define MICRONES_VIDEO_DAC_DRIVE_STRENGTH GPIO_DRIVE_STRENGTH_12MA
+#  else
+#    define MICRONES_VIDEO_DAC_DRIVE_STRENGTH GPIO_DRIVE_STRENGTH_4MA
+#  endif
+#endif
+#ifndef MICRONES_VIDEO_DAC_SLEW_RATE
+#  ifdef MICRONES_BOARD_V0_1
+#    define MICRONES_VIDEO_DAC_SLEW_RATE GPIO_SLEW_RATE_FAST
+#  else
+#    define MICRONES_VIDEO_DAC_SLEW_RATE GPIO_SLEW_RATE_SLOW
+#  endif
+#endif
     for (uint i = 0; i < 4; i++) {
         pio_gpio_init(pio, pin_base + i);
-        gpio_set_drive_strength(pin_base + i, GPIO_DRIVE_STRENGTH_4MA);
-        gpio_set_slew_rate(pin_base + i, GPIO_SLEW_RATE_SLOW);
+        gpio_set_drive_strength(pin_base + i, MICRONES_VIDEO_DAC_DRIVE_STRENGTH);
+        gpio_set_slew_rate(pin_base + i, MICRONES_VIDEO_DAC_SLEW_RATE);
     }
     pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 4, /*output=*/true);
 

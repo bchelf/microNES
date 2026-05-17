@@ -474,10 +474,17 @@ static void __isr dma_irq1_handler(void) {
 void video_ntsc_init(void) {
     build_chroma_lut();
 
-    /* GP4: sync clamp gate — output, initially LOW (MOSFET off) */
+    /* Sync clamp gate — output, initially LOW (MOSFET off).  On the v0.1
+     * PCB the 2N7002 gate is a small capacitive load on short traces, so
+     * push the pad to the strong/fast setting to keep clamp on/off edges
+     * crisp.  Breadboard keeps the default 4 mA + slow slew. */
     gpio_init(MICRONES_VIDEO_SYNC_GPIO);
     gpio_set_dir(MICRONES_VIDEO_SYNC_GPIO, GPIO_OUT);
     gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
+#ifdef MICRONES_BOARD_V0_1
+    gpio_set_drive_strength(MICRONES_VIDEO_SYNC_GPIO, GPIO_DRIVE_STRENGTH_12MA);
+    gpio_set_slew_rate(MICRONES_VIDEO_SYNC_GPIO, GPIO_SLEW_RATE_FAST);
+#endif
 
     /* Load PIO program and configure state machine */
     s_pio        = pio0;
