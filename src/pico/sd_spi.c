@@ -21,6 +21,12 @@
 #define MICRONES_SD_INIT_DEBUG 1
 #endif
 
+#if MICRONES_SD_INIT_DEBUG
+#define SD_INIT_LOG(...) do { printf(__VA_ARGS__); } while (0)
+#else
+#define SD_INIT_LOG(...) do { } while (0)
+#endif
+
 /* Diagnostic snapshot of the most recent sd_init() attempt.  Captured
  * unconditionally so a periodic logger (see sd_print_init_diag) can
  * replay the state long after the boot-time printf has scrolled away. */
@@ -318,6 +324,7 @@ void sd_deinit(void) {
 }
 
 SdResult sd_init(void) {
+    SD_INIT_LOG("SD init: reset driver state\n");
     sd_deinit();
 
     /* Reset the diagnostic snapshot at the start of every attempt so a
@@ -328,32 +335,48 @@ SdResult sd_init(void) {
     memset(s_diag.warmup, 0xFFu, sizeof(s_diag.warmup));
     memset(s_diag.cmd0_responses, 0xFFu, sizeof(s_diag.cmd0_responses));
 
+    SD_INIT_LOG("SD init: configure reader pins CD=%u MISO=%u SCK=%u MOSI=%u CS=%u\n",
+                (unsigned)MICRONES_SD_PIN_CD,
+                (unsigned)MICRONES_SD_PIN_MISO,
+                (unsigned)MICRONES_SD_PIN_SCK,
+                (unsigned)MICRONES_SD_PIN_MOSI,
+                (unsigned)MICRONES_SD_PIN_CS);
     sd_pins_init();
 
     PIO pio = sd_pio_block();
     if (!pio_can_add_program(pio, &sd_spi_cpha0_program)) {
+        SD_INIT_LOG("SD init: PIO program load failed\n");
         s_diag.last_result = SD_ERR_NOT_INITIALIZED;
         return SD_ERR_NOT_INITIALIZED;
     }
     s_sd.program_offset = pio_add_program(pio, &sd_spi_cpha0_program);
     s_sd.program_loaded = true;
+    SD_INIT_LOG("SD init: PIO%u program offset=%u\n",
+                (unsigned)MICRONES_SD_PIO_INDEX,
+                (unsigned)s_sd.program_offset);
 
     int sm = pio_claim_unused_sm(pio, false);
     if (sm < 0) {
+        SD_INIT_LOG("SD init: no free PIO state machine\n");
         s_diag.last_result = SD_ERR_NOT_INITIALIZED;
         sd_deinit();
         return SD_ERR_NOT_INITIALIZED;
     }
     s_sd.sm = (uint)sm;
     s_sd.sm_claimed = true;
+    SD_INIT_LOG("SD init: claimed state machine %u\n", (unsigned)s_sd.sm);
 
     pio_spi_configure(pio, s_sd.sm, s_sd.program_offset,
                       pio_clkdiv_for_sck(MICRONES_SD_INIT_BAUD_HZ));
+    SD_INIT_LOG("SD init: reader bus clock init=%lu Hz\n",
+                (unsigned long)MICRONES_SD_INIT_BAUD_HZ);
 
     if (!sd_card_present()) {
+        SD_INIT_LOG("SD init: no card detected\n");
         s_diag.last_result = SD_ERR_NO_CARD;
         return SD_ERR_NO_CARD;
     }
+    SD_INIT_LOG("SD init: card detected\n");
 
     /* Power-up sequence: send 80+ clocks at < 400 kHz with MOSI held high.
      * Each spi_xfer of 0xFF drives MOSI high for 8 clocks.  Capture the
@@ -384,6 +407,9 @@ SdResult sd_init(void) {
     for (int i = 0; i < 10; ++i) {
         s_diag.warmup[i] = spi_xfer(0xFFu);
     }
+    SD_INIT_LOG("SD init: warmup complete, MISO first=%02X last=%02X\n",
+                s_diag.warmup[0],
+                s_diag.warmup[9]);
 
     /* CMD0 must be sent with CS asserted. */
     cs_assert();
@@ -402,6 +428,9 @@ SdResult sd_init(void) {
         }
         sleep_ms(10);
     }
+    SD_INIT_LOG("SD init: CMD0 attempts=%d %s\n",
+                s_diag.cmd0_attempts,
+                got_idle ? "idle" : "failed");
     if (!got_idle) {
         s_diag.last_result = SD_ERR_CMD0;
         result = SD_ERR_CMD0;
@@ -424,18 +453,26 @@ SdResult sd_init(void) {
         result = SD_ERR_CMD8;
         goto fail;
     }
+    SD_INIT_LOG("SD init: CMD8 r1=0x%02X card_version=%s\n",
+                r1,
+                v2_card ? "v2" : "v1");
 
     /* ACMD41: send op cond.  Poll for ready (R1 = 0). */
     absolute_time_t deadline = make_timeout_time_ms(2000);
     bool ready = false;
+    uint32_t acmd41_attempts = 0;
     while (!time_reached(deadline)) {
         uint8_t r = send_acmd(ACMD41, v2_card ? 0x40000000u : 0);
+        ++acmd41_attempts;
         if (r == 0u) {
             ready = true;
             break;
         }
         sleep_ms(2);
     }
+    SD_INIT_LOG("SD init: ACMD41 attempts=%lu %s\n",
+                (unsigned long)acmd41_attempts,
+                ready ? "ready" : "timeout");
     if (!ready) {
         result = SD_ERR_INIT_TIMEOUT;
         goto fail;
@@ -451,6 +488,9 @@ SdResult sd_init(void) {
         uint8_t ocr[4];
         for (int i = 0; i < 4; ++i) ocr[i] = spi_xfer(0xFFu);
         sdhc = (ocr[0] & 0x40u) != 0u;
+        SD_INIT_LOG("SD init: OCR %02X %02X %02X %02X type_hint=%s\n",
+                    ocr[0], ocr[1], ocr[2], ocr[3],
+                    sdhc ? "SDHC/SDXC" : "SDSC");
     }
 
     if (!sdhc) {
@@ -458,6 +498,7 @@ SdResult sd_init(void) {
             result = SD_ERR_OCR;
             goto fail;
         }
+        SD_INIT_LOG("SD init: block length set to 512 bytes\n");
     }
 
     s_sd.type = sdhc ? SD_TYPE_SDHC : (v2_card ? SD_TYPE_SDV2 : SD_TYPE_SDV1);
@@ -469,15 +510,20 @@ SdResult sd_init(void) {
             (void)parse_csd_block_count(csd);
         }
     }
+    SD_INIT_LOG("SD init: CSD parsed block_count=%lu\n",
+                (unsigned long)s_sd.block_count);
 
     cs_deassert();
     spi_send_dummy(1);
 
     /* Bump the PIO clock to the run rate now that init is past. */
     pio_spi_apply_clkdiv(MICRONES_SD_RUN_BAUD_HZ);
+    SD_INIT_LOG("SD init: reader bus clock run=%lu Hz\n",
+                (unsigned long)MICRONES_SD_RUN_BAUD_HZ);
 
     s_sd.initialized = true;
     s_diag.last_result = SD_OK;
+    SD_INIT_LOG("SD init: complete\n");
     return SD_OK;
 
 fail:
@@ -485,6 +531,7 @@ fail:
     spi_send_dummy(1);
     s_sd.initialized = false;
     s_diag.last_result = result;
+    SD_INIT_LOG("SD init: failed result=%d\n", (int)result);
     return result;
 }
 

@@ -11,6 +11,7 @@
 #include "pico_status.h"
 #include "rom_source.h"
 #include "rom_source_sd.h"
+#include "sd_spi.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
 #include "display/video_tft.h"
 #endif
@@ -19,6 +20,85 @@
 
 #include <stdio.h>
 
+typedef struct {
+    uint64_t started_us;
+    uint64_t frames;
+    uint64_t presented;
+} PicoFpsLogger;
+
+static const char *sd_card_type_name(SdCardType type) {
+    switch (type) {
+    case SD_TYPE_SDV1: return "SDv1";
+    case SD_TYPE_SDV2: return "SDv2";
+    case SD_TYPE_SDHC: return "SDHC/SDXC";
+    default: return "none";
+    }
+}
+
+static void log_rom_source_entries(RomSource *source) {
+    if (source == NULL || source->count == NULL || source->entry == NULL) {
+        printf("ROM list: source unavailable\n");
+        return;
+    }
+
+    size_t count = source->count(source);
+    printf("ROM list: %u entr%s\n",
+           (unsigned)count,
+           count == 1u ? "y" : "ies");
+    for (size_t i = 0; i < count; ++i) {
+        const RomSourceEntry *entry = source->entry(source, i);
+        if (entry == NULL) {
+            continue;
+        }
+        printf("ROM list: [%u] \"%s\" size=%lu mapper=%u supported=%u prg=%lu chr=%lu battery=%u\n",
+               (unsigned)i,
+               entry->name,
+               (unsigned long)entry->file_size,
+               (unsigned)entry->mapper,
+               entry->supported ? 1u : 0u,
+               (unsigned long)entry->prg_size,
+               (unsigned long)entry->chr_size,
+               entry->has_battery ? 1u : 0u);
+    }
+}
+
+static void pico_fps_logger_init(PicoFpsLogger *logger, uint64_t now_us,
+                                 uint64_t frames, uint64_t presented) {
+    logger->started_us = now_us;
+    logger->frames = frames;
+    logger->presented = presented;
+}
+
+static void pico_fps_logger_maybe_report(PicoFpsLogger *logger,
+                                         const PicoEmulatorVideoAdapter *adapter) {
+    uint64_t now_us = time_us_64();
+    uint64_t elapsed_us = now_us - logger->started_us;
+    if (elapsed_us < 1000000ull) {
+        return;
+    }
+
+    PicoVideoBackendStats stats;
+    pico_video_backend_get_stats(&stats);
+
+    uint64_t frame_delta = adapter->rendered_frames - logger->frames;
+    uint64_t present_delta = stats.frames_presented - logger->presented;
+    double seconds = (double)elapsed_us / 1000000.0;
+    double fps = seconds > 0.0 ? (double)frame_delta / seconds : 0.0;
+    double present_fps = seconds > 0.0 ? (double)present_delta / seconds : 0.0;
+
+    printf("pico fps: frames=%llu fps=%.2f presented=%llu present_fps=%.2f audio_buf=%lu underruns=%lu\n",
+           (unsigned long long)adapter->rendered_frames,
+           fps,
+           (unsigned long long)stats.frames_presented,
+           present_fps,
+           (unsigned long)pico_audio_backend_buffer_level(),
+           (unsigned long)pico_audio_backend_underrun_count());
+
+    logger->started_us = now_us;
+    logger->frames = adapter->rendered_frames;
+    logger->presented = stats.frames_presented;
+}
+
 int main(void) {
     const uint32_t audio_sample_rate = pico_audio_backend_preferred_sample_rate();
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
@@ -26,6 +106,7 @@ int main(void) {
     static AppShell                 shell;
     static RomSource                rom_source;
     MicronesFramePacer frame_pacer;
+    PicoFpsLogger fps_logger;
 #if MICRONES_ENABLE_PERF_LOG
     uint64_t report_started_us = 0;
     uint64_t report_render_us = 0;
@@ -91,42 +172,83 @@ int main(void) {
     }
 
     stdio_init_all();
-    printf("sys clock: %lu Hz  peri clock: %lu Hz\n",
+    sleep_ms(5000);
+    printf("pico init: stdio ready\n");
+    printf("pico init: power rails and system clock ready\n");
+    printf("pico init: sys clock=%lu Hz peri clock=%lu Hz\n",
            (unsigned long)clock_get_hz(clk_sys),
            (unsigned long)clock_get_hz(clk_peri));
 
+    printf("pico init: controller input\n");
     pico_input_init();
-    pico_status_init();    /* lights power LED, arms reset-button edge detect */
+    printf("pico init: video backend %s\n", pico_video_backend_name());
+#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
+    printf("pico init: TFT controller %s\n", video_tft_controller_name());
+#endif
     if (!pico_video_backend_init()) {
         printf("video backend init failed: %s\n", pico_video_backend_last_error());
         return 1;
     }
+    printf("pico init: video backend ready\n");
+    printf("pico init: audio backend %s @ %lu Hz\n",
+           pico_audio_backend_name(),
+           (unsigned long)audio_sample_rate);
     pico_audio_backend_init(audio_sample_rate);
+    printf("pico init: audio backend ready\n");
 
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
     /* Bring up the adapter with no cart loaded — the ROM picker (AppShell)
      * will load cartridges on demand from the SD card. */
+    printf("pico init: emulator core\n");
     if (emulator_video_adapter_init_empty(&emulator_video)) {
         printf("video mode: emulator (%s)\n", pico_video_backend_name());
 
         /* Initialize the SD-card-backed ROM source.  If the card is missing
          * or the volume can't be mounted, the menu still runs and shows
          * "No ROMs found" until the user inserts a card and we can refresh. */
+        printf("pico init: SD card reader\n");
         if (rom_source_sd_init(&rom_source)) {
-            printf("SD: mounted, %u ROM(s) listed\n",
+            printf("pico init: SD mounted type=%s blocks=%lu (%lu MiB), %u ROM(s) listed\n",
+                   sd_card_type_name(sd_card_type()),
+                   (unsigned long)sd_block_count(),
+                   (unsigned long)(sd_block_count() / 2048u),
                    (unsigned)rom_source.count(&rom_source));
+            log_rom_source_entries(&rom_source);
         } else {
             printf("SD: %s\n", rom_source_sd_last_error());
+            sd_print_init_diag();
             /* Fallback: empty source so the menu renders the "no ROMs"
              * screen.  Hot-insert support would re-init the SD source on
              * an explicit user trigger; not implemented here. */
             rom_source_make_empty(&rom_source);
         }
 
+        printf("pico init: app shell\n");
         app_shell_init(&shell, &rom_source, &emulator_video.nes);
+        if (rom_source.count != NULL && rom_source.count(&rom_source) > 0u) {
+            const RomSourceEntry *first = rom_source.entry != NULL
+                ? rom_source.entry(&rom_source, 0u)
+                : NULL;
+            printf("pico init: autostart first SD ROM: %s\n",
+                   first != NULL ? first->name : "(unknown)");
+            if (!app_shell_launch_index(&shell, 0u)) {
+                printf("pico init: autostart failed: %s\n", app_shell_status(&shell));
+            }
+        } else {
+            printf("pico init: autostart skipped, no SD ROMs listed\n");
+        }
 
+        printf("pico init: video start\n");
         pico_video_backend_start_emulator();
         micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
+        {
+            PicoVideoBackendStats stats;
+            pico_video_backend_get_stats(&stats);
+            pico_fps_logger_init(&fps_logger, time_us_64(),
+                                 emulator_video.rendered_frames,
+                                 stats.frames_presented);
+        }
+        printf("pico init: complete\n");
 
 #if MICRONES_ENABLE_PERF_LOG
         report_started_us = time_us_64();
@@ -183,6 +305,7 @@ int main(void) {
                     &emulator_video, app_shell_menu_framebuffer(&shell));
                 micrones_frame_pacer_frame_done(&frame_pacer,
                                                 micrones_pico_clock_now_ns());
+                pico_fps_logger_maybe_report(&fps_logger, &emulator_video);
                 continue;
             }
             nes_set_controller_state(&emulator_video.nes, 0, frame.forwarded);
@@ -276,6 +399,7 @@ int main(void) {
             }
 #endif
             micrones_frame_pacer_frame_done(&frame_pacer, micrones_pico_clock_now_ns());
+            pico_fps_logger_maybe_report(&fps_logger, &emulator_video);
 
 #if MICRONES_ENABLE_PERF_LOG
             if ((emulator_video.rendered_frames % 60u) == 0u) {

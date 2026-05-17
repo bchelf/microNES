@@ -89,6 +89,10 @@ void app_shell_render_menu(AppShell *shell);
  * No-op when already in the menu. */
 void app_shell_request_menu(AppShell *shell);
 
+/* Programmatically launch a ROM by source index using the same zero-copy
+ * load path as the menu.  Useful for temporary embedded autostart flows. */
+bool app_shell_launch_index(AppShell *shell, size_t index);
+
 /* Last error/status text (for host logging or display). */
 const char *app_shell_status(const AppShell *shell);
 

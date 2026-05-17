@@ -1,5 +1,6 @@
 #include "app_shell.h"
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -157,6 +158,13 @@ void app_shell_request_menu(AppShell *shell) {
     shell->state = APP_SHELL_STATE_MENU;
     shell->exit_combo_latched = false;
     rom_menu_render(&shell->menu, shell->source, &shell->menu_fb, shell->status);
+}
+
+bool app_shell_launch_index(AppShell *shell, size_t index) {
+    if (index > (size_t)INT_MAX) {
+        return false;
+    }
+    return shell_launch(shell, (int)index);
 }
 
 void app_shell_render_menu(AppShell *shell) {

@@ -98,22 +98,46 @@ static bool name_equals_ci(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
+static void log_fat_entry(const char *dir_name, const Fat32Entry *entry) {
+    const bool is_dir = (entry->attr & FAT32_ATTR_DIRECTORY) != 0u;
+    printf("SD scan: %s/%s %s size=%lu cluster=%lu attr=0x%02x\n",
+           dir_name,
+           entry->name,
+           is_dir ? "dir" : "file",
+           (unsigned long)entry->size,
+           (unsigned long)entry->first_cluster,
+           (unsigned)entry->attr);
+}
+
 /* Walk one directory and append its .nes files to st->entries.  If
  * out_roms_cluster is non-NULL, also looks for a subdirectory named
  * "roms" (case-insensitive) and writes its first cluster there. */
 static void scan_dir_for_nes(SdState *st, Fat32DirIter *it,
+                             const char *dir_name,
                              uint32_t *out_roms_cluster) {
     Fat32Entry e;
-    while (st->entry_count < SD_ROM_LIST_MAX && fat32_dir_next(it, &e)) {
+    bool capped_logged = false;
+    while (fat32_dir_next(it, &e)) {
+        log_fat_entry(dir_name, &e);
         if ((e.attr & FAT32_ATTR_DIRECTORY) != 0u) {
             /* Note the /roms subdirectory but don't recurse from here. */
             if (out_roms_cluster != NULL && *out_roms_cluster == 0u &&
                 name_equals_ci(e.name, "roms")) {
                 *out_roms_cluster = e.first_cluster;
+                printf("SD scan: found /roms at cluster=%lu\n",
+                       (unsigned long)e.first_cluster);
             }
             continue;
         }
         if (!ends_with_nes_ci(e.name)) continue;
+        if (st->entry_count >= SD_ROM_LIST_MAX) {
+            if (!capped_logged) {
+                printf("SD scan: ROM list capped at %u entries; continuing directory log only\n",
+                       (unsigned)SD_ROM_LIST_MAX);
+                capped_logged = true;
+            }
+            continue;
+        }
 
         SdRomEntry *entry = &st->entries[st->entry_count];
         memset(entry, 0, sizeof(*entry));
@@ -133,7 +157,21 @@ static void scan_dir_for_nes(SdState *st, Fat32DirIter *it,
             uint8_t hdr[16];
             if (fat32_read(&f, hdr, sizeof(hdr)) == sizeof(hdr)) {
                 parse_ines_header(hdr, &entry->meta);
+                printf("SD scan: %s/%s iNES mapper=%u supported=%u prg=%lu chr=%lu battery=%u\n",
+                       dir_name,
+                       e.name,
+                       (unsigned)entry->meta.mapper,
+                       entry->meta.supported ? 1u : 0u,
+                       (unsigned long)entry->meta.prg_size,
+                       (unsigned long)entry->meta.chr_size,
+                       entry->meta.has_battery ? 1u : 0u);
+            } else {
+                printf("SD scan: %s/%s iNES header read failed\n", dir_name, e.name);
             }
+        } else {
+            printf("SD scan: %s/%s skipped, file shorter than iNES header\n",
+                   dir_name,
+                   e.name);
         }
 
         ++st->entry_count;
@@ -161,7 +199,8 @@ static void sd_refresh(RomSource *self) {
     Fat32DirIter it;
     uint32_t roms_cluster = 0u;
     if (fat32_open_root(&it)) {
-        scan_dir_for_nes(st, &it, &roms_cluster);
+        printf("SD scan: reading root directory\n");
+        scan_dir_for_nes(st, &it, "root", &roms_cluster);
     } else {
         set_error("Failed to open root directory");
         return;
@@ -170,10 +209,12 @@ static void sd_refresh(RomSource *self) {
     /* Pass 2: /roms subdirectory if present.  No recursion past one
      * level — anything else is intentionally ignored. */
     if (roms_cluster != 0u && fat32_open_dir_at_cluster(&it, roms_cluster)) {
-        scan_dir_for_nes(st, &it, NULL);
+        printf("SD scan: reading /roms directory\n");
+        scan_dir_for_nes(st, &it, "roms", NULL);
     }
 
     qsort(st->entries, st->entry_count, sizeof(*st->entries), compare_name);
+    printf("SD scan: complete, %u ROM(s)\n", (unsigned)st->entry_count);
     set_error("");
 }
 
@@ -198,6 +239,11 @@ static bool sd_load(RomSource *self, size_t index,
     }
     SdRomEntry *e = &st->entries[index];
 
+    printf("SD load: reading \"%s\" size=%lu cluster=%lu\n",
+           e->meta.name,
+           (unsigned long)e->size,
+           (unsigned long)e->first_cluster);
+
     uint8_t *buf = (uint8_t *)malloc(e->size);
     if (buf == NULL) {
         if (err && err_size) snprintf(err, err_size, "out of memory (%u bytes)",
@@ -216,11 +262,18 @@ static bool sd_load(RomSource *self, size_t index,
     size_t got = fat32_read(&f, buf, e->size);
     if (got != e->size) {
         free(buf);
+        printf("SD load: \"%s\" failed read=%lu/%lu\n",
+               e->meta.name,
+               (unsigned long)got,
+               (unsigned long)e->size);
         if (err && err_size) snprintf(err, err_size, "read %u/%u bytes",
                                        (unsigned)got, (unsigned)e->size);
         return false;
     }
 
+    printf("SD load: \"%s\" read complete bytes=%lu\n",
+           e->meta.name,
+           (unsigned long)got);
     *out_buf  = buf;
     *out_size = e->size;
     return true;
@@ -237,10 +290,12 @@ bool rom_source_sd_init(RomSource *out_source) {
     s_last_error[0] = '\0';
     memset(&s_sd_state, 0, sizeof(s_sd_state));
 
+    printf("SD source: initializing card\n");
     if (sd_init() != SD_OK) {
         set_error("SD card init failed");
         return false;
     }
+    printf("SD source: mounting FAT32 volume\n");
     if (!fat32_mount()) {
         set_error("No FAT32 partition");
         return false;
