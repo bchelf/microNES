@@ -123,6 +123,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         src/pico/main.c
         src/pico/nes_hw_controller.c
         src/pico/pico_input.c
+        src/pico/pico_status.c
         src/pico/pico_time.c
         src/pico/rom_source_sd.c
         src/pico/sd_spi.c
