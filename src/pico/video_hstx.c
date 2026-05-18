@@ -206,9 +206,53 @@ static volatile uint32_t s_line_being_streamed = 0u; /* line index in V frame */
 
 static VideoHstxStats s_stats;
 static char s_last_error[96];
+static repeating_timer_t s_diag_timer;
 
 static void hstx_set_error(const char *msg) {
     snprintf(s_last_error, sizeof(s_last_error), "%s", msg);
+}
+
+/* Dump the same diagnostic block at init time and again every 5 s.
+ *
+ * Why repeat: USB-serial on the Pico only enumerates ~hundreds of ms
+ * after boot, so initial-boot prints are easy to miss if you connect
+ * your terminal a few seconds late.  Repeating the dump every 5 s lets
+ * you attach screen / tio at any point and immediately see the live
+ * HSTX state without rebooting.
+ *
+ * The line counter `s_line_being_streamed` is also useful — if it's
+ * advancing across consecutive dumps, the DMA chain and ISR are
+ * healthy.  If it's frozen, the ISR has stopped firing. */
+static void hstx_dump_diagnostics(const char *prefix) {
+    printf("%s sys_clk_hz     = %lu\n",
+           prefix, (unsigned long)clock_get_hz(clk_sys));
+    printf("%s clk_hstx_hz    = %lu (expected %lu = sys_clk / 2)\n",
+           prefix,
+           (unsigned long)clock_get_hz(clk_hstx),
+           (unsigned long)(clock_get_hz(clk_sys) / 2u));
+    printf("%s CSR            = 0x%08lx\n",
+           prefix, (unsigned long)hstx_ctrl_hw->csr);
+    printf("%s expand_shift   = 0x%08lx\n",
+           prefix, (unsigned long)hstx_ctrl_hw->expand_shift);
+    printf("%s expand_tmds    = 0x%08lx\n",
+           prefix, (unsigned long)hstx_ctrl_hw->expand_tmds);
+    for (uint32_t i = 0; i < 8u; ++i) {
+        printf("%s bit[%lu]         = 0x%08lx\n",
+               prefix, (unsigned long)i,
+               (unsigned long)hstx_ctrl_hw->bit[i]);
+    }
+    printf("%s dma channels   = pixel0=%d pixel1=%d\n",
+           prefix, s_dma_ch[0], s_dma_ch[1]);
+    printf("%s line streaming = %lu  (advances => ISR alive)\n",
+           prefix, (unsigned long)s_line_being_streamed);
+    printf("%s frames         = %llu\n",
+           prefix, (unsigned long long)s_stats.frames_presented);
+}
+
+static bool hstx_diag_timer_cb(repeating_timer_t *t) {
+    (void)t;
+    hstx_dump_diagnostics("[hstx][5s]");
+    return true; /* keep repeating */
 }
 
 const char *video_hstx_last_error(void) {
@@ -542,18 +586,7 @@ static void hstx_configure_dma(void) {
 bool video_hstx_init(void) {
     hstx_set_error("");
 
-    /* Boot diagnostics — single contiguous block so a serial capture from
-     * the first power-on tells us whether the firmware reached HSTX init,
-     * what clock the silicon actually settled on, and what the HSTX CSR
-     * register contains AFTER we wrote it (proving the writes took).
-     *
-     * If the serial console shows the "init complete" line but the screen
-     * is still dark, the firmware side is doing its job and the problem
-     * is downstream (wiring / cable / sink).  If you don't see these
-     * lines at all, the firmware isn't even reaching init. */
     printf("[hstx] init: starting\n");
-    printf("[hstx] sys_clk_hz     = %lu\n", (unsigned long)clock_get_hz(clk_sys));
-    printf("[hstx] clk_hstx (pre) = %lu\n", (unsigned long)clock_get_hz(clk_hstx));
 
     memset(s_line_buf, 0, sizeof(s_line_buf));
     memset(s_present_indexed, 0, sizeof(s_present_indexed));
@@ -570,31 +603,20 @@ bool video_hstx_init(void) {
     hstx_configure_pins();
     hstx_configure_dma();
 
-    /* Read back the HSTX registers AFTER configuration.  If these don't
-     * contain what we just wrote, either the unreset didn't take or the
-     * struct address is wrong — both fatal and worth catching here. */
-    printf("[hstx] clk_hstx (post)= %lu (expected %lu = sys_clk / 2)\n",
-           (unsigned long)clock_get_hz(clk_hstx),
-           (unsigned long)(clock_get_hz(clk_sys) / 2u));
-    printf("[hstx] CSR          = 0x%08lx\n",
-           (unsigned long)hstx_ctrl_hw->csr);
-    printf("[hstx] expand_shift = 0x%08lx\n",
-           (unsigned long)hstx_ctrl_hw->expand_shift);
-    printf("[hstx] expand_tmds  = 0x%08lx\n",
-           (unsigned long)hstx_ctrl_hw->expand_tmds);
-    for (uint32_t i = 0; i < 8u; ++i) {
-        printf("[hstx] bit[%lu]       = 0x%08lx\n",
-               (unsigned long)i,
-               (unsigned long)hstx_ctrl_hw->bit[i]);
-    }
-    printf("[hstx] dma ch        = pixel0=%d pixel1=%d\n",
-           s_dma_ch[0], s_dma_ch[1]);
-
     dma_hw->ints0 = (1u << (uint32_t)s_dma_ch[0]) |
                     (1u << (uint32_t)s_dma_ch[1]);
     dma_channel_start((uint)s_dma_ch[0]);
 
-    printf("[hstx] init: complete (DMA chain running)\n");
+    /* Dump the full state once after init completes... */
+    hstx_dump_diagnostics("[hstx][init]");
+
+    /* ...and then again every 5 s so a terminal attached later still
+     * sees the live state.  Negative period = next callback fires 5 s
+     * AFTER the previous callback returns (rather than 5 s after the
+     * scheduled time), preventing drift if a callback runs long. */
+    add_repeating_timer_ms(-5000, hstx_diag_timer_cb, NULL, &s_diag_timer);
+
+    printf("[hstx] init: complete (DMA chain running, diag every 5s)\n");
 
     return true;
 }
