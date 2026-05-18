@@ -58,30 +58,19 @@ static inline void video_ntsc_program_init(
 
     // Claim and configure GPIO pins.
     //
-    // Drive strength + slew on the DAC pins is a tuning decision that
-    // depends on the board:
-    //   - Breadboard (long jumper wires): 4 mA + slow slew, picked to limit
-    //     ringing on the wires.
-    //   - PCB v0.1 (short clean traces): start at the same 4 mA but with
-    //     fast slew, because the breadboard's "slow" setting was specifically
-    //     compensating for jumper-wire L/C and the PCB doesn't need it.
-    //     We tried 12 mA + fast slew first — it produced ringing /
-    //     ground-bounce that the TV mis-read as spurious sync edges,
-    //     compressing the picture horizontally and rolling vertically.
-    //     If 4 mA + fast turns out under-driven, step up cautiously:
-    //     8 mA next, only 12 mA as a last resort.
+    // Use the exact tuning the breadboard rig is known to work with —
+    // 4 mA + slow slew — on every board.  Earlier experiments with
+    // 12 mA + fast slew and with 4 mA + fast slew on the v0.1 PCB
+    // produced worse results (ringing / ground-bounce that the TV
+    // mis-read as spurious sync edges).
     //
-    // Both knobs are overridable from the build so we don't lose the
-    // breadboard tuning or block experimentation.
+    // Both knobs remain overridable from the build for future boards
+    // or for board-specific tuning.
 #ifndef MICRONES_VIDEO_DAC_DRIVE_STRENGTH
 #  define MICRONES_VIDEO_DAC_DRIVE_STRENGTH GPIO_DRIVE_STRENGTH_4MA
 #endif
 #ifndef MICRONES_VIDEO_DAC_SLEW_RATE
-#  ifdef MICRONES_BOARD_V0_1
-#    define MICRONES_VIDEO_DAC_SLEW_RATE GPIO_SLEW_RATE_FAST
-#  else
-#    define MICRONES_VIDEO_DAC_SLEW_RATE GPIO_SLEW_RATE_SLOW
-#  endif
+#  define MICRONES_VIDEO_DAC_SLEW_RATE GPIO_SLEW_RATE_SLOW
 #endif
     for (uint i = 0; i < 4; i++) {
         pio_gpio_init(pio, pin_base + i);
