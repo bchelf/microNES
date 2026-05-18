@@ -263,6 +263,13 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 target_compile_definitions(${target_name} PRIVATE
                     MICRONES_VIDEO_SYNC_CLAMP_DISABLE=${MICRONES_VIDEO_SYNC_CLAMP_DISABLE})
             endif ()
+            # Diagnostic: build with -DMICRONES_CHROMA_ENABLED=0 to emit
+            # luma-only (greyscale) video.  Useful for bisecting whether
+            # the chroma encoder is the source of sync/shear trouble.
+            if (DEFINED MICRONES_CHROMA_ENABLED)
+                target_compile_definitions(${target_name} PRIVATE
+                    MICRONES_CHROMA_ENABLED=${MICRONES_CHROMA_ENABLED})
+            endif ()
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_ANALOG=1)
 
             if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")

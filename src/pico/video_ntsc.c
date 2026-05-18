@@ -133,8 +133,15 @@ void build_chroma_lut(void) {
 static uint8_t s_dac_lut[64][4];
 
 /* Set to 0 to strip chroma from all pixels (luma-only / greyscale output).
- * Rebuild + reflash to toggle; no other files need changing. */
+ * Overridable from the build, e.g. -DMICRONES_CHROMA_ENABLED=0.
+ *
+ * Useful as a bisect: if the picture's shear/sync trouble goes away with
+ * chroma off, the chroma encoder is producing DAC excursions that the TV
+ * mis-reads as sync; if the shear remains, the cause is elsewhere
+ * (Core 1 render timing, buffer corruption, etc.). */
+#ifndef MICRONES_CHROMA_ENABLED
 #define MICRONES_CHROMA_ENABLED 1
+#endif
 
 /* -------------------------------------------------------------------------
  * Per-brightness-row chroma scaling (numerator / 8).
