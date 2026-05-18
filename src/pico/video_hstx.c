@@ -212,18 +212,9 @@ static void hstx_set_error(const char *msg) {
     snprintf(s_last_error, sizeof(s_last_error), "%s", msg);
 }
 
-/* Dump the same diagnostic block at init time and again every 5 s.
- *
- * Why repeat: USB-serial on the Pico only enumerates ~hundreds of ms
- * after boot, so initial-boot prints are easy to miss if you connect
- * your terminal a few seconds late.  Repeating the dump every 5 s lets
- * you attach screen / tio at any point and immediately see the live
- * HSTX state without rebooting.
- *
- * The line counter `s_line_being_streamed` is also useful — if it's
- * advancing across consecutive dumps, the DMA chain and ISR are
- * healthy.  If it's frozen, the ISR has stopped firing. */
-static void hstx_dump_diagnostics(const char *prefix) {
+/* Full diagnostic block — printed once at init.  Many lines, slow over
+ * USB-CDC; safe at init because nothing time-critical is running yet. */
+static void hstx_dump_diagnostics_full(const char *prefix) {
     printf("%s sys_clk_hz     = %lu\n",
            prefix, (unsigned long)clock_get_hz(clk_sys));
     printf("%s clk_hstx_hz    = %lu (expected %lu = sys_clk / 2)\n",
@@ -249,9 +240,30 @@ static void hstx_dump_diagnostics(const char *prefix) {
            prefix, (unsigned long long)s_stats.frames_presented);
 }
 
+/* Compact periodic diagnostic — single printf, runs from a timer IRQ.
+ *
+ * Keeping this short matters: the repeating_timer callback runs in IRQ
+ * context, and USB-CDC printf can spend tens of ms per character if
+ * the host queue is backed up.  Spending that long in an IRQ would
+ * starve the per-line HSTX DMA-completion IRQ and stall the link.
+ *
+ * The four fields here are the minimum needed to answer "is HSTX
+ * actually running right now":
+ *   - clk_hstx_hz: clock domain still configured?
+ *   - CSR        : HSTX peripheral still enabled?
+ *   - line       : ISR firing (counter advancing between dumps)?
+ *   - frames     : full frames being emitted? */
+static void hstx_dump_diagnostics_compact(void) {
+    printf("[hstx][5s] clk=%luHz csr=0x%08lx line=%lu frames=%llu\n",
+           (unsigned long)clock_get_hz(clk_hstx),
+           (unsigned long)hstx_ctrl_hw->csr,
+           (unsigned long)s_line_being_streamed,
+           (unsigned long long)s_stats.frames_presented);
+}
+
 static bool hstx_diag_timer_cb(repeating_timer_t *t) {
     (void)t;
-    hstx_dump_diagnostics("[hstx][5s]");
+    hstx_dump_diagnostics_compact();
     return true; /* keep repeating */
 }
 
@@ -608,7 +620,7 @@ bool video_hstx_init(void) {
     dma_channel_start((uint)s_dma_ch[0]);
 
     /* Dump the full state once after init completes... */
-    hstx_dump_diagnostics("[hstx][init]");
+    hstx_dump_diagnostics_full("[hstx][init]");
 
     /* ...and then again every 5 s so a terminal attached later still
      * sees the live state.  Negative period = next callback fires 5 s
