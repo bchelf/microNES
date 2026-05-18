@@ -181,6 +181,17 @@ void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_s
 #endif
             if (dac < 0)  dac = 0;
             if (dac > 15) dac = 15;
+            /* Floor active-video at the blank level (code 4).  The DAC
+             * codes 0–3 sit at or below the TV's sync-separator threshold
+             * (sync tip = 0V, blank ≈ 0.30V, half-way ≈ code 2): a chroma
+             * dip into that range produces a false mid-line sync trigger,
+             * which on a strict TV (Sony Trinitron in particular) shears
+             * the picture diagonally and prevents the chroma PLL from
+             * locking to the burst — black-and-white shear instead of
+             * colour.  Burst itself legitimately uses code 1 but that's
+             * emitted from a separate path (k_burst_pattern), not via
+             * this LUT, so flooring the LUT doesn't affect burst. */
+            if (dac < (int)VIDEO_DAC_BLANK) dac = (int)VIDEO_DAC_BLANK;
             s_dac_lut[c][phase] = (uint8_t)dac;
         }
     }
