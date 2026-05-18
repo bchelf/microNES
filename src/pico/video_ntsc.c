@@ -431,6 +431,15 @@ static void setup_dma(void) {
     channel_config_set_dreq(&s_dma_cfg[0], dreq);
     channel_config_set_chain_to(&s_dma_cfg[0], s_dma_chan[1]);
     channel_config_set_irq_quiet(&s_dma_cfg[0], false);
+    /* High AHB-bus priority: when CPU and DMA both want the same bus
+     * cycle, DMA wins.  Test pattern is fine without this because Core 1
+     * is idle, but the emulator path has Core 1 hammering SRAM (queue
+     * pop, palette LUT reads, scanline buffer writes) at the same time
+     * DMA is reading the other ping-pong buffer to feed PIO.  Without
+     * high priority, occasional DMA stalls let the PIO FIFO drain by a
+     * sample, which lengthens the affected line by ~70 ns and produces
+     * the diagonal shear seen on the v0.1 PCB. */
+    channel_config_set_high_priority(&s_dma_cfg[0], true);
 
     dma_channel_configure(s_dma_chan[0], &s_dma_cfg[0],
         &s_pio->txf[s_sm], scanline_buf[0], VIDEO_WORDS_PER_LINE, false);
@@ -443,6 +452,7 @@ static void setup_dma(void) {
     channel_config_set_dreq(&s_dma_cfg[1], dreq);
     channel_config_set_chain_to(&s_dma_cfg[1], s_dma_chan[0]);
     channel_config_set_irq_quiet(&s_dma_cfg[1], false);
+    channel_config_set_high_priority(&s_dma_cfg[1], true);
 
     dma_channel_configure(s_dma_chan[1], &s_dma_cfg[1],
         &s_pio->txf[s_sm], scanline_buf[1], VIDEO_WORDS_PER_LINE, false);
