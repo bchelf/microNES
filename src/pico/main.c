@@ -190,7 +190,6 @@ int main(void) {
     }
 
     stdio_init_all();
-    sleep_ms(5000);
     printf("pico init: stdio ready\n");
     printf("pico init: power rails and system clock ready\n");
     printf("pico init: sys clock=%lu Hz peri clock=%lu Hz\n",
