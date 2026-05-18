@@ -414,31 +414,48 @@ static void hstx_configure_peripheral(void) {
                     CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
                     sys_hz, sys_hz / 2u);
 
-    /* Pin map (relative to GP12, the HSTX pin base):
-     *   offset 0/1 — clock pair      (CLK + INV)
-     *   offset 2/3 — D0 (B) pair     (lane 0)
-     *   offset 4/5 — D1 (G) pair     (lane 1)
-     *   offset 6/7 — D2 (R) pair     (lane 2) */
-    hstx_ctrl_hw->bit[0] = HSTX_CTRL_BIT0_CLK_BITS;
-    hstx_ctrl_hw->bit[1] = HSTX_CTRL_BIT0_CLK_BITS | HSTX_CTRL_BIT0_INV_BITS;
+    /* Pin map (relative to GP12, the HSTX pin base) — matches the v0.1
+     * board layout where the lower-numbered GP in each pair carries the
+     * NEGATIVE signal of the differential pair:
+     *
+     *   offset 0 — GP12 — CK-   (HDMI pin 12)
+     *   offset 1 — GP13 — CK+   (HDMI pin 10)
+     *   offset 2 — GP14 — D0-   (HDMI pin 9,  Blue-)
+     *   offset 3 — GP15 — D0+   (HDMI pin 7,  Blue+)
+     *   offset 4 — GP16 — D1-   (HDMI pin 6,  Green-)
+     *   offset 5 — GP17 — D1+   (HDMI pin 4,  Green+)
+     *   offset 6 — GP18 — D2-   (HDMI pin 3,  Red-)
+     *   offset 7 — GP19 — D2+   (HDMI pin 1,  Red+)
+     *
+     * Each pair drives the same TMDS lane but with opposite polarity.
+     * The `INV` bit applied to the negative pin makes it carry the
+     * complement of the positive pin's signal.
+     *
+     * NOTE: if you wire to a different breakout that puts CK+ on GP12
+     * (e.g. Pico-DVI-Sock convention), swap INV onto the odd-numbered
+     * `bit[N]` entries instead — i.e. move HSTX_CTRL_BIT0_INV_BITS up
+     * one line in each pair below.
+     */
+    hstx_ctrl_hw->bit[0] = HSTX_CTRL_BIT0_CLK_BITS | HSTX_CTRL_BIT0_INV_BITS;
+    hstx_ctrl_hw->bit[1] = HSTX_CTRL_BIT0_CLK_BITS;
 
     hstx_ctrl_hw->bit[2] = (0u << HSTX_CTRL_BIT0_SEL_P_LSB) |
-                           (1u << HSTX_CTRL_BIT0_SEL_N_LSB);
-    hstx_ctrl_hw->bit[3] = (0u << HSTX_CTRL_BIT0_SEL_P_LSB) |
                            (1u << HSTX_CTRL_BIT0_SEL_N_LSB) |
                            HSTX_CTRL_BIT0_INV_BITS;
+    hstx_ctrl_hw->bit[3] = (0u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (1u << HSTX_CTRL_BIT0_SEL_N_LSB);
 
     hstx_ctrl_hw->bit[4] = (10u << HSTX_CTRL_BIT0_SEL_P_LSB) |
-                           (11u << HSTX_CTRL_BIT0_SEL_N_LSB);
-    hstx_ctrl_hw->bit[5] = (10u << HSTX_CTRL_BIT0_SEL_P_LSB) |
                            (11u << HSTX_CTRL_BIT0_SEL_N_LSB) |
                            HSTX_CTRL_BIT0_INV_BITS;
+    hstx_ctrl_hw->bit[5] = (10u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (11u << HSTX_CTRL_BIT0_SEL_N_LSB);
 
     hstx_ctrl_hw->bit[6] = (20u << HSTX_CTRL_BIT0_SEL_P_LSB) |
-                           (21u << HSTX_CTRL_BIT0_SEL_N_LSB);
-    hstx_ctrl_hw->bit[7] = (20u << HSTX_CTRL_BIT0_SEL_P_LSB) |
                            (21u << HSTX_CTRL_BIT0_SEL_N_LSB) |
                            HSTX_CTRL_BIT0_INV_BITS;
+    hstx_ctrl_hw->bit[7] = (20u << HSTX_CTRL_BIT0_SEL_P_LSB) |
+                           (21u << HSTX_CTRL_BIT0_SEL_N_LSB);
 
     /* RGB565 layout (bits 15..0): RRRRR GGGGGG BBBBB.
      * The HSTX TMDS encoder reads each lane starting at bit 7 after the

@@ -10,16 +10,21 @@
  *   HSTX clk     = sys_clk / 2 = 126 MHz
  *   serial rate  = HSTX clk × 2 (DDR, csr.shift = 2 bits/cycle) = 252 Mbps/lane
  *
- * Pin map (HSTX is hard-wired to GP12..GP19 on RP2350):
+ * Pin map (HSTX is hard-wired to GP12..GP19 on RP2350).  The polarity
+ * assignment matches the microNES v0.1 PCB layout, where the LOWER-
+ * numbered GP in each pair drives the negative side of the differential:
  *
- *   GP12 — TMDS clock+        |  Differential pair pinout follows the
- *   GP13 — TMDS clock-        |  Pico-DVI-Sock convention.  Wire to an
- *   GP14 — TMDS data 0 (B)+   |  HDMI breakout with 4 differential pairs;
- *   GP15 — TMDS data 0 (B)-   |  series resistors / matched-impedance
- *   GP16 — TMDS data 1 (G)+   |  routing required for 252 Mbps.
- *   GP17 — TMDS data 1 (G)-   |
- *   GP18 — TMDS data 2 (R)+   |
- *   GP19 — TMDS data 2 (R)-   |
+ *   GP12 — TMDS clock-        |  HDMI pin 12  (CK-)
+ *   GP13 — TMDS clock+        |  HDMI pin 10  (CK+)
+ *   GP14 — TMDS data 0 (B)-   |  HDMI pin 9
+ *   GP15 — TMDS data 0 (B)+   |  HDMI pin 7
+ *   GP16 — TMDS data 1 (G)-   |  HDMI pin 6
+ *   GP17 — TMDS data 1 (G)+   |  HDMI pin 4
+ *   GP18 — TMDS data 2 (R)-   |  HDMI pin 3
+ *   GP19 — TMDS data 2 (R)+   |  HDMI pin 1
+ *
+ * Each pair has 270 Ω series resistors on-board for TMDS-compliant
+ * source termination.
  *
  * Frame source: micrones renders the NES picture into its 256x240 indexed
  * framebuffer.  This module owns:

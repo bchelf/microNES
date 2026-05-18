@@ -398,13 +398,25 @@ needs 14.318182 MHz exactly, which only works at 315 / 22 or 157.5 / 11.
 
 ### Pin Map
 
-HSTX is hard-wired to GP12..GP19 on RP2350.  Pinout follows the
-Pico-DVI-Sock convention (clock pair on the lowest two pins):
+HSTX is hard-wired to GP12..GP19 on RP2350.  The microNES v0.1 PCB
+layout puts the **negative** signal of each pair on the lower-numbered
+GP (this is the opposite of the Pico-DVI-Sock convention).  The
+`bit[N]` register layout in `video_hstx.c` applies `INV` to the even-
+indexed entries to match.
 
-- GP12 / GP13 — TMDS clock+ / clock-
-- GP14 / GP15 — TMDS data 0 (B)+ / -
-- GP16 / GP17 — TMDS data 1 (G)+ / -
-- GP18 / GP19 — TMDS data 2 (R)+ / -
+| RP2350 GP | HDMI pin | Signal |
+|-----------|----------|--------|
+| GP12      | 12       | CK−    |
+| GP13      | 10       | CK+    |
+| GP14      | 9        | D0− (Blue−)  |
+| GP15      | 7        | D0+ (Blue+)  |
+| GP16      | 6        | D1− (Green−) |
+| GP17      | 4        | D1+ (Green+) |
+| GP18      | 3        | D2− (Red−)   |
+| GP19      | 1        | D2+ (Red+)   |
+
+Each pair has 270 Ω series resistors on the v0.1 PCB for TMDS-compliant
+source termination.
 
 Default PWM audio pin GP16 collides with HSTX, so the HDMI build remaps
 audio carrier to **GP10** via the `MICRONES_PICO_HDMI_AUDIO_PIN` CMake
