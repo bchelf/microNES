@@ -58,26 +58,23 @@ static inline void video_ntsc_program_init(
 
     // Claim and configure GPIO pins.
     //
-    // Drive strength + slew on the DAC pins is a tuning decision that depends
-    // on the board:
+    // Drive strength + slew on the DAC pins is a tuning decision that
+    // depends on the board:
     //   - Breadboard (long jumper wires): 4 mA + slow slew, picked to limit
-    //     ringing/overshoot.  Adequate because the jumper wires add ~ohms of
-    //     series R and pF of capacitance that softens edges further.
-    //   - PCB v0.1 (short clean traces): the bit-3 resistor is 120 Ω, so a
-    //     full-scale step pulls ~12 mA through the GPIO.  At the 4 mA drive
-    //     setting the output saturates partway and the DAC code slews
-    //     instead of stepping — visually that's blurry/jittery bars and
-    //     unreadable small text.  12 mA + fast slew gives the GPIO the
-    //     headroom to deliver the current the resistor network actually wants.
+    //     ringing on the wires.
+    //   - PCB v0.1 (short clean traces): start at the same 4 mA but with
+    //     fast slew, because the breadboard's "slow" setting was specifically
+    //     compensating for jumper-wire L/C and the PCB doesn't need it.
+    //     We tried 12 mA + fast slew first — it produced ringing /
+    //     ground-bounce that the TV mis-read as spurious sync edges,
+    //     compressing the picture horizontally and rolling vertically.
+    //     If 4 mA + fast turns out under-driven, step up cautiously:
+    //     8 mA next, only 12 mA as a last resort.
     //
     // Both knobs are overridable from the build so we don't lose the
-    // breadboard tuning.
+    // breadboard tuning or block experimentation.
 #ifndef MICRONES_VIDEO_DAC_DRIVE_STRENGTH
-#  ifdef MICRONES_BOARD_V0_1
-#    define MICRONES_VIDEO_DAC_DRIVE_STRENGTH GPIO_DRIVE_STRENGTH_12MA
-#  else
-#    define MICRONES_VIDEO_DAC_DRIVE_STRENGTH GPIO_DRIVE_STRENGTH_4MA
-#  endif
+#  define MICRONES_VIDEO_DAC_DRIVE_STRENGTH GPIO_DRIVE_STRENGTH_4MA
 #endif
 #ifndef MICRONES_VIDEO_DAC_SLEW_RATE
 #  ifdef MICRONES_BOARD_V0_1
