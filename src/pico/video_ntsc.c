@@ -40,6 +40,7 @@
  */
 
 #include "clock_config.h"
+#include "runtime_config.h"
 #include "video_ntsc.h"
 #include "video_ntsc.pio.h"
 #include "core1_video.h"
@@ -50,6 +51,7 @@
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/sync.h"
+#include "hardware/clocks.h"
 #include "pico/stdlib.h"
 
 #include <math.h>
@@ -143,6 +145,10 @@ static uint8_t s_dac_lut[64][4];
 #define MICRONES_CHROMA_ENABLED 1
 #endif
 
+#ifndef MICRONES_ANALOG_VIDEO_DIAG
+#define MICRONES_ANALOG_VIDEO_DIAG 0
+#endif
+
 /* -------------------------------------------------------------------------
  * Per-brightness-row chroma scaling (numerator / 8).
  *
@@ -191,6 +197,26 @@ void video_ntsc_precompute_palette(const uint8_t *palette_to_luma, int palette_s
             s_dac_lut[c][phase] = (uint8_t)dac;
         }
     }
+
+#if MICRONES_ANALOG_VIDEO_DIAG
+    printf("ntsc diag: palette precompute size=%d chroma=%u\n",
+           palette_size,
+           (unsigned)MICRONES_CHROMA_ENABLED);
+    for (int row = 0; row < 4; ++row) {
+        printf("ntsc diag: palette row %d:", row);
+        for (int hue = 0; hue < 16; ++hue) {
+            int c = row * 16 + hue;
+            printf(" %02x=%u/%x%x%x%x",
+                   c,
+                   (unsigned)((c < palette_size) ? palette_to_luma[c] : 0),
+                   (unsigned)s_dac_lut[c][0],
+                   (unsigned)s_dac_lut[c][1],
+                   (unsigned)s_dac_lut[c][2],
+                   (unsigned)s_dac_lut[c][3]);
+        }
+        printf("\n");
+    }
+#endif
 }
 
 /* =========================================================================
@@ -239,11 +265,102 @@ static volatile int  s_idle_buf         = 0;
 static volatile uint64_t s_frames_rendered    = 0;
 static volatile uint64_t s_swap_wait_us_total = 0;
 static volatile uint64_t s_swap_wait_us_max   = 0;
+static volatile uint64_t s_dma_irq0_count     = 0;
+static volatile uint64_t s_dma_irq1_count     = 0;
+static volatile uint64_t s_lines_rendered     = 0;
+static volatile uint64_t s_vsync_lines_rendered = 0;
+static volatile uint64_t s_blank_lines_rendered = 0;
+static volatile uint64_t s_active_lines_rendered = 0;
+static volatile uint64_t s_render_us_total    = 0;
+static volatile uint32_t s_render_us_max      = 0;
+static volatile uint32_t s_render_over_50us_count = 0;
+static volatile uint32_t s_render_over_63us_count = 0;
+static volatile uint32_t s_render_over_100us_count = 0;
+static volatile uint32_t s_render_us_max_line = 0;
+static volatile uint32_t s_render_us_max_active_y = 0xffffffffu;
+static volatile uint32_t s_render_us_max_kind = 0;
+static volatile uint32_t s_display_line_snapshot = 0;
+static volatile uint32_t s_render_line_snapshot = 0;
+static volatile uint32_t s_queue_level_snapshot = 0;
+static volatile uint32_t s_queue_level_max    = 0;
+static volatile uint32_t s_scanline_y_mismatch_count = 0;
+
+static const uint32_t s_probe_y[4] = { 0u, 32u, 120u, 239u };
+static volatile uint32_t s_probe_slot_y[4];
+static volatile uint32_t s_probe_hash[4];
+static volatile uint32_t s_probe_nonblack[4];
+static volatile uint8_t s_probe_min[4];
+static volatile uint8_t s_probe_max[4];
 
 /* =========================================================================
  * Test-pattern flag (set by video_ntsc_build_test_pattern_frame)
  * ========================================================================= */
 static bool s_test_pattern_filled = false;
+
+enum {
+    VIDEO_RENDER_KIND_VSYNC = 1u,
+    VIDEO_RENDER_KIND_BLANK = 2u,
+    VIDEO_RENDER_KIND_ACTIVE = 3u,
+};
+
+static uint32_t diag_render_kind_for_line(int ntsc_line) {
+    if (ntsc_line < (int)VIDEO_VSYNC_LINES) {
+        return VIDEO_RENDER_KIND_VSYNC;
+    }
+    if (ntsc_line < (int)(VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES) ||
+        ntsc_line >= (int)VIDEO_ACTIVE_END_LINE) {
+        return VIDEO_RENDER_KIND_BLANK;
+    }
+    return VIDEO_RENDER_KIND_ACTIVE;
+}
+
+static void diag_record_queue_level(uint32_t level) {
+    s_queue_level_snapshot = level;
+    if (level > s_queue_level_max) {
+        s_queue_level_max = level;
+    }
+}
+
+static void diag_record_active_scanline(int active_y, const ScanlineQueueSlot *slot) {
+    if (slot->y != (uint16_t)active_y) {
+        ++s_scanline_y_mismatch_count;
+    }
+
+#if MICRONES_ANALOG_VIDEO_DIAG
+    int probe = -1;
+    for (int i = 0; i < 4; ++i) {
+        if ((uint32_t)active_y == s_probe_y[i]) {
+            probe = i;
+            break;
+        }
+    }
+    if (probe < 0) {
+        return;
+    }
+
+    uint32_t hash = 2166136261u;
+    uint32_t nonblack = 0;
+    uint8_t min_pixel = 0xffu;
+    uint8_t max_pixel = 0x00u;
+    for (int x = 0; x < 256; ++x) {
+        uint8_t pixel = slot->pixels[x] & 0x3fu;
+        hash ^= pixel;
+        hash *= 16777619u;
+        if (pixel != 0u) ++nonblack;
+        if (pixel < min_pixel) min_pixel = pixel;
+        if (pixel > max_pixel) max_pixel = pixel;
+    }
+
+    s_probe_slot_y[probe] = slot->y;
+    s_probe_hash[probe] = hash;
+    s_probe_nonblack[probe] = nonblack;
+    s_probe_min[probe] = min_pixel;
+    s_probe_max[probe] = max_pixel;
+#else
+    (void)active_y;
+    (void)slot;
+#endif
+}
 
 /* =========================================================================
  * render_scanline_composite()
@@ -251,7 +368,7 @@ static bool s_test_pattern_filled = false;
  * Packs 910 NTSC samples + 2 padding nibbles into 114 uint32_t words.
  * 8 nibbles per word, MSB first: nibble 0 → bits[31:28], nibble 7 → bits[3:0].
  * ========================================================================= */
-void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active) {
+void MICRONES_HOT_FUNC(render_scanline_composite)(uint32_t *buf, const uint8_t *pixels, bool active) {
     uint32_t word      = 0;
     int      nib_count = 0;
 
@@ -340,16 +457,16 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
  * Private scanline renderers
  * ========================================================================= */
 
-static void render_vsync_line(uint32_t *buf) {
+static void MICRONES_HOT_FUNC(render_vsync_line)(uint32_t *buf) {
     /* All-sync: DAC code 0 for entire line.  GP4 stays HIGH (Core 1). */
     memset(buf, 0, VIDEO_WORDS_PER_LINE * sizeof(uint32_t));
 }
 
-static void render_blank_line(uint32_t *buf) {
+static void MICRONES_HOT_FUNC(render_blank_line)(uint32_t *buf) {
     render_scanline_composite(buf, NULL, false);
 }
 
-static void render_test_scanline(uint32_t *buf) {
+static void MICRONES_HOT_FUNC(render_test_scanline)(uint32_t *buf) {
     /* 8 vertical bars across the active region — no Core 1 needed.
      *
      * Each bar is four pre-computed DAC codes, one per subcarrier phase
@@ -417,16 +534,23 @@ static void render_test_scanline(uint32_t *buf) {
 #undef EMIT_T
 }
 
-static void render_ntsc_line(int ntsc_line, uint32_t *buf, ScanlineQueue *queue) {
+static void MICRONES_HOT_FUNC(render_ntsc_line)(int ntsc_line, uint32_t *buf, ScanlineQueue *queue) {
+    ++s_lines_rendered;
     if (ntsc_line < (int)VIDEO_VSYNC_LINES) {
+        ++s_vsync_lines_rendered;
         render_vsync_line(buf);
     } else if (ntsc_line < (int)(VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES) ||
                ntsc_line >= (int)VIDEO_ACTIVE_END_LINE) {
+        ++s_blank_lines_rendered;
         render_blank_line(buf);
     } else {
         int active_y = ntsc_line - (int)VIDEO_ACTIVE_START_LINE;
         ScanlineQueueSlot slot;
+        uint32_t level = queue->head - queue->tail;
+        diag_record_queue_level(level);
         scanline_queue_pop_blocking(queue, &slot);
+        ++s_active_lines_rendered;
+        diag_record_active_scanline(active_y, &slot);
         render_scanline_composite(buf, slot.pixels, true);
         if (active_y == (int)VIDEO_ACTIVE_LINES - 1) {
             s_frames_rendered++;
@@ -438,7 +562,7 @@ static void render_ntsc_line(int ntsc_line, uint32_t *buf, ScanlineQueue *queue)
  * DMA helpers
  * ========================================================================= */
 
-static void dma_rearm(int buf_idx) {
+static void MICRONES_HOT_FUNC(dma_rearm)(int buf_idx) {
     /*
      * Reset READ_ADDR and TRANS_COUNT without triggering.  The channel will
      * be triggered automatically when the other channel chains to it.
@@ -507,10 +631,11 @@ static void setup_dma(void) {
 /* =========================================================================
  * Core 0  DMA IRQ_0  handler  (test-pattern / fallback re-arm)
  * ========================================================================= */
-static void __isr dma_irq0_handler(void) {
+static void __isr MICRONES_HOT_FUNC(dma_irq0_handler)(void) {
     uint32_t mask   = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
     uint32_t status = dma_hw->ints0 & mask;
     dma_hw->ints0   = status;   /* clear all triggered bits in one write */
+    if (status != 0u) ++s_dma_irq0_count;
     if (status & (1u << s_dma_chan[0])) dma_rearm(0);
     if (status & (1u << s_dma_chan[1])) dma_rearm(1);
 }
@@ -520,13 +645,14 @@ static void __isr dma_irq0_handler(void) {
  * ========================================================================= */
 static volatile uint32_t s_irq1_fire_count = 0;
 
-static void __isr dma_irq1_handler(void) {
+static void __isr MICRONES_HOT_FUNC(dma_irq1_handler)(void) {
     /*
      * The DMA chain has already started the next channel.  Raise GP4
      * immediately for the new line's horizontal sync pulse.
      * IRQ latency on Cortex-M33 ≈ 12 cycles; error < 1 sample (22 cycles).
      */
     s_irq1_fire_count++;
+    s_dma_irq1_count++;
     MICRONES_SYNC_CLAMP_ENGAGE();
 
     uint32_t mask   = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
@@ -566,6 +692,40 @@ void video_ntsc_init(void) {
     /* Register Core 0 IRQ_0 handler for the test-pattern / fallback path */
     irq_set_exclusive_handler(DMA_IRQ_0, dma_irq0_handler);
     irq_set_enabled(DMA_IRQ_0, true);
+
+#if MICRONES_ANALOG_VIDEO_DIAG
+    printf("ntsc diag: init board=%s sys=%lu clkdiv=%.6f dac_base=%u sync_gpio=%u chroma=%u words=%u lines=%u active_start=%u active_lines=%u\n",
+#if defined(MICRONES_BOARD_V0_1)
+           "v0_1",
+#else
+           "breadboard",
+#endif
+           (unsigned long)clock_get_hz(clk_sys),
+           (double)MICRONES_PIO_CLKDIV,
+           (unsigned)MICRONES_VIDEO_PIN_BASE,
+           (unsigned)MICRONES_VIDEO_SYNC_GPIO,
+           (unsigned)MICRONES_CHROMA_ENABLED,
+           (unsigned)VIDEO_WORDS_PER_LINE,
+           (unsigned)VIDEO_LINES_PER_FRAME,
+           (unsigned)VIDEO_ACTIVE_START_LINE,
+           (unsigned)VIDEO_ACTIVE_LINES);
+    printf("ntsc diag: dma ch0=%u ch1=%u pio=%u sm=%u offset=%u sync_func=%u sync_level=%u\n",
+           (unsigned)s_dma_chan[0],
+           (unsigned)s_dma_chan[1],
+           0u,
+           (unsigned)s_sm,
+           (unsigned)s_pio_offset,
+           (unsigned)gpio_get_function(MICRONES_VIDEO_SYNC_GPIO),
+           (unsigned)gpio_get(MICRONES_VIDEO_SYNC_GPIO));
+    for (uint i = 0; i < MICRONES_VIDEO_PIN_COUNT; ++i) {
+        uint pin = MICRONES_VIDEO_PIN_BASE + i;
+        printf("ntsc diag: dac pin[%u]=GP%u func=%u level=%u\n",
+               (unsigned)i,
+               (unsigned)pin,
+               (unsigned)gpio_get_function(pin),
+               (unsigned)gpio_get(pin));
+    }
+#endif
 }
 
 void video_ntsc_start(void) {
@@ -581,6 +741,16 @@ void video_ntsc_start(void) {
     pio_sm_set_enabled(s_pio, s_sm, true);
     gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);   /* GP4 LOW for test-pattern mode */
     dma_channel_start(s_dma_chan[0]);        /* A starts, chains to B, B to A… */
+
+#if MICRONES_ANALOG_VIDEO_DIAG
+    printf("ntsc diag: start test_pattern_filled=%u sm_enabled=%u ch0_busy=%u ch1_busy=%u irq0_en=0x%08lx irq1_en=0x%08lx\n",
+           s_test_pattern_filled ? 1u : 0u,
+           (unsigned)((s_pio->ctrl >> (PIO_CTRL_SM_ENABLE_LSB + s_sm)) & 1u),
+           (unsigned)dma_channel_is_busy(s_dma_chan[0]),
+           (unsigned)dma_channel_is_busy(s_dma_chan[1]),
+           (unsigned long)dma_hw->inte0,
+           (unsigned long)dma_hw->inte1);
+#endif
 }
 
 void video_ntsc_build_test_pattern_frame(void) {
@@ -619,6 +789,40 @@ void video_ntsc_perf_get(MicronesVideoNtscPerfStats *out) {
     out->swap_wait_events   = s_frames_rendered;
     out->swap_wait_us_total = s_swap_wait_us_total;
     out->swap_wait_us_max   = s_swap_wait_us_max;
+    out->frames_rendered    = s_frames_rendered;
+    out->irq0_count         = s_dma_irq0_count;
+    out->irq1_count         = s_dma_irq1_count;
+    out->lines_rendered     = s_lines_rendered;
+    out->vsync_lines_rendered = s_vsync_lines_rendered;
+    out->blank_lines_rendered = s_blank_lines_rendered;
+    out->active_lines_rendered = s_active_lines_rendered;
+    out->render_us_total    = s_render_us_total;
+    out->render_us_max      = s_render_us_max;
+    out->render_over_50us_count = s_render_over_50us_count;
+    out->render_over_63us_count = s_render_over_63us_count;
+    out->render_over_100us_count = s_render_over_100us_count;
+    out->render_us_max_line = s_render_us_max_line;
+    out->render_us_max_active_y = s_render_us_max_active_y;
+    out->render_us_max_kind = s_render_us_max_kind;
+    out->display_line       = s_display_line_snapshot;
+    out->render_line        = s_render_line_snapshot;
+    out->idle_buf           = (uint32_t)s_idle_buf;
+    out->queue_level        = s_queue_level_snapshot;
+    out->queue_level_max    = s_queue_level_max;
+    out->queue_producer_stall_count = 0;
+    out->queue_producer_stall_us_total = 0;
+    out->queue_consumer_wait_count = 0;
+    out->queue_consumer_wait_us_total = 0;
+    out->queue_consumer_wait_us_max = 0;
+    out->scanline_y_mismatch_count = s_scanline_y_mismatch_count;
+    for (int i = 0; i < 4; ++i) {
+        out->probe_y[i] = s_probe_y[i];
+        out->probe_slot_y[i] = s_probe_slot_y[i];
+        out->probe_hash[i] = s_probe_hash[i];
+        out->probe_nonblack[i] = s_probe_nonblack[i];
+        out->probe_min[i] = s_probe_min[i];
+        out->probe_max[i] = s_probe_max[i];
+    }
 }
 
 /* =========================================================================
@@ -640,7 +844,7 @@ void video_ntsc_perf_get(MicronesVideoNtscPerfStats *out) {
  * active-line render takes ~12,000-15,000 cycles (well within budget).
  * ========================================================================= */
 
-void video_ntsc_core1_entry(void) {
+void MICRONES_HOT_FUNC(video_ntsc_core1_entry)(void) {
     uint32_t ch_mask = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
 
     printf("[c1] entry: chan0=%u chan1=%u ch_mask=0x%08x\n",
@@ -731,7 +935,26 @@ void video_ntsc_core1_entry(void) {
         }
 
         /* ---- Render render_line into the now-idle buffer ---- */
+#if MICRONES_ANALOG_VIDEO_DIAG
+        uint64_t render_started_us = time_us_64();
+#endif
         render_ntsc_line(render_line, scanline_buf[s_idle_buf], queue);
+#if MICRONES_ANALOG_VIDEO_DIAG
+        uint32_t render_us = (uint32_t)(time_us_64() - render_started_us);
+        s_render_us_total += render_us;
+        if (render_us > 50u) ++s_render_over_50us_count;
+        if (render_us > 63u) ++s_render_over_63us_count;
+        if (render_us > 100u) ++s_render_over_100us_count;
+        if (render_us > s_render_us_max) {
+            s_render_us_max = render_us;
+            s_render_us_max_line = (uint32_t)render_line;
+            s_render_us_max_kind = diag_render_kind_for_line(render_line);
+            s_render_us_max_active_y =
+                (s_render_us_max_kind == VIDEO_RENDER_KIND_ACTIVE)
+                    ? (uint32_t)(render_line - (int)VIDEO_ACTIVE_START_LINE)
+                    : 0xffffffffu;
+        }
+#endif
 
         /*
          * Re-arm the idle channel.  It will be triggered by chain when the
@@ -746,5 +969,7 @@ void video_ntsc_core1_entry(void) {
 
         render_line++;
         if (render_line >= (int)VIDEO_LINES_PER_FRAME) render_line = 0;
+        s_display_line_snapshot = (uint32_t)display_line;
+        s_render_line_snapshot = (uint32_t)render_line;
     }
 }

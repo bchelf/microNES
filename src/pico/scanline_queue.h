@@ -22,6 +22,9 @@ typedef struct {
     volatile uint32_t tail;               // incremented by consumer (core 1)
     uint32_t producer_stall_count;        // times core 0 blocked on full queue
     uint64_t producer_stall_us_total;     // total us core 0 spent stalled
+    uint32_t consumer_wait_count;         // times core 1 blocked on empty queue
+    uint64_t consumer_wait_us_total;      // total us core 1 spent waiting
+    uint32_t consumer_wait_us_max;        // longest single empty-queue wait
 } ScanlineQueue;
 
 void scanline_queue_init(ScanlineQueue *q);

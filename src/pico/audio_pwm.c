@@ -27,6 +27,10 @@
 #include "hardware/irq.h"
 #include "hardware/pwm.h"
 
+#ifndef MICRONES_AUDIO_DISABLE
+#define MICRONES_AUDIO_DISABLE 0
+#endif
+
 /* =========================================================================
  * PWM parameters
  * ========================================================================= */
@@ -97,6 +101,10 @@ static void __isr pwm_audio_irq_handler(void) {
 void audio_pwm_init(uint32_t sample_rate) {
     (void)sample_rate;   /* actual rate is fixed by clock_config.h for this target */
 
+#if MICRONES_AUDIO_DISABLE
+    return;
+#endif
+
     /* --- Carrier PWM on MICRONES_AUDIO_PIN (free-running, ~1.23 MHz, 8-bit) - */
     gpio_set_function(MICRONES_AUDIO_PIN, GPIO_FUNC_PWM);
     s_audio_slice = pwm_gpio_to_slice_num(MICRONES_AUDIO_PIN);
@@ -136,6 +144,10 @@ void audio_pwm_init(uint32_t sample_rate) {
  * ========================================================================= */
 
 size_t audio_pwm_push_samples(const int16_t *samples, size_t count) {
+#if MICRONES_AUDIO_DISABLE
+    (void)samples;
+    return count;
+#else
     size_t   written = 0;
     uint32_t tail    = audio_buf_tail;
 
@@ -151,6 +163,7 @@ size_t audio_pwm_push_samples(const int16_t *samples, size_t count) {
 
     audio_buf_tail = tail;
     return written;
+#endif
 }
 
 /* =========================================================================
@@ -158,11 +171,19 @@ size_t audio_pwm_push_samples(const int16_t *samples, size_t count) {
  * ========================================================================= */
 
 uint32_t audio_pwm_underrun_count(void) {
+#if MICRONES_AUDIO_DISABLE
+    return 0;
+#else
     return audio_underruns;
+#endif
 }
 
 uint32_t audio_pwm_buffer_level(void) {
+#if MICRONES_AUDIO_DISABLE
+    return 0;
+#else
     uint32_t head = audio_buf_head;
     uint32_t tail = audio_buf_tail;
     return (tail - head) & (AUDIO_BUF_SIZE - 1u);
+#endif
 }

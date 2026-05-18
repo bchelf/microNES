@@ -276,6 +276,14 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 target_compile_definitions(${target_name} PRIVATE
                     MICRONES_PIO_CLKDIV=${MICRONES_PIO_CLKDIV})
             endif ()
+            if (DEFINED MICRONES_SYS_CLK_MHZ)
+                target_compile_definitions(${target_name} PRIVATE
+                    MICRONES_SYS_CLK_MHZ=${MICRONES_SYS_CLK_MHZ})
+            endif ()
+            if (DEFINED MICRONES_AUDIO_DISABLE)
+                target_compile_definitions(${target_name} PRIVATE
+                    MICRONES_AUDIO_DISABLE=${MICRONES_AUDIO_DISABLE})
+            endif ()
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_ANALOG=1)
 
             if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")

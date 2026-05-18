@@ -20,6 +20,10 @@
 
 #include <stdio.h>
 
+#ifndef MICRONES_ANALOG_VIDEO_DIAG
+#define MICRONES_ANALOG_VIDEO_DIAG 0
+#endif
+
 typedef struct {
     uint64_t started_us;
     uint64_t frames;
@@ -111,6 +115,65 @@ static void pico_fps_logger_maybe_report(PicoFpsLogger *logger,
            present_fps,
            (unsigned long)pico_audio_backend_buffer_level(),
            (unsigned long)pico_audio_backend_underrun_count());
+
+#if defined(MICRONES_PICO_VIDEO_BACKEND_ANALOG) && MICRONES_ANALOG_VIDEO_DIAG
+    printf("ntsc diag: vf=%llu irq0=%llu irq1=%llu lines=%llu a=%llu b=%llu v=%llu dl=%lu rl=%lu idle=%lu q=%lu qmax=%lu qprod=%lu/%lluus qcons=%lu/%lluus max=%luus mism=%lu render=%.2fus max=%luus late50=%lu late63=%lu late100=%lu maxline=%lu maxy=%ld kind=%lu\n",
+           (unsigned long long)stats.video_frames_rendered,
+           (unsigned long long)stats.video_irq0_count,
+           (unsigned long long)stats.video_irq1_count,
+           (unsigned long long)stats.video_lines_rendered,
+           (unsigned long long)stats.video_active_lines_rendered,
+           (unsigned long long)stats.video_blank_lines_rendered,
+           (unsigned long long)stats.video_vsync_lines_rendered,
+           (unsigned long)stats.video_display_line,
+           (unsigned long)stats.video_render_line,
+           (unsigned long)stats.video_idle_buf,
+           (unsigned long)stats.queue_level,
+           (unsigned long)stats.queue_level_max,
+           (unsigned long)stats.queue_stall_count,
+           (unsigned long long)stats.queue_stall_us_total,
+           (unsigned long)stats.queue_consumer_wait_count,
+           (unsigned long long)stats.queue_consumer_wait_us_total,
+           (unsigned long)stats.queue_consumer_wait_us_max,
+           (unsigned long)stats.scanline_y_mismatch_count,
+           stats.video_lines_rendered > 0
+               ? (double)stats.video_render_us_total / (double)stats.video_lines_rendered
+               : 0.0,
+           (unsigned long)stats.video_render_us_max,
+           (unsigned long)stats.video_render_over_50us_count,
+           (unsigned long)stats.video_render_over_63us_count,
+           (unsigned long)stats.video_render_over_100us_count,
+           (unsigned long)stats.video_render_us_max_line,
+           stats.video_render_us_max_active_y == 0xffffffffu
+               ? -1L
+               : (long)stats.video_render_us_max_active_y,
+           (unsigned long)stats.video_render_us_max_kind);
+    printf("ntsc probe: y%lu slot=%lu hash=%08lx nb=%lu range=%02x-%02x | y%lu slot=%lu hash=%08lx nb=%lu range=%02x-%02x | y%lu slot=%lu hash=%08lx nb=%lu range=%02x-%02x | y%lu slot=%lu hash=%08lx nb=%lu range=%02x-%02x\n",
+           (unsigned long)stats.probe_y[0],
+           (unsigned long)stats.probe_slot_y[0],
+           (unsigned long)stats.probe_hash[0],
+           (unsigned long)stats.probe_nonblack[0],
+           (unsigned)stats.probe_min[0],
+           (unsigned)stats.probe_max[0],
+           (unsigned long)stats.probe_y[1],
+           (unsigned long)stats.probe_slot_y[1],
+           (unsigned long)stats.probe_hash[1],
+           (unsigned long)stats.probe_nonblack[1],
+           (unsigned)stats.probe_min[1],
+           (unsigned)stats.probe_max[1],
+           (unsigned long)stats.probe_y[2],
+           (unsigned long)stats.probe_slot_y[2],
+           (unsigned long)stats.probe_hash[2],
+           (unsigned long)stats.probe_nonblack[2],
+           (unsigned)stats.probe_min[2],
+           (unsigned)stats.probe_max[2],
+           (unsigned long)stats.probe_y[3],
+           (unsigned long)stats.probe_slot_y[3],
+           (unsigned long)stats.probe_hash[3],
+           (unsigned long)stats.probe_nonblack[3],
+           (unsigned)stats.probe_min[3],
+           (unsigned)stats.probe_max[3]);
+#endif
 
     logger->started_us = now_us;
     logger->frames = adapter->rendered_frames;

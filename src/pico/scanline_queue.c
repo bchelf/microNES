@@ -1,5 +1,7 @@
 #include "scanline_queue.h"
 
+#include "runtime_config.h"
+
 #include "pico/time.h"
 #include "pico/stdlib.h"
 
@@ -20,9 +22,12 @@ void scanline_queue_init(ScanlineQueue *q) {
     q->tail = 0;
     q->producer_stall_count = 0;
     q->producer_stall_us_total = 0;
+    q->consumer_wait_count = 0;
+    q->consumer_wait_us_total = 0;
+    q->consumer_wait_us_max = 0;
 }
 
-void scanline_queue_push(ScanlineQueue *q, const uint8_t *pixels, uint16_t y) {
+void MICRONES_HOT_FUNC(scanline_queue_push)(ScanlineQueue *q, const uint8_t *pixels, uint16_t y) {
     uint32_t head = q->head;
     uint32_t next_head = head + 1u;
     uint64_t stall_start_us = 0;
@@ -51,12 +56,24 @@ void scanline_queue_push(ScanlineQueue *q, const uint8_t *pixels, uint16_t y) {
     MICRONES_SEV();
 }
 
-void scanline_queue_pop_blocking(ScanlineQueue *q, ScanlineQueueSlot *out_slot) {
+void MICRONES_HOT_FUNC(scanline_queue_pop_blocking)(ScanlineQueue *q, ScanlineQueueSlot *out_slot) {
     uint32_t tail = q->tail;
+    uint64_t wait_start_us = 0;
 
     // Wait until at least one slot is available.
     while (q->head == tail) {
+        if (wait_start_us == 0u) {
+            wait_start_us = time_us_64();
+            ++q->consumer_wait_count;
+        }
         MICRONES_WFE();
+    }
+    if (wait_start_us != 0u) {
+        uint64_t waited_us = time_us_64() - wait_start_us;
+        q->consumer_wait_us_total += waited_us;
+        if (waited_us > q->consumer_wait_us_max) {
+            q->consumer_wait_us_max = (uint32_t)waited_us;
+        }
     }
 
     // Barrier: ensure head read happened before we read the slot data.
