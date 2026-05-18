@@ -244,18 +244,11 @@ int main(void) {
 
         printf("pico init: app shell\n");
         app_shell_init(&shell, &rom_source, &emulator_video.nes);
-        if (rom_source.count != NULL && rom_source.count(&rom_source) > 0u) {
-            const RomSourceEntry *first = rom_source.entry != NULL
-                ? rom_source.entry(&rom_source, 0u)
-                : NULL;
-            printf("pico init: autostart first SD ROM: %s\n",
-                   first != NULL ? first->name : "(unknown)");
-            if (!app_shell_launch_index(&shell, 0u)) {
-                printf("pico init: autostart failed: %s\n", app_shell_status(&shell));
-            }
-        } else {
-            printf("pico init: autostart skipped, no SD ROMs listed\n");
-        }
+        /* Boot straight into the ROM picker rather than auto-launching the
+         * first SD ROM.  Useful for debugging: the menu is a small, static,
+         * known framebuffer rendered through the same video pipeline, so
+         * what we see there isolates the render path from whatever's
+         * happening inside a running game. */
 
         printf("pico init: video start\n");
         pico_video_backend_start_emulator();
