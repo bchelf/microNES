@@ -350,8 +350,43 @@ static void render_blank_line(uint32_t *buf) {
 }
 
 static void render_test_scanline(uint32_t *buf) {
-    /* 8 luma bars across the active region — no Core 1 needed */
-    static const uint8_t bar_codes[8] = { 13, 11, 9, 7, 6, 5, 4, 4 };
+    /* 8 vertical bars across the active region — no Core 1 needed.
+     *
+     * Each bar is four pre-computed DAC codes, one per subcarrier phase
+     * (the subcarrier is sample_rate / 4 = 3.579545 MHz, so successive
+     * active-video samples cycle through phases 0, 1, 2, 3).  The burst
+     * pattern {1, 4, 7, 4} sets phase 0 = peak-negative, so the chroma
+     * values in each bar are cosines of (phase × 90° − hue) around the
+     * bar's luma centre.
+     *
+     * With MICRONES_CHROMA_ENABLED=1 (default) the bars carry a
+     * SMPTE-ish colour sequence — White, Yellow, Cyan, Green, Magenta,
+     * Red, Blue, Black — useful for checking that the colour chain
+     * (burst phase, chroma decoder, TV lock) is healthy independent of
+     * the emulator's chroma_lut / s_dac_lut path.
+     *
+     * With chroma disabled the bars collapse to the original greyscale
+     * ramp so the same image is comparable to the legacy luma test. */
+#if MICRONES_CHROMA_ENABLED
+    static const uint8_t bar_dac[8][4] = {
+        /* phase  0   1   2   3                                       */
+        {       12, 12, 12, 12 },  /* 0: White    luma 12, no chroma  */
+        {       13,  9,  9, 13 },  /* 1: Yellow   luma 11, hue 315°   */
+        {        8, 12, 12,  8 },  /* 2: Cyan     luma 10, hue 135°   */
+        {        5,  8, 11,  8 },  /* 3: Green    luma  8, hue 180°   */
+        {       10,  7,  4,  7 },  /* 4: Magenta  luma  7, hue   0°   */
+        {        8,  8,  4,  4 },  /* 5: Red      luma  6, hue  45°   */
+        {        5,  8,  5,  2 },  /* 6: Blue     luma  5, hue  90°   */
+        {        4,  4,  4,  4 },  /* 7: Black    blank level         */
+    };
+#else
+    static const uint8_t bar_dac[8][4] = {
+        { 13, 13, 13, 13 },  { 11, 11, 11, 11 },
+        {  9,  9,  9,  9 },  {  7,  7,  7,  7 },
+        {  6,  6,  6,  6 },  {  5,  5,  5,  5 },
+        {  4,  4,  4,  4 },  {  4,  4,  4,  4 },
+    };
+#endif
 
     uint32_t word      = 0;
     int      nib_count = 0;
@@ -372,8 +407,9 @@ static void render_test_scanline(uint32_t *buf) {
          abs_s < VIDEO_ACTIVE_START; abs_s++)
         EMIT_T(VIDEO_DAC_BLANK);
     for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++) {
-        uint bar = (s * 8u) / VIDEO_ACTIVE_SAMPLES;
-        EMIT_T(bar_codes[bar]);
+        uint bar   = (s * 8u) / VIDEO_ACTIVE_SAMPLES;
+        uint phase = (VIDEO_ACTIVE_START + s) & 3u;
+        EMIT_T(bar_dac[bar][phase]);
     }
     for (uint i = 0; i < 38u; i++)  /* 36 front porch + 2 padding */
         EMIT_T(VIDEO_DAC_BLANK);
