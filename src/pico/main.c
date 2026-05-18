@@ -26,6 +26,24 @@ typedef struct {
     uint64_t presented;
 } PicoFpsLogger;
 
+/* Re-prints the key boot diagnostics (clock, board, video / audio backend)
+ * on a 5-second cadence so the user can still see the config even if they
+ * attached the serial monitor after the initial boot prints scrolled by.
+ * Pass UINT64_MAX in *last_us_inout the first time to force an immediate
+ * print; the helper updates *last_us_inout to the time it last printed. */
+static void pico_periodic_banner(uint64_t now_us, uint64_t *last_us_inout) {
+    const uint64_t interval_us = 5ull * 1000ull * 1000ull;
+    if (*last_us_inout != UINT64_MAX && (now_us - *last_us_inout) < interval_us) {
+        return;
+    }
+    printf("alive: sys=%lu Hz peri=%lu Hz video=%s audio=%s\n",
+           (unsigned long)clock_get_hz(clk_sys),
+           (unsigned long)clock_get_hz(clk_peri),
+           pico_video_backend_name(),
+           pico_audio_backend_name());
+    *last_us_inout = now_us;
+}
+
 static const char *sd_card_type_name(SdCardType type) {
     switch (type) {
     case SD_TYPE_SDV1: return "SDv1";
@@ -256,7 +274,9 @@ int main(void) {
         report_started_us = time_us_64();
 #endif
 
+        uint64_t banner_last_us = UINT64_MAX;
         while (true) {
+            pico_periodic_banner(time_us_64(), &banner_last_us);
             /* Pace emulation to the NTSC NES frame cadence (~16.639 ms,
              * 60.10 Hz) so wall-clock audio production stays aligned with the
              * 48 kHz backend. On the TFT path, capture the next frame
@@ -596,8 +616,12 @@ int main(void) {
 #endif /* MICRONES_ENABLE_PERF_LOG */
         }
         pico_video_backend_start_test_pattern();
-        while (true) {
-            tight_loop_contents();
+        {
+            uint64_t banner_last_us = UINT64_MAX;
+            while (true) {
+                pico_periodic_banner(time_us_64(), &banner_last_us);
+                tight_loop_contents();
+            }
         }
     }
 
@@ -613,7 +637,9 @@ int main(void) {
         static int16_t s_tone_sample;
         uint32_t tone_phase = 0;
         const uint32_t tone_step = (uint32_t)((440ull << 32) / audio_sample_rate);
+        uint64_t banner_last_us = UINT64_MAX;
         while (true) {
+            pico_periodic_banner(time_us_64(), &banner_last_us);
             s_tone_sample = (tone_phase & 0x80000000u) ? 16384 : -16384;
             if (pico_audio_backend_push_samples(&s_tone_sample, 1) == 1) {
                 tone_phase += tone_step;
