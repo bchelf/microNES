@@ -339,6 +339,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             )
             target_link_libraries(${target_name} PRIVATE
                 hardware_dma
+                pico_multicore
             )
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_HDMI=1)
             # HSTX hard-wired to GP12..GP19 on RP2350 with sys_clk=252 MHz

@@ -52,6 +52,7 @@
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
 #include "hardware/structs/hstx_fifo.h"
+#include "pico/multicore.h"
 #include "pico/platform.h"
 #include "pico/time.h"
 
@@ -206,14 +207,19 @@ static volatile uint32_t s_line_being_streamed = 0u; /* line index in V frame */
 
 static VideoHstxStats s_stats;
 static char s_last_error[96];
-static repeating_timer_t s_diag_timer;
 
 static void hstx_set_error(const char *msg) {
     snprintf(s_last_error, sizeof(s_last_error), "%s", msg);
 }
 
-/* Full diagnostic block — printed once at init.  Many lines, slow over
- * USB-CDC; safe at init because nothing time-critical is running yet. */
+/* Full diagnostic block — printed once at init and again every 5 s from
+ * the core-1 diagnostic thread (see below).
+ *
+ * Why core 1: USB-CDC printf is slow and its TX queue (~256 bytes) drops
+ * characters when overrun.  Printing 13+ lines from an IRQ context fills
+ * the queue faster than USB can drain it, so most lines get dropped.
+ * Running the same printf on core 1 in a regular thread context lets
+ * USB drain naturally between bursts — no character loss. */
 static void hstx_dump_diagnostics_full(const char *prefix) {
     printf("%s sys_clk_hz     = %lu\n",
            prefix, (unsigned long)clock_get_hz(clk_sys));
@@ -240,31 +246,17 @@ static void hstx_dump_diagnostics_full(const char *prefix) {
            prefix, (unsigned long long)s_stats.frames_presented);
 }
 
-/* Compact periodic diagnostic — single printf, runs from a timer IRQ.
- *
- * Keeping this short matters: the repeating_timer callback runs in IRQ
- * context, and USB-CDC printf can spend tens of ms per character if
- * the host queue is backed up.  Spending that long in an IRQ would
- * starve the per-line HSTX DMA-completion IRQ and stall the link.
- *
- * The four fields here are the minimum needed to answer "is HSTX
- * actually running right now":
- *   - clk_hstx_hz: clock domain still configured?
- *   - CSR        : HSTX peripheral still enabled?
- *   - line       : ISR firing (counter advancing between dumps)?
- *   - frames     : full frames being emitted? */
-static void hstx_dump_diagnostics_compact(void) {
-    printf("[hstx][5s] clk=%luHz csr=0x%08lx line=%lu frames=%llu\n",
-           (unsigned long)clock_get_hz(clk_hstx),
-           (unsigned long)hstx_ctrl_hw->csr,
-           (unsigned long)s_line_being_streamed,
-           (unsigned long long)s_stats.frames_presented);
-}
-
-static bool hstx_diag_timer_cb(repeating_timer_t *t) {
-    (void)t;
-    hstx_dump_diagnostics_compact();
-    return true; /* keep repeating */
+/* Core-1 diagnostic thread.  Sleeps 5 s, dumps the full register state,
+ * repeats.  Runs in a regular thread context so USB-CDC has room to
+ * drain between bursts — no truncation. */
+static void hstx_diag_core1_entry(void) {
+    /* Small initial delay so the very first dump from this thread
+     * doesn't collide with the init-time dump still draining out. */
+    sleep_ms(1000);
+    while (true) {
+        sleep_ms(5000);
+        hstx_dump_diagnostics_full("[hstx][5s]");
+    }
 }
 
 const char *video_hstx_last_error(void) {
@@ -622,13 +614,13 @@ bool video_hstx_init(void) {
     /* Dump the full state once after init completes... */
     hstx_dump_diagnostics_full("[hstx][init]");
 
-    /* ...and then again every 5 s so a terminal attached later still
-     * sees the live state.  Negative period = next callback fires 5 s
-     * AFTER the previous callback returns (rather than 5 s after the
-     * scheduled time), preventing drift if a callback runs long. */
-    add_repeating_timer_ms(-5000, hstx_diag_timer_cb, NULL, &s_diag_timer);
+    /* ...and then again every 5 s from a core-1 thread.  Running it on
+     * core 1 avoids USB-CDC truncation we'd hit if we printed from a
+     * timer IRQ on core 0.  Safe to use core 1 here because the HDMI
+     * backend doesn't otherwise need it (HSTX is fully DMA-driven). */
+    multicore_launch_core1(hstx_diag_core1_entry);
 
-    printf("[hstx] init: complete (DMA chain running, diag every 5s)\n");
+    printf("[hstx] init: complete (DMA chain running, diag every 5s on core 1)\n");
 
     return true;
 }
