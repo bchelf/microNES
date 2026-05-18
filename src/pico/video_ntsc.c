@@ -202,6 +202,24 @@ static uint s_pio_offset;
 static uint s_dma_chan[2];
 static dma_channel_config s_dma_cfg[2];
 
+/* Diagnostic: build with -DMICRONES_VIDEO_SYNC_CLAMP_DISABLE=1 to stop
+ * firing the GP28 MOSFET clamp entirely.  The pin is still configured as
+ * output LOW, so the MOSFET is held off and the sync tip falls back to
+ * whatever the resistor network produces with all four DAC bits at the
+ * GPIO low level (≈ ground for a clean PCB).  Useful for isolating
+ * whether a glitch in the clamp drive is causing false mid-line sync
+ * triggers — if the picture cleans up with the clamp disabled, the
+ * clamp itself (or trace coupling into GP28) is implicated. */
+#ifndef MICRONES_VIDEO_SYNC_CLAMP_DISABLE
+#define MICRONES_VIDEO_SYNC_CLAMP_DISABLE 0
+#endif
+
+#if MICRONES_VIDEO_SYNC_CLAMP_DISABLE
+#define MICRONES_SYNC_CLAMP_ENGAGE() ((void)0)
+#else
+#define MICRONES_SYNC_CLAMP_ENGAGE() gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1)
+#endif
+
 /* =========================================================================
  * State shared between IRQ handler and Core 1 loop
  * ========================================================================= */
@@ -456,7 +474,7 @@ static void __isr dma_irq1_handler(void) {
      * IRQ latency on Cortex-M33 ≈ 12 cycles; error < 1 sample (22 cycles).
      */
     s_irq1_fire_count++;
-    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
+    MICRONES_SYNC_CLAMP_ENGAGE();
 
     uint32_t mask   = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
     uint32_t status = dma_hw->ints1 & mask;
@@ -613,9 +631,10 @@ void video_ntsc_core1_entry(void) {
     dma_hw->ints1      = ch_mask;
     s_dma_irq1_pending = false;
 
-    /* Start: GP4 HIGH for line 0 sync, then start channel A */
+    /* Start: clamp engaged for line 0 sync (no-op when disabled), then
+     * start channel A. */
     pio_sm_set_enabled(s_pio, s_sm, true);
-    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
+    MICRONES_SYNC_CLAMP_ENGAGE();
     dma_channel_start(s_dma_chan[0]);
 
     printf("[c1] dma started: chan0_busy=%d chan1_busy=%d ints1=0x%08x\n",

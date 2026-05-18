@@ -255,6 +255,14 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 hardware_pio
                 pico_multicore
             )
+            # Diagnostic: stop driving the GP28 sync-clamp MOSFET so the
+            # sync tip falls back to the resistor-DAC ground level only.
+            # Useful for isolating whether GP28 glitches (e.g. trace
+            # coupling from GP27) are causing false mid-line sync.
+            if (DEFINED MICRONES_VIDEO_SYNC_CLAMP_DISABLE)
+                target_compile_definitions(${target_name} PRIVATE
+                    MICRONES_VIDEO_SYNC_CLAMP_DISABLE=${MICRONES_VIDEO_SYNC_CLAMP_DISABLE})
+            endif ()
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_ANALOG=1)
 
             if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")
