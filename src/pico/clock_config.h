@@ -48,8 +48,23 @@
 /*
  * PIO: fixed at 'out pins, 4 [10]' = 11 sys_clk cycles/sample.
  * clkdiv=2.0 → effective rate = 315 MHz / (2 × 11) = 14.318182 MHz  ✓
+ *
+ * Note: at clkdiv=2.0 the line is 912 × 22 / 315e6 = 63.694 µs, which
+ * is 140 ns *longer* than NTSC's spec line of 63.555 µs.  Forgiving TVs
+ * track the slow average rate via their H-PLL and don't show it; strict
+ * TVs (Sony Trinitron in particular) re-trigger H-scan on every sync
+ * tip, so each scanline starts 140 ns late relative to the one above
+ * and the picture shears diagonally by ~0.75 NES pixels per line.
+ *
+ * Overridable via -DMICRONES_PIO_CLKDIV=1.9957 to bring the line
+ * exactly to 63.555 µs.  That nudges the chroma subcarrier from
+ * 3.5795 MHz to 3.587 MHz (~7 kHz off NTSC), which most colour PLLs
+ * will still lock to but may produce wrong hues; only use the override
+ * once colour decoding has been verified separately.
  */
-#  define MICRONES_PIO_CLKDIV       2.0f
+#  ifndef MICRONES_PIO_CLKDIV
+#    define MICRONES_PIO_CLKDIV     2.0f
+#  endif
 
 /*
  * Audio PWM sample-rate timer: clkdiv=1.25, wrap=5249

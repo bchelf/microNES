@@ -270,6 +270,12 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 target_compile_definitions(${target_name} PRIVATE
                     MICRONES_CHROMA_ENABLED=${MICRONES_CHROMA_ENABLED})
             endif ()
+            # Diagnostic: -DMICRONES_PIO_CLKDIV=1.9957f to compensate for
+            # the +140 ns/line drift baked into the 912-sample line.
+            if (DEFINED MICRONES_PIO_CLKDIV)
+                target_compile_definitions(${target_name} PRIVATE
+                    MICRONES_PIO_CLKDIV=${MICRONES_PIO_CLKDIV})
+            endif ()
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_ANALOG=1)
 
             if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")
