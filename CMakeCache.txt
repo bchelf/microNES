@@ -18,7 +18,7 @@
 CMAKE_ADDR2LINE:FILEPATH=/usr/bin/addr2line
 
 //ASM compiler
-CMAKE_ASM_COMPILER:FILEPATH=/home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/emcc
+CMAKE_ASM_COMPILER:FILEPATH=/home/runner/work/_temp/3df07281-3355-49f5-a585-9f21da9b2389/emsdk-main/upstream/emscripten/emcc
 
 //Flags used by the ASM compiler during all build types.
 CMAKE_ASM_FLAGS:STRING=
@@ -43,7 +43,7 @@ CMAKE_BUILD_TYPE:STRING=
 CMAKE_COLOR_MAKEFILE:BOOL=ON
 
 //No help, variable specified on the command line.
-CMAKE_CROSSCOMPILING_EMULATOR:UNINITIALIZED=/home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/node/22.16.0_64bit/bin/node
+CMAKE_CROSSCOMPILING_EMULATOR:UNINITIALIZED=/home/runner/work/_temp/3df07281-3355-49f5-a585-9f21da9b2389/emsdk-main/node/22.16.0_64bit/bin/node
 
 //`clang-scan-deps` dependency scanner
 CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS:FILEPATH=CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS-NOTFOUND
@@ -106,7 +106,7 @@ CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=
 CMAKE_FIND_PACKAGE_REDIRECTS_DIR:STATIC=/home/runner/work/microNES/microNES/build-web/CMakeFiles/pkgRedirects
 
 //Install path prefix, prepended onto install directories.
-CMAKE_INSTALL_PREFIX:PATH=/home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cache/sysroot
+CMAKE_INSTALL_PREFIX:PATH=/home/runner/work/_temp/3df07281-3355-49f5-a585-9f21da9b2389/emsdk-main/upstream/emscripten/cache/sysroot
 
 //Path to a program.
 CMAKE_LINKER:FILEPATH=/usr/bin/ld
@@ -206,7 +206,7 @@ CMAKE_STRIP:FILEPATH=/usr/bin/strip
 CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 
 //The CMake toolchain file
-CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/runner/work/_temp/3090de21-387f-4c2d-9b9a-e9d7cf9e8d3e/emsdk-main/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
+CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/runner/work/_temp/3df07281-3355-49f5-a585-9f21da9b2389/emsdk-main/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
@@ -224,6 +224,9 @@ EMSCRIPTEN_GENERATE_BITCODE_STATIC_LIBRARIES:BOOL=OFF
 //APU engine: micrones (cycle-accurate, default) or infones (InfoNES
 // DDS)
 MICRONES_APU_ENGINE:STRING=micrones
+
+//Pico target board: breadboard or v0_1
+MICRONES_BOARD:STRING=breadboard
 
 //Enable per-second performance/audio diagnostic logging
 MICRONES_ENABLE_PERF_LOG:BOOL=OFF
@@ -400,6 +403,8 @@ CMAKE_VERBOSE_MAKEFILE-ADVANCED:INTERNAL=1
 EMSCRIPTEN:INTERNAL=1
 //STRINGS property for variable: MICRONES_APU_ENGINE
 MICRONES_APU_ENGINE-STRINGS:INTERNAL=micrones;infones
+//STRINGS property for variable: MICRONES_BOARD
+MICRONES_BOARD-STRINGS:INTERNAL=breadboard;v0_1
 //STRINGS property for variable: MICRONES_PICO_TFT_BACKEND
 MICRONES_PICO_TFT_BACKEND-STRINGS:INTERNAL=spi_ili9341;parallel_8080
 //STRINGS property for variable: MICRONES_PICO_TFT_CONTROLLER
