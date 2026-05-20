@@ -338,6 +338,10 @@
         ""
       ],
       [
+        "lib_symbol_mismatch|292100|1930400|7893900a-ea87-4978-b28b-ff1bfe11497c|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
         "lib_symbol_mismatch|3784600|1993900|4578cfd6-613b-4123-9dc3-e57e32cf7aad|00000000-0000-0000-0000-000000000000|||",
         ""
       ],
@@ -814,7 +818,7 @@
         "uuid": "aba63da5-2856-45d3-bb43-ffaad5b78152"
       }
     ],
-    "used_designators": "TP7,#PWR3,#PWR8,#PWR86",
+    "used_designators": "R40,#PWR41",
     "variants": []
   },
   "sheets": [

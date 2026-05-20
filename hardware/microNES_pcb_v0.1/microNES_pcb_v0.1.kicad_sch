@@ -13341,7 +13341,7 @@
 	)
 	(wire
 		(pts
-			(xy 59.69 30.48) (xy 83.82 30.48)
+			(xy 59.69 30.48) (xy 86.36 30.48)
 		)
 		(stroke
 			(width 0)
@@ -13458,6 +13458,16 @@
 			(type default)
 		)
 		(uuid "3297f506-e17f-4d4e-9391-113312711373")
+	)
+	(wire
+		(pts
+			(xy 96.52 29.21) (xy 93.98 29.21)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "336a27d9-02d3-47f1-a802-f3fb51d00803")
 	)
 	(wire
 		(pts
@@ -14851,7 +14861,7 @@
 	)
 	(wire
 		(pts
-			(xy 83.82 29.21) (xy 83.82 30.48)
+			(xy 86.36 29.21) (xy 86.36 30.48)
 		)
 		(stroke
 			(width 0)
@@ -15371,6 +15381,16 @@
 	)
 	(wire
 		(pts
+			(xy 80.01 25.4) (xy 80.01 29.21)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9f34b079-ed02-4d1f-8c97-1742012b57c5")
+	)
+	(wire
+		(pts
 			(xy 184.15 63.5) (xy 176.53 63.5)
 		)
 		(stroke
@@ -15531,7 +15551,7 @@
 	)
 	(wire
 		(pts
-			(xy 58.42 31.75) (xy 86.36 31.75)
+			(xy 58.42 31.75) (xy 88.9 31.75)
 		)
 		(stroke
 			(width 0)
@@ -16829,6 +16849,16 @@
 		)
 		(uuid "20f39e41-78da-4965-9e92-2a01b7c86db7")
 	)
+	(label "PWR_LED"
+		(at 80.01 25.4 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "2145a451-4d6a-429d-926a-d86f2fa88294")
+	)
 	(label "QSPI_SD0"
 		(at 153.67 96.52 180)
 		(effects
@@ -16888,16 +16918,6 @@
 			(justify left bottom)
 		)
 		(uuid "33df8f47-eb7d-4889-a0b5-26103af760b3")
-	)
-	(label "PWR_LED"
-		(at 86.36 31.75 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "359f05c4-2863-44b4-add5-5f2430c8c7b3")
 	)
 	(label "CARD_CMD"
 		(at 378.46 102.87 180)
@@ -16968,16 +16988,6 @@
 			(justify left bottom)
 		)
 		(uuid "407da8ac-f474-4524-9ee9-791039b951d2")
-	)
-	(label "RST_BTN"
-		(at 83.82 29.21 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "42a65cb3-bff4-4805-bc40-c779cd24a48f")
 	)
 	(label "GP_ADAC_IN"
 		(at 304.8 195.58 90)
@@ -17578,6 +17588,16 @@
 			(justify left bottom)
 		)
 		(uuid "b809b4eb-63dc-4157-b355-3a586fc07c29")
+	)
+	(label "RST_BTN"
+		(at 96.52 29.21 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "b872088b-962d-4ae2-8129-879dcc6f0ba2")
 	)
 	(label "NES_LATCH"
 		(at 72.39 224.79 0)
@@ -24260,6 +24280,96 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:R")
+		(at 90.17 29.21 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "5be587c6-09c2-45f1-8440-735ea862c02a")
+		(property "Reference" "R40"
+			(at 91.948 25.146 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "330"
+			(at 91.694 26.924 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 90.17 30.988 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 90.17 29.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 90.17 29.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C25104"
+			(at 90.17 29.21 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "902fd582-eb59-4bef-86f9-61eaa0e53cf4")
+		)
+		(pin "1"
+			(uuid "8e9fc191-143f-4efe-923e-d3119b68a199")
+		)
+		(instances
+			(project "microNES_pcb_v0.1"
+				(path "/aba63da5-2856-45d3-bb43-ffaad5b78152"
+					(reference "R40")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 335.28 81.28 0)
 		(unit 1)
@@ -29060,6 +29170,84 @@
 		)
 	)
 	(symbol
+		(lib_name "+3V3_9")
+		(lib_id "power:+3V3")
+		(at 88.9 31.75 270)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "a5454f19-8e5a-4047-b2cc-0433ca5cc6f2")
+		(property "Reference" "#PWR041"
+			(at 85.09 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 93.98 31.75 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 88.9 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 88.9 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 88.9 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "a6b803da-d68b-4300-ae59-65b37752aba4")
+		)
+		(instances
+			(project "microNES_pcb_v0.1"
+				(path "/aba63da5-2856-45d3-bb43-ffaad5b78152"
+					(reference "#PWR041")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 335.28 86.36 0)
 		(unit 1)
@@ -30239,85 +30427,6 @@
 			(project "microNES_pcb_v0.1"
 				(path "/aba63da5-2856-45d3-bb43-ffaad5b78152"
 					(reference "#PWR051")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_name "+3V3_9")
-		(lib_id "power:+3V3")
-		(at 80.01 29.21 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "b27edf0e-bf36-457a-9d66-96907c2f582d")
-		(property "Reference" "#PWR085"
-			(at 80.01 33.02 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "+3V3"
-			(at 80.01 24.13 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 80.01 29.21 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 80.01 29.21 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 80.01 29.21 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "d18e376f-261b-4d37-9e49-e76eeb2a7c33")
-		)
-		(instances
-			(project "microNES_pcb_v0.1"
-				(path "/aba63da5-2856-45d3-bb43-ffaad5b78152"
-					(reference "#PWR085")
 					(unit 1)
 				)
 			)

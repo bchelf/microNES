@@ -57,3 +57,10 @@ void nes_hw_controller_init(void);
 // Blocking: takes roughly (LATCH_US + 8 * 2 * CLOCK_US) ≈ 42 µs.
 // At 60 Hz this is ~0.25 % of a frame budget.
 NesControllerState nes_hw_controller_read(void);
+
+// Read both controller ports in a single CLOCK/LATCH cycle.  CLOCK and
+// LATCH are shared, so this is no slower than reading one controller.
+// p1_out always reflects the primary DATA pin; p2_out reflects the second
+// DATA pin if the platform routes one, otherwise zero.
+void nes_hw_controller_read_pair(NesControllerState *p1_out,
+                                 NesControllerState *p2_out);

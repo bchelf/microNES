@@ -9,14 +9,15 @@
  * so this header should never be edited unless the defaults change for a
  * new board revision.
  *
- * Defaults match the current board's silkscreen labeling, which uses the
+ * Defaults match the v0.1 PCB silkscreen labeling
+ * (hardware/microNES_pcb_v0.1/microNES_pcb_v0.1.kicad_sch), which uses the
  * SD-bus signal names (CD/DAT0/CLK/CMD/DAT3) rather than the SPI signal
  * names.  Mapped to SPI:
- *   CARD_CD   = GP1   -> card-detect (plain GPIO input)
- *   CARD_DAT0 = GP2   -> SPI MISO
- *   CARD_CLK  = GP3   -> SPI SCK
- *   CARD_CMD  = GP4   -> SPI MOSI
- *   CARD_DAT3 = GP5   -> SPI CS
+ *   CARD_CD       = GP1   -> card-detect (plain GPIO input)
+ *   CARD_DAT0     = GP2   -> SPI MISO
+ *   CARD_CLX      = GP3   -> SPI SCK
+ *   CARD_CMD      = GP4   -> SPI MOSI
+ *   CARD_CD_DAT3  = GP5   -> SPI CS
  *
  * NOTE: On RP2350 the SPI peripheral's IO mux ties each signal to a fixed
  * GPIO offset (offset%4 selects RX/CS/SCK/TX), so the pin set above is not
@@ -25,20 +26,44 @@
  * routes the silicon-correct GPIOs.  This file lets you override every
  * pin from CMake when that day comes — no source edits required. */
 
+#ifdef MICRONES_BOARD_V0_1
+#include "board_pinout_v0_1.h"
+#endif
+
 #ifndef MICRONES_SD_PIN_CD
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_SD_PIN_CD   MICRONES_V0_1_PIN_SD_CD
+#else
 #define MICRONES_SD_PIN_CD   1u
 #endif
+#endif
 #ifndef MICRONES_SD_PIN_MISO
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_SD_PIN_MISO MICRONES_V0_1_PIN_SD_MISO
+#else
 #define MICRONES_SD_PIN_MISO 2u
 #endif
+#endif
 #ifndef MICRONES_SD_PIN_SCK
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_SD_PIN_SCK  MICRONES_V0_1_PIN_SD_SCK
+#else
 #define MICRONES_SD_PIN_SCK  3u
 #endif
+#endif
 #ifndef MICRONES_SD_PIN_MOSI
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_SD_PIN_MOSI MICRONES_V0_1_PIN_SD_MOSI
+#else
 #define MICRONES_SD_PIN_MOSI 4u
 #endif
+#endif
 #ifndef MICRONES_SD_PIN_CS
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_SD_PIN_CS   MICRONES_V0_1_PIN_SD_CS
+#else
 #define MICRONES_SD_PIN_CS   5u
+#endif
 #endif
 
 /* The SD driver runs on a PIO state machine, not the hardware SPI block,

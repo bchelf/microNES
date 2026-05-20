@@ -8,6 +8,7 @@
 #include "pico_time.h"
 #include "pico_video_backend.h"
 #include "pico_input.h"
+#include "pico_status.h"
 #include "rom_source.h"
 #include "rom_source_sd.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
@@ -95,6 +96,7 @@ int main(void) {
            (unsigned long)clock_get_hz(clk_peri));
 
     pico_input_init();
+    pico_status_init();    /* lights power LED, arms reset-button edge detect */
     if (!pico_video_backend_init()) {
         printf("video backend init failed: %s\n", pico_video_backend_last_error());
         return 1;
@@ -158,9 +160,24 @@ int main(void) {
              * MENU the shell renders into its own framebuffer and we just
              * present that — no NES step, no audio.  When in RUNNING the
              * shell forwards (and combo-masks) the input and we run the
-             * normal step+present path below. */
-            NesControllerState live_input = pico_input_read();
-            AppShellFrame frame = app_shell_begin_frame(&shell, live_input);
+             * normal step+present path below.
+             *
+             * Player 1 drives the shell (menu navigation, exit combo).
+             * Player 2 bypasses the shell and is wired directly to NES
+             * controller port 2 — its state should not affect menu
+             * navigation, but games that support two players (e.g. SMB1's
+             * Luigi mode) will see it on $4017. */
+            PicoControllerPair input_pair = pico_input_read_pair();
+
+            /* Front-panel reset button (v0.1 PCB).  Acts like the original
+             * NES RESET button: short press while running drops the user
+             * back to the ROM picker.  In the menu it's a no-op (the shell
+             * silently stays put). */
+            if (pico_status_reset_button_pressed()) {
+                app_shell_request_menu(&shell);
+            }
+
+            AppShellFrame frame = app_shell_begin_frame(&shell, input_pair.players[0]);
             if (!frame.stepping_nes) {
                 emulator_video_adapter_present_framebuffer(
                     &emulator_video, app_shell_menu_framebuffer(&shell));
@@ -169,6 +186,7 @@ int main(void) {
                 continue;
             }
             nes_set_controller_state(&emulator_video.nes, 0, frame.forwarded);
+            nes_set_controller_state(&emulator_video.nes, 1, input_pair.players[1]);
 
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
             /* TFT path: step and present are separated so audio is pushed

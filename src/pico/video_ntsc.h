@@ -7,14 +7,19 @@
 /*
  * 4-bit binary-weighted composite DAC — hardware pin assignment
  *
+ * Default (breadboard) wiring:
  *   GP10–GP13 : DAC bits 0–3 (driven by PIO state machine 0 on PIO0)
  *   GP14      : sync clamp gate (2N7002 N-MOSFET, active-high, driven by CPU)
  *
+ * v0.1 PCB wiring (build with -DMICRONES_BOARD=v0_1):
+ *   GP24–GP27 : DAC bits 0–3 (labelled GP_VDAC_SUM0..3 in the schematic)
+ *   GP28      : sync clamp gate (labelled GP_VDAC_GATE)
+ *
  * Resistor network (R-series = 75.5 Ω, R-load = 75 Ω TV termination):
- *   GP10 → 1000 Ω → summing node → 75.5 Ω → RCA jack → 75 Ω
- *   GP11 →  485 Ω → summing node
- *   GP12 →  242 Ω → summing node
- *   GP13 →  120 Ω → summing node
+ *   bit 0 → 1000 Ω → summing node → 75.5 Ω → RCA jack → 75 Ω
+ *   bit 1 →  485 Ω → summing node
+ *   bit 2 →  242 Ω → summing node
+ *   bit 3 →  120 Ω → summing node
  *
  * Analytically derived DAC codes (no R_bias at summing node):
  *   blank_code  = 4   (306 mV ≈ 300 mV NTSC blank)
@@ -23,9 +28,27 @@
  *   LSB ≈ 74 mV/code
  */
 
+#ifdef MICRONES_BOARD_V0_1
+#include "board_pinout_v0_1.h"
+#endif
+
+#ifndef MICRONES_VIDEO_PIN_BASE
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_VIDEO_PIN_BASE     MICRONES_V0_1_PIN_VDAC_BASE
+#else
 #define MICRONES_VIDEO_PIN_BASE     10u   /* GP10: first DAC bit */
-#define MICRONES_VIDEO_PIN_COUNT    4u    /* GP10-GP13 */
+#endif
+#endif
+#ifndef MICRONES_VIDEO_PIN_COUNT
+#define MICRONES_VIDEO_PIN_COUNT    4u    /* 4 contiguous DAC bits */
+#endif
+#ifndef MICRONES_VIDEO_SYNC_GPIO
+#ifdef MICRONES_BOARD_V0_1
+#define MICRONES_VIDEO_SYNC_GPIO    MICRONES_V0_1_PIN_VDAC_GATE
+#else
 #define MICRONES_VIDEO_SYNC_GPIO    14u   /* GP14: N-MOSFET sync clamp, active HIGH */
+#endif
+#endif
 
 /* Visible dimensions (unchanged from original) */
 enum {
