@@ -89,6 +89,9 @@ void app_shell_render_menu(AppShell *shell);
  * No-op when already in the menu. */
 void app_shell_request_menu(AppShell *shell);
 
+/* Reset the currently running ROM without unloading it.  No-op in the menu. */
+void app_shell_request_reset(AppShell *shell);
+
 /* Last error/status text (for host logging or display). */
 const char *app_shell_status(const AppShell *shell);
 

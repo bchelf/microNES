@@ -24,11 +24,11 @@ void pico_status_init(void) {
     gpio_set_dir(MICRONES_V0_1_PIN_PWR_LED, GPIO_OUT);
     pico_status_set_led(true);
 
-    /* Reset button — input with pull-up so an absent panel reads "not
-     * pressed" even though the connector also has its own pull-up. */
+    /* Reset button — input with pull-down so idle or absent panel reads "not
+     * pressed"; pressing the button drives the line to +3V3. */
     gpio_init(MICRONES_V0_1_PIN_RST_BUTTON);
     gpio_set_dir(MICRONES_V0_1_PIN_RST_BUTTON, GPIO_IN);
-    gpio_pull_up(MICRONES_V0_1_PIN_RST_BUTTON);
+    gpio_pull_down(MICRONES_V0_1_PIN_RST_BUTTON);
 
     s_last_pressed = read_button_pressed();
 }
@@ -48,10 +48,15 @@ bool pico_status_reset_button_pressed(void) {
     return edge;
 }
 
+bool pico_status_reset_button_down(void) {
+    return read_button_pressed();
+}
+
 #else  /* MICRONES_BOARD_V0_1 */
 
 void pico_status_init(void)                    { /* no panel on this board */ }
 void pico_status_set_led(bool on)              { (void)on; }
 bool pico_status_reset_button_pressed(void)    { return false; }
+bool pico_status_reset_button_down(void)       { return false; }
 
 #endif

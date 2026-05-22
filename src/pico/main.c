@@ -132,6 +132,8 @@ int main(void) {
         report_started_us = time_us_64();
 #endif
 
+        bool reset_button_was_down = pico_status_reset_button_down();
+
         while (true) {
             /* Pace emulation to the NTSC NES frame cadence (~16.639 ms,
              * 60.10 Hz) so wall-clock audio production stays aligned with the
@@ -169,13 +171,18 @@ int main(void) {
              * Luigi mode) will see it on $4017. */
             PicoControllerPair input_pair = pico_input_read_pair();
 
-            /* Front-panel reset button (v0.1 PCB).  Acts like the original
-             * NES RESET button: short press while running drops the user
-             * back to the ROM picker.  In the menu it's a no-op (the shell
-             * silently stays put). */
-            if (pico_status_reset_button_pressed()) {
-                app_shell_request_menu(&shell);
+            /* Front-panel reset button (v0.1 PCB).  Turn the power LED off
+             * while the button is held, then restore it and reset the current
+             * game on release.  In the menu the reset request is a no-op, but
+             * the LED still gives button feedback. */
+            bool reset_button_down = pico_status_reset_button_down();
+            if (reset_button_down) {
+                pico_status_set_led(false);
+            } else if (reset_button_was_down) {
+                pico_status_set_led(true);
+                app_shell_request_reset(&shell);
             }
+            reset_button_was_down = reset_button_down;
 
             AppShellFrame frame = app_shell_begin_frame(&shell, input_pair.players[0]);
             if (!frame.stepping_nes) {
