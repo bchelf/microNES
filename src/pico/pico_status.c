@@ -48,10 +48,15 @@ bool pico_status_reset_button_pressed(void) {
     return edge;
 }
 
+bool pico_status_reset_button_down(void) {
+    return read_button_pressed();
+}
+
 #else  /* MICRONES_BOARD_V0_1 */
 
 void pico_status_init(void)                    { /* no panel on this board */ }
 void pico_status_set_led(bool on)              { (void)on; }
 bool pico_status_reset_button_pressed(void)    { return false; }
+bool pico_status_reset_button_down(void)       { return false; }
 
 #endif

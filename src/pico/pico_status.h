@@ -14,12 +14,9 @@
  *   - RST_BTN is held low when idle and shorted to +3V3 when the button is
  *     pressed -> ACTIVE-HIGH input.  The internal pull-down is enabled so an
  *     unpopulated connector reads "not pressed".
- *   - PWR_LED is wired as a common-anode indicator (anode tied to a panel
- *     voltage rail, cathode returned via this pin), so driving GP21 HIGH
- *     sources current toward the rail and lights the LED.  The panel
- *     wiring isn't fully unambiguous in the v0.1 schematic; if the LED
- *     ends up inverted on real hardware, build with
- *     -DMICRONES_PWR_LED_ACTIVE_LOW=1 to flip the drive level.
+ *   - PWR_LED is wired as a cathode-return indicator (LED anode tied to a
+ *     panel voltage rail, cathode returned via this pin), so driving GP21 LOW
+ *     sinks current and lights the LED.
  *
  * On boards without these nets (breadboard default) the whole module is a
  * no-op — GP20/GP21 are used as NES controller lines there and must not
@@ -29,7 +26,7 @@
 #include <stdbool.h>
 
 #ifndef MICRONES_PWR_LED_ACTIVE_LOW
-#define MICRONES_PWR_LED_ACTIVE_LOW 0
+#define MICRONES_PWR_LED_ACTIVE_LOW 1
 #endif
 
 #ifndef MICRONES_RST_BTN_ACTIVE_LOW
@@ -49,5 +46,9 @@ void pico_status_set_led(bool on);
  * press (released → pressed transition).  Always returns false on
  * non-v0.1 builds. */
 bool pico_status_reset_button_pressed(void);
+
+/* Level read for the reset button.  Returns true while the button is held.
+ * Always returns false on non-v0.1 builds. */
+bool pico_status_reset_button_down(void);
 
 #endif /* MICRONES_PICO_STATUS_H */
