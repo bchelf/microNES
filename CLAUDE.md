@@ -378,6 +378,92 @@ The IRQ disable is required because the DMA ISR (`audio_i2s_fill_dma_block`) als
 - `pack_symbols` loop: **15** iterations — 16 would shift d[0] off the top of the uint32_t word
 - `shift_right = false` (MSB first, left-shift OSR)
 
+## Pico HDMI Audio Implementation (HSTX data islands)
+
+### Target
+
+`micrones_pico_hdmi` carries both video and audio through the RP2350 HSTX
+peripheral on GPIOs 12–19 (clk + D0/D1/D2 differential pairs). DVI was
+already working; audio rides on HDMI data-island periods inserted during
+vertical blanking.
+
+### Files
+
+- `src/pico/hdmi_data_island.[ch]` — portable BCH/TERC4/packet primitives.
+  Builds on host too; `hdmi_data_island_test` runs as part of the host
+  smoke build.
+- `src/pico/video_hstx.c` — adds per-VBI-line cmd buffers carrying data
+  islands; visible scanlines unchanged except for an inserted 8-pixel
+  video preamble + 2-pixel video guard band right before active TMDS.
+- `src/pico/pico_audio_backend_hdmi.c` — implements the standard
+  `pico_audio_backend.h` interface by routing PCM into `video_hstx`.
+
+### VBI scheduling
+
+Each NES frame's audio islands are double-buffered. `present_frame()`
+refills the inactive buffer from the PCM ring then flips a single byte
+to swap. The DMA ISR snapshots the active index once per scanline.
+
+- Audio sample packets: scanlines 12–36 (25 lines × 8 packets/line × 4
+  stereo frames/packet = 800 frames/video-frame = 48 kHz exactly).
+- Control island: scanline 37, carries AVI InfoFrame + Audio InfoFrame +
+  General Control Packet (clears AVMUTE) + ACR (N=6144, CTS=25000).
+- Lines 38–44 stay plain VBI as a buffer before the next active region.
+
+Per-line cmd layout (audio VBI line, 276 words total):
+- HFP repeat 16, HSYNC repeat 96, RAW island (268 words), post-HSYNC
+  filler repeat 420, NOP. Total pixels = 800.
+
+### BCH ECC
+
+HDMI 1.4 §5.2.3.5 specifies G(x) = x^8 + x^7 + x^6 + x^4 + x^2 + 1.
+Bytes are transmitted LSB-first; with an LSB-first shift register the
+feedback mask is the bit-reverse of the lower 8 bits of G(x):
+0xD5 reversed → **0xAB**. The constant is exposed as `HDMI_BCH_POLY`
+and can be overridden from CMake during bring-up — 0x83 is the other
+commonly-cited value if the receiver rejects packets.
+
+Verified host-test ECC values to compare against an HDMI sniffer:
+- AVI header (0x82 0x02 0x0D) → ECC = 0x82
+- Audio header (0x84 0x01 0x0A) → ECC = 0xAB
+
+### Video preamble + guard band
+
+HDMI sinks require an 8-pixel video preamble + 2-pixel video guard band
+immediately before each video data period. The HBP is shortened from 48
+to 38 pixels of plain control to make room (still ≥6 px of control after
+HSYNC ends, satisfying the receiver's CTL preamble detection window).
+Pure DVI sinks tolerate these symbols as benign control codewords.
+
+### Memory budget
+
+- 2 × 25 × 276 × 4 B = ~54 KB for audio VBI buffers (double-buffered)
+- 148 × 4 B ≈ 0.6 KB for the control VBI buffer
+- 2048 stereo frames × 4 B = 8 KB for the PCM ring
+- Total: ~62 KB extra static SRAM on the HDMI target.
+
+### Diagnostics (`pico_audio_backend_*`)
+
+The HDMI backend reports through the same interface as the MAX98357
+backend so existing diag printouts in `main.c` work unchanged:
+- `underrun_count` increments when the PCM ring runs dry during a refill
+  (samples are padded with the last good value).
+- `overrun_count` increments when `push_samples` evicts an old frame.
+- `buffer_level` returns the current stereo-frame count in the ring.
+
+### Known risks for bring-up
+
+- BCH poly (0xAB vs 0x83): if AVI InfoFrame doesn't take, flip the
+  constant. Host test prints the computed ECC so it can be compared
+  against an external trace.
+- Pixel clock 25 MHz (we run clk_sys=250/clk_hstx=125/CLKDIV=5) vs
+  25.175 MHz VGA standard. Sinks typically tolerate this; if a sink
+  refuses to lock, ACR's CTS=25000 should still match what the sink
+  recovers from the link.
+- Sample-rate drift: NES outputs ~60.099 Hz × 800 ≈ 48,079 samples/sec,
+  HDMI consumes 48,000 — small excess handled by the circular-overwrite
+  ring policy. Same trade-off as the MAX98357 backend.
+
 ## ESP32-S3 Implementation Notes
 
 ### Scope

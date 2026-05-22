@@ -108,6 +108,14 @@ if (MICRONES_PLATFORM STREQUAL "host")
         micrones_core
     )
 
+    add_executable(hdmi_data_island_test
+        src/host/hdmi_data_island_test.c
+        src/pico/hdmi_data_island.c
+    )
+    target_include_directories(hdmi_data_island_test PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/src/pico
+    )
+
     if (SDL3_FOUND)
         add_executable(micrones
             src/host/audio_sdl.c
@@ -282,6 +290,12 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             pico_generate_pio_header(${target_name}
                 ${CMAKE_CURRENT_LIST_DIR}/src/pico/audio_i2s_max98357.pio
             )
+        elseif (audio_backend_name STREQUAL "hdmi")
+            # HDMI audio rides on the same HSTX peripheral that emits video;
+            # the backend wrapper just routes PCM into video_hstx.c.
+            target_sources(${target_name} PRIVATE
+                src/pico/pico_audio_backend_hdmi.c
+            )
         else ()
             message(FATAL_ERROR "Unknown Pico audio backend '${audio_backend_name}'")
         endif ()
@@ -388,6 +402,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             pico_enable_stdio_usb(${target_name} 1)
             pico_enable_stdio_uart(${target_name} 0)
             target_sources(${target_name} PRIVATE
+                src/pico/hdmi_data_island.c
                 src/pico/pico_video_backend_hdmi.c
                 src/pico/video_hstx.c
             )
@@ -418,7 +433,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
     micrones_add_pico_target(micrones_pico_analog analog micrones_core_pico_analog pwm)
     micrones_add_pico_target(micrones_pico_tft tft micrones_core_pico_tft pwm)
     micrones_add_pico_target(micrones_pico_tft_max98357 tft micrones_core_pico_tft max98357)
-    micrones_add_pico_target(micrones_pico_hdmi hdmi micrones_core_pico_hdmi pwm)
+    micrones_add_pico_target(micrones_pico_hdmi hdmi micrones_core_pico_hdmi hdmi)
 
     add_executable(micrones_pico_hdmi_test_pattern
         src/pico/hdmi_test_pattern.c
