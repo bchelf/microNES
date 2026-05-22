@@ -190,7 +190,7 @@ events:
       clang version 20.0.0git (https:/github.com/llvm/llvm-project 1d810ece2b2c8fab77720493864257f0ea3336a9)
       Target: wasm32-unknown-emscripten
       Thread model: posix
-      InstalledDir: /home/runner/work/_temp/4b1e0551-c6db-4645-bb52-675f7c1607ae/emsdk-main/upstream/bin
+      InstalledDir: /home/runner/work/_temp/f9a85cf0-3486-48b3-97d4-9c3fa5609e5b/emsdk-main/upstream/bin
   -
     kind: "message-v1"
     backtrace:
