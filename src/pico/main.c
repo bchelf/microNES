@@ -170,11 +170,10 @@ int main(void) {
             PicoControllerPair input_pair = pico_input_read_pair();
 
             /* Front-panel reset button (v0.1 PCB).  Acts like the original
-             * NES RESET button: short press while running drops the user
-             * back to the ROM picker.  In the menu it's a no-op (the shell
-             * silently stays put). */
+             * NES RESET button: short press while running resets the current
+             * game.  In the menu it's a no-op (the shell silently stays put). */
             if (pico_status_reset_button_pressed()) {
-                app_shell_request_menu(&shell);
+                app_shell_request_reset(&shell);
             }
 
             AppShellFrame frame = app_shell_begin_frame(&shell, input_pair.players[0]);

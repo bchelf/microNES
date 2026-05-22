@@ -159,6 +159,14 @@ void app_shell_request_menu(AppShell *shell) {
     rom_menu_render(&shell->menu, shell->source, &shell->menu_fb, shell->status);
 }
 
+void app_shell_request_reset(AppShell *shell) {
+    if (shell == NULL || shell->state != APP_SHELL_STATE_RUNNING ||
+        shell->nes == NULL) {
+        return;
+    }
+    nes_reset(shell->nes);
+}
+
 void app_shell_render_menu(AppShell *shell) {
     if (shell == NULL) {
         return;
