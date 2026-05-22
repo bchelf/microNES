@@ -2,16 +2,18 @@
 //
 // This intentionally stays close to pico-examples/hstx/dvi_out_hstx_encoder:
 // no emulator, no app shell, no controller, no audio, no SD card, and no
-// emulator clock changes. This target forces the SDK runtime sys/clk_hstx
-// default to 125 MHz so the example's HSTX CSR values produce a 250 Mbps
-// TMDS bit clock.
+// emulator integration. This target raises clk_sys to 250 MHz for the next
+// bring-up step, then explicitly divides clk_hstx back to 125 MHz so the
+// example's HSTX CSR values still produce a 250 Mbps TMDS bit clock.
 
+#include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
 #include "hardware/structs/hstx_fifo.h"
+#include "hardware/vreg.h"
 #include "pico/multicore.h"
 #include "pico/sem.h"
 #include "pico/stdlib.h"
@@ -53,6 +55,12 @@
 #define HSTX_CMD_TMDS        (0x2u << 12)
 #define HSTX_CMD_TMDS_REPEAT (0x3u << 12)
 #define HSTX_CMD_NOP         (0xfu << 12)
+
+#define HDMI_TEST_SYS_HZ  250000000u
+#define HDMI_TEST_HSTX_HZ 125000000u
+#define HDMI_TEST_PLL_VCO_HZ 1000000000u
+#define HDMI_TEST_PLL_DIV1   4u
+#define HDMI_TEST_PLL_DIV2   1u
 
 // ----------------------------------------------------------------------------
 // HSTX command lists
@@ -199,7 +207,22 @@ static void fill_test_pattern(void) {
     }
 }
 
+static void configure_test_clocks(void) {
+    vreg_set_voltage(VREG_VOLTAGE_1_20);
+    sleep_ms(20);
+    set_sys_clock_pll(HDMI_TEST_PLL_VCO_HZ, HDMI_TEST_PLL_DIV1, HDMI_TEST_PLL_DIV2);
+
+    clock_configure(clk_peri, 0,
+                    CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
+                    HDMI_TEST_SYS_HZ, HDMI_TEST_SYS_HZ);
+
+    clock_configure(clk_hstx, 0,
+                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
+                    HDMI_TEST_SYS_HZ, HDMI_TEST_HSTX_HZ);
+}
+
 int main(void) {
+    configure_test_clocks();
     fill_test_pattern();
 
     // Configure HSTX's TMDS encoder for RGB332
@@ -229,7 +252,7 @@ int main(void) {
         2u << HSTX_CTRL_CSR_SHIFT_LSB |
         HSTX_CTRL_CSR_EN_BITS;
 
-    // This target sets SYS_CLK_HZ=125000000, so clk_hstx is 125 MHz. Since
+    // This target runs clk_sys at 250 MHz but divides clk_hstx to 125 MHz. Since
     // we shift out two bits per HSTX clock cycle, this gives us an output of
     // 250 Mbps, which is very close to the bit clock for 480p 60Hz (252 MHz).
 

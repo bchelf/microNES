@@ -368,10 +368,6 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         pico_sync
     )
 
-    target_compile_definitions(micrones_pico_hdmi_test_pattern PRIVATE
-        SYS_CLK_HZ=125000000
-    )
-
     pico_add_extra_outputs(micrones_pico_hdmi_test_pattern)
 elseif (MICRONES_PLATFORM STREQUAL "web")
     add_executable(micrones_wasm
