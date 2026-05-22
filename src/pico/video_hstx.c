@@ -196,6 +196,8 @@ static uint8_t __attribute__((aligned(4)))
 
 /* --- HDMI data island cmd buffers --------------------------------------- */
 
+#if MICRONES_HDMI_DATA_ISLANDS
+
 static uint32_t __attribute__((aligned(4)))
     s_hdmi_audio_line_buf[2][HDMI_AUDIO_LINES][HDMI_AUDIO_LINE_WORDS];
 
@@ -212,6 +214,8 @@ static volatile uint32_t s_hdmi_pcm_tail;  /* consumer index */
 static uint32_t s_hdmi_audio_frame_no;     /* IEC-60958 frame counter */
 static volatile uint32_t s_hdmi_audio_underruns;
 static volatile uint32_t s_hdmi_audio_overruns;
+
+#endif /* MICRONES_HDMI_DATA_ISLANDS */
 
 static bool s_dma_pong;
 static uint32_t s_v_scanline = 2u;
@@ -249,6 +253,8 @@ static inline uint8_t rgb332(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 /* --- HDMI data island helpers ------------------------------------------ */
+
+#if MICRONES_HDMI_DATA_ISLANDS
 
 static void hdmi_init_audio_line_template(uint32_t buf[HDMI_AUDIO_LINE_WORDS]) {
     uint32_t *p = buf;
@@ -343,6 +349,8 @@ static void hdmi_refill_audio_islands(uint32_t buf_idx) {
     }
 }
 
+#endif /* MICRONES_HDMI_DATA_ISLANDS */
+
 /* --- DMA / ISR --------------------------------------------------------- */
 
 static void __scratch_x("") hstx_dma_irq(void) {
@@ -351,7 +359,9 @@ static void __scratch_x("") hstx_dma_irq(void) {
     dma_hw->intr = 1u << ch_num;
     s_dma_pong = !s_dma_pong;
 
+#if MICRONES_HDMI_DATA_ISLANDS
     uint8_t audio_buf = s_hdmi_audio_active_buf;
+#endif
 
     if (s_v_scanline >= MODE_V_FRONT_PORCH &&
         s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
@@ -370,7 +380,6 @@ static void __scratch_x("") hstx_dma_irq(void) {
         } else
 #endif
         {
-            (void)audio_buf;
             ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
             ch->transfer_count = count_of(s_vblank_line_vsync_off);
         }
@@ -496,6 +505,7 @@ bool video_hstx_init(void) {
     s_vactive_line[9] = hdmi_video_guardband_word;
 #endif
 
+#if MICRONES_HDMI_DATA_ISLANDS
     /* Build VBI line templates and pre-populate islands with NULL packets so
      * the channel is well-formed even before audio samples arrive. */
     for (uint32_t b = 0u; b < 2u; ++b) {
@@ -527,6 +537,7 @@ bool video_hstx_init(void) {
                                0u, 0u, island);
         }
     }
+#endif /* MICRONES_HDMI_DATA_ISLANDS */
 
     hstx_configure_peripheral();
     for (uint32_t gpio = 12u; gpio <= 19u; ++gpio) {
@@ -663,6 +674,7 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
 
 void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     (void)sample_rate;
+#if MICRONES_HDMI_DATA_ISLANDS
     /* The data-island scheduler is fixed for 48 kHz; we ignore the requested
      * rate and rely on the audio backend wrapper to declare 48 kHz. */
     s_hdmi_pcm_head = 0u;
@@ -670,10 +682,12 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_audio_underruns = 0u;
     s_hdmi_audio_overruns = 0u;
+#endif
 }
 
 size_t video_hstx_hdmi_audio_push(const int16_t *interleaved_stereo,
                                   size_t nframes) {
+#if MICRONES_HDMI_DATA_ISLANDS
     if (interleaved_stereo == NULL || nframes == 0u) {
         return 0u;
     }
@@ -695,16 +709,34 @@ size_t video_hstx_hdmi_audio_push(const int16_t *interleaved_stereo,
         ++written;
     }
     return written;
+#else
+    /* Audio is not wired to the link in this build; silently drop samples
+     * so the caller doesn't loop forever trying to push them. */
+    (void)interleaved_stereo;
+    return nframes;
+#endif
 }
 
 uint32_t video_hstx_hdmi_audio_underruns(void) {
+#if MICRONES_HDMI_DATA_ISLANDS
     return s_hdmi_audio_underruns;
+#else
+    return 0u;
+#endif
 }
 
 uint32_t video_hstx_hdmi_audio_overruns(void) {
+#if MICRONES_HDMI_DATA_ISLANDS
     return s_hdmi_audio_overruns;
+#else
+    return 0u;
+#endif
 }
 
 uint32_t video_hstx_hdmi_audio_buffer_level(void) {
+#if MICRONES_HDMI_DATA_ISLANDS
     return hdmi_pcm_available_frames();
+#else
+    return 0u;
+#endif
 }
