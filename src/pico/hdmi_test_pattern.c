@@ -146,7 +146,7 @@ void __scratch_x("") dma_irq_handler() {
 // Main program
 
 static __force_inline uint8_t colour_rgb332(uint8_t r, uint8_t g, uint8_t b) {
-    return (r & 0xc0) >> 6 | (g & 0xe0) >> 3 | (b & 0xe0) >> 0;
+    return (r & 0xe0) | ((g & 0xe0) >> 3) | ((b & 0xc0) >> 6);
 }
 
 static void fill_test_pattern(void) {
@@ -184,9 +184,10 @@ static void fill_test_pattern(void) {
                     break;
                 }
             } else {
-                r = (uint8_t)((x * 255u) / (MODE_H_ACTIVE_PIXELS - 1u));
-                g = (uint8_t)(((y - 320u) * 255u) / 159u);
-                b = ((x / 16u) ^ (y / 16u)) & 1u ? 255u : 32u;
+                uint8_t level = ((x / 16u) ^ (y / 16u)) & 1u ? 255u : 0u;
+                r = level;
+                g = level;
+                b = level;
             }
 
             if (x == 0 || y == 0 || x == MODE_H_ACTIVE_PIXELS - 1u || y == MODE_V_ACTIVE_LINES - 1u) {

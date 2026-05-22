@@ -356,6 +356,23 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
     micrones_add_pico_target(micrones_pico_analog analog micrones_core_pico_analog pwm)
     micrones_add_pico_target(micrones_pico_tft tft micrones_core_pico_tft pwm)
     micrones_add_pico_target(micrones_pico_tft_max98357 tft micrones_core_pico_tft max98357)
+
+    add_executable(micrones_pico_hdmi_test_pattern
+        src/pico/hdmi_test_pattern.c
+    )
+
+    target_link_libraries(micrones_pico_hdmi_test_pattern PRIVATE
+        pico_stdlib
+        pico_multicore
+        hardware_dma
+        pico_sync
+    )
+
+    target_compile_definitions(micrones_pico_hdmi_test_pattern PRIVATE
+        SYS_CLK_HZ=125000000
+    )
+
+    pico_add_extra_outputs(micrones_pico_hdmi_test_pattern)
 elseif (MICRONES_PLATFORM STREQUAL "web")
     add_executable(micrones_wasm
         src/web/web_main.c
