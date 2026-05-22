@@ -414,6 +414,19 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 MICRONES_BOARD_V0_1=1
                 MICRONES_SYS_CLK_MHZ=315
             )
+            # HDMI bring-up bisect switches (default to full HDMI mode):
+            #   -DMICRONES_HDMI_DATA_ISLANDS=OFF   -> pure DVI in blanking
+            #   -DMICRONES_HDMI_VIDEO_PREAMBLE=OFF -> drop video preamble + guard band
+            #   -DHDMI_BCH_POLY=0x83               -> alternative BCH polynomial
+            if (DEFINED MICRONES_HDMI_DATA_ISLANDS AND NOT MICRONES_HDMI_DATA_ISLANDS)
+                target_compile_definitions(${target_name} PRIVATE MICRONES_HDMI_DATA_ISLANDS=0)
+            endif ()
+            if (DEFINED MICRONES_HDMI_VIDEO_PREAMBLE AND NOT MICRONES_HDMI_VIDEO_PREAMBLE)
+                target_compile_definitions(${target_name} PRIVATE MICRONES_HDMI_VIDEO_PREAMBLE=0)
+            endif ()
+            if (DEFINED HDMI_BCH_POLY)
+                target_compile_definitions(${target_name} PRIVATE HDMI_BCH_POLY=${HDMI_BCH_POLY})
+            endif ()
 
             if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")
                 target_sources(${target_name} PRIVATE

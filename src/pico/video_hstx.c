@@ -140,6 +140,31 @@ static uint32_t s_vblank_line_vsync_on[] = {
  *    RAW_REPEAT|2, video_guardband,
  *    TMDS|640]
  */
+/*
+ * Visible scanline cmd list. In DVI mode the HBP is just sync-off filler; in
+ * HDMI mode we insert the video preamble (8 px) and video guard band (2 px)
+ * immediately before the TMDS data period.
+ *
+ * Two compile-time switches let us bisect HDMI bring-up:
+ *   MICRONES_HDMI_VIDEO_PREAMBLE  (default 1) — emit the 8 px preamble + 2 px
+ *     guard band before active video. Required by HDMI sinks. Set to 0 to
+ *     match the original DVI-only layout if a receiver rejects the preamble.
+ *   MICRONES_HDMI_DATA_ISLANDS    (default 1) — inject AVI/Audio InfoFrame +
+ *     ACR + Audio Sample packets during VBI. Set to 0 to send pure DVI in
+ *     blanking (no audio reaches the sink in this mode).
+ *
+ * Override at configure time, e.g.:
+ *   cmake -B build-pico -DMICRONES_PLATFORM=pico \
+ *         -DMICRONES_HDMI_DATA_ISLANDS=OFF ...
+ */
+#ifndef MICRONES_HDMI_VIDEO_PREAMBLE
+#define MICRONES_HDMI_VIDEO_PREAMBLE 1
+#endif
+#ifndef MICRONES_HDMI_DATA_ISLANDS
+#define MICRONES_HDMI_DATA_ISLANDS 1
+#endif
+
+#if MICRONES_HDMI_VIDEO_PREAMBLE
 static uint32_t s_vactive_line[] = {
     HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH,
     SYNC_V1_H1,
@@ -153,6 +178,18 @@ static uint32_t s_vactive_line[] = {
     0u, /* patched in init to hdmi_video_guardband_word */
     HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS,
 };
+#else
+static uint32_t s_vactive_line[] = {
+    HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH,
+    SYNC_V1_H1,
+    HSTX_CMD_RAW_REPEAT | MODE_H_SYNC_WIDTH,
+    SYNC_V1_H0,
+    HSTX_CMD_RAW_REPEAT | MODE_H_BACK_PORCH,
+    SYNC_V1_H1,
+    HSTX_CMD_NOP,
+    HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS,
+};
+#endif
 
 static uint8_t __attribute__((aligned(4)))
     s_framebuf[MODE_H_ACTIVE_PIXELS * FRAMEBUF_STORED_LINES];
@@ -321,6 +358,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
         ch->read_addr = (uintptr_t)s_vblank_line_vsync_on;
         ch->transfer_count = count_of(s_vblank_line_vsync_on);
     } else if (s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH) {
+#if MICRONES_HDMI_DATA_ISLANDS
         if (s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
             s_v_scanline <= HDMI_AUDIO_LAST_VBI_LINE) {
             uint32_t line_idx = s_v_scanline - HDMI_AUDIO_FIRST_VBI_LINE;
@@ -329,7 +367,10 @@ static void __scratch_x("") hstx_dma_irq(void) {
         } else if (s_v_scanline == HDMI_CONTROL_VBI_LINE) {
             ch->read_addr = (uintptr_t)s_hdmi_control_line_buf;
             ch->transfer_count = HDMI_CONTROL_LINE_WORDS;
-        } else {
+        } else
+#endif
+        {
+            (void)audio_buf;
             ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
             ch->transfer_count = count_of(s_vblank_line_vsync_off);
         }
@@ -447,11 +488,13 @@ bool video_hstx_init(void) {
         s_dmach_pong = dma_claim_unused_channel(true);
     }
 
+#if MICRONES_HDMI_VIDEO_PREAMBLE
     /* Patch the per-pixel HDMI preamble/guard-band words into the active-line
      * cmd list. We use array indices rather than struct offsets to keep this
      * narrow and obvious. */
     s_vactive_line[7] = hdmi_video_preamble_word;
     s_vactive_line[9] = hdmi_video_guardband_word;
+#endif
 
     /* Build VBI line templates and pre-populate islands with NULL packets so
      * the channel is well-formed even before audio samples arrive. */
@@ -565,12 +608,14 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
         }
     }
 
+#if MICRONES_HDMI_DATA_ISLANDS
     /* Refill the inactive audio data-island buffer and atomically swap.
      * This happens once per NES frame, which is close to once per display
      * frame; the receiver tolerates the small jitter via its audio FIFO. */
     uint8_t back = s_hdmi_audio_active_buf ^ 1u;
     hdmi_refill_audio_islands(back);
     s_hdmi_audio_active_buf = back;
+#endif
 
     uint64_t elapsed = time_us_64() - start_us;
     s_stats.present_us_total += elapsed;
