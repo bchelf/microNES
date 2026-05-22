@@ -46,6 +46,7 @@
 
 #define NES_SCALE 2u
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
+#define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
 
 static uint32_t s_vblank_line_vsync_off[] = {
     HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH,
@@ -80,7 +81,7 @@ static uint32_t s_vactive_line[] = {
 };
 
 static uint8_t __attribute__((aligned(4)))
-    s_framebuf[MODE_H_ACTIVE_PIXELS * MODE_V_ACTIVE_LINES];
+    s_framebuf[MODE_H_ACTIVE_PIXELS * FRAMEBUF_STORED_LINES];
 
 static bool s_dma_pong;
 static uint32_t s_v_scanline = 2u;
@@ -133,8 +134,9 @@ static void __scratch_x("") hstx_dma_irq(void) {
         ch->transfer_count = count_of(s_vactive_line);
         s_vactive_cmdlist_posted = true;
     } else {
-        ch->read_addr = (uintptr_t)&s_framebuf[
-            (s_v_scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES)) * MODE_H_ACTIVE_PIXELS];
+        uint32_t active_y = s_v_scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
+        uint32_t stored_y = active_y / NES_SCALE;
+        ch->read_addr = (uintptr_t)&s_framebuf[stored_y * MODE_H_ACTIVE_PIXELS];
         ch->transfer_count = MODE_H_ACTIVE_PIXELS / sizeof(uint32_t);
         s_vactive_cmdlist_posted = false;
     }
@@ -256,27 +258,20 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
     start_us = time_us_64();
 
     for (uint32_t y = 0u; y < NES_FRAME_HEIGHT; ++y) {
-        uint8_t *dst0 = &s_framebuf[(y * 2u) * MODE_H_ACTIVE_PIXELS];
-        uint8_t *dst1 = dst0 + MODE_H_ACTIVE_PIXELS;
+        uint8_t *dst = &s_framebuf[y * MODE_H_ACTIVE_PIXELS];
         const uint8_t *src = nes_framebuffer_scanline_const(frame, (uint16_t)y);
 
-        memset(dst0, 0, NES_VIEW_X);
-        memset(dst1, 0, NES_VIEW_X);
+        memset(dst, 0, NES_VIEW_X);
 
-        uint8_t *out0 = dst0 + NES_VIEW_X;
-        uint8_t *out1 = dst1 + NES_VIEW_X;
+        uint8_t *out = dst + NES_VIEW_X;
         for (uint32_t x = 0u; x < NES_FRAME_WIDTH; ++x) {
             const uint8_t *rgb = k_nes_palette_rgb[src[x] & 0x3fu];
             uint8_t c = rgb332(rgb[0], rgb[1], rgb[2]);
-            out0[x * 2u + 0u] = c;
-            out0[x * 2u + 1u] = c;
-            out1[x * 2u + 0u] = c;
-            out1[x * 2u + 1u] = c;
+            out[x * 2u + 0u] = c;
+            out[x * 2u + 1u] = c;
         }
 
-        memset(dst0 + NES_VIEW_X + (NES_FRAME_WIDTH * NES_SCALE), 0,
-               MODE_H_ACTIVE_PIXELS - NES_VIEW_X - (NES_FRAME_WIDTH * NES_SCALE));
-        memset(dst1 + NES_VIEW_X + (NES_FRAME_WIDTH * NES_SCALE), 0,
+        memset(dst + NES_VIEW_X + (NES_FRAME_WIDTH * NES_SCALE), 0,
                MODE_H_ACTIVE_PIXELS - NES_VIEW_X - (NES_FRAME_WIDTH * NES_SCALE));
     }
 
@@ -293,17 +288,18 @@ void video_hstx_draw_test_pattern(void) {
         {255,   0, 255}, {255,   0,   0}, {  0,   0, 255}, {  0,   0,   0},
     };
 
-    for (uint32_t y = 0u; y < MODE_V_ACTIVE_LINES; ++y) {
+    for (uint32_t y = 0u; y < FRAMEBUF_STORED_LINES; ++y) {
+        uint32_t display_y = y * NES_SCALE;
         for (uint32_t x = 0u; x < MODE_H_ACTIVE_PIXELS; ++x) {
             uint8_t c;
             if (x == 0u || x == MODE_H_ACTIVE_PIXELS - 1u ||
-                y == 0u || y == MODE_V_ACTIVE_LINES - 1u) {
+                y == 0u || y == FRAMEBUF_STORED_LINES - 1u) {
                 c = rgb332(255, 255, 255);
-            } else if (y < 320u) {
+            } else if (display_y < 320u) {
                 const uint8_t *rgb = colors[(x * 8u) / MODE_H_ACTIVE_PIXELS];
                 c = rgb332(rgb[0], rgb[1], rgb[2]);
             } else {
-                uint8_t level = ((x / 16u) ^ (y / 16u)) & 1u ? 255u : 0u;
+                uint8_t level = ((x / 16u) ^ (display_y / 16u)) & 1u ? 255u : 0u;
                 c = rgb332(level, level, level);
             }
             s_framebuf[y * MODE_H_ACTIVE_PIXELS + x] = c;
