@@ -9,6 +9,7 @@
 #include "pico_video_backend.h"
 #include "pico_input.h"
 #include "pico_status.h"
+#include "rom_menu.h"
 #include "rom_source_flash_cache.h"
 #include "rom_source.h"
 #include "rom_source_sd.h"
@@ -19,6 +20,20 @@
 #include "pico/stdlib.h"
 
 #include <stdio.h>
+
+#if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
+typedef struct {
+    PicoEmulatorVideoAdapter *adapter;
+    NesFrameBuffer *fb;
+} FlashProgressCtx;
+
+static void flash_progress_cb(size_t done, size_t total, void *user) {
+    FlashProgressCtx *ctx = (FlashProgressCtx *)user;
+    int pct = (total > 0) ? (int)((done * 100u) / total) : 0;
+    rom_menu_render_loading(ctx->fb, NULL, pct);
+    emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
+}
+#endif
 
 int main(void) {
     const uint32_t audio_sample_rate = pico_audio_backend_preferred_sample_rate();
@@ -119,6 +134,11 @@ int main(void) {
 #if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
             if (!rom_source_flash_cache_init(&rom_source, &sd_rom_source)) {
                 rom_source = sd_rom_source;
+            } else {
+                static FlashProgressCtx s_progress_ctx;
+                s_progress_ctx.adapter = &emulator_video;
+                s_progress_ctx.fb = &shell.menu_fb;
+                rom_source_flash_cache_set_progress(flash_progress_cb, &s_progress_ctx);
             }
 #else
             rom_source = sd_rom_source;

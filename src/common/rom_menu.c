@@ -346,3 +346,51 @@ void rom_menu_render(const RomMenu *menu,
     const char *footer = "Up/Down move  Start/A run  Down+Start back";
     draw_centered_text(fb, MENU_FOOTER_Y, footer, MENU_TEXT_FAINT);
 }
+
+void rom_menu_render_loading(NesFrameBuffer *fb, const char *name, int pct) {
+    if (fb == NULL) {
+        return;
+    }
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+
+    enum {
+        BOX_W  = 180,
+        BOX_H  = 40,
+        BOX_X  = (NES_FRAME_WIDTH  - BOX_W) / 2,
+        BOX_Y  = (NES_FRAME_HEIGHT - BOX_H) / 2 - 10,
+        BAR_X  = BOX_X + 10,
+        BAR_Y  = BOX_Y + 22,
+        BAR_W  = BOX_W - 20,
+        BAR_H  = 8,
+    };
+
+    fill_rect(fb, BOX_X - 2, BOX_Y - 2, BOX_W + 4, BOX_H + 4, MENU_BG);
+    fill_rect(fb, BOX_X, BOX_Y, BOX_W, BOX_H, MENU_BG);
+    fill_rect(fb, BOX_X, BOX_Y, BOX_W, 1, MENU_TEXT_DIM);
+    fill_rect(fb, BOX_X, BOX_Y + BOX_H - 1, BOX_W, 1, MENU_TEXT_DIM);
+    fill_rect(fb, BOX_X, BOX_Y, 1, BOX_H, MENU_TEXT_DIM);
+    fill_rect(fb, BOX_X + BOX_W - 1, BOX_Y, 1, BOX_H, MENU_TEXT_DIM);
+
+    char label[64];
+    if (name != NULL && name[0] != '\0') {
+        char trimmed[24];
+        snprintf(trimmed, sizeof(trimmed), "%s", name);
+        snprintf(label, sizeof(label), "Loading %s...", trimmed);
+    } else {
+        snprintf(label, sizeof(label), "Loading...");
+    }
+    draw_centered_text(fb, BOX_Y + 6, label, MENU_TEXT);
+
+    fill_rect(fb, BAR_X, BAR_Y, BAR_W, BAR_H, MENU_TEXT_DIM);
+    int fill_w = (BAR_W * pct) / 100;
+    if (fill_w > 0) {
+        fill_rect(fb, BAR_X, BAR_Y, fill_w, BAR_H, MENU_BAR);
+    }
+
+    char pct_text[8];
+    snprintf(pct_text, sizeof(pct_text), "%d%%", pct);
+    int pw = font5x7_text_width(pct_text);
+    font5x7_draw_text(fb, BOX_X + (BOX_W - pw) / 2, BAR_Y + BAR_H + 3,
+                      pct_text, MENU_TEXT_FAINT);
+}

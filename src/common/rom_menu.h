@@ -39,4 +39,8 @@ void rom_menu_render(const RomMenu *menu,
                      NesFrameBuffer *fb,
                      const char *status);
 
+/* Draw a modal loading-bar overlay on top of the current framebuffer.
+ * pct is 0-100.  name (may be NULL) is displayed above the bar. */
+void rom_menu_render_loading(NesFrameBuffer *fb, const char *name, int pct);
+
 #endif

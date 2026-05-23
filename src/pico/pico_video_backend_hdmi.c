@@ -2,8 +2,6 @@
 
 #include "video_hstx.h"
 
-#include "pico/stdlib.h"
-
 #include <stdio.h>
 #include <string.h>
 
@@ -30,14 +28,15 @@ void pico_video_backend_start_emulator(void) {
 }
 
 void pico_video_backend_suspend_for_flash(void) {
-    video_hstx_stop();
+    /* HDMI: keep video running during flash operations.  The HSTX DMA ISR
+     * is in SRAM (__scratch_x) so it continues safely between the brief
+     * per-sector interrupt-disable windows.  During each ~100 ms sector
+     * erase the DMA chain runs on autopilot (repeating the last scanline
+     * data) and the HDMI sink stays locked. */
 }
 
 void pico_video_backend_resume_after_flash(void) {
-    video_hstx_start();
-    /* Give the HDMI sink time to lock onto the restored TMDS signal.
-     * Without this delay the monitor may fail to reacquire sync. */
-    sleep_ms(100);
+    /* Nothing to resume — video was never stopped. */
 }
 
 void pico_video_backend_get_stats(PicoVideoBackendStats *stats_out) {

@@ -1,10 +1,8 @@
 #include "rom_source_flash_cache.h"
 
 #include "hardware/flash.h"
-#include "hardware/irq.h"
 #include "hardware/regs/addressmap.h"
 #include "hardware/sync.h"
-#include "pico/multicore.h"
 
 #include "pico_video_backend.h"
 
@@ -34,6 +32,8 @@ typedef struct {
     uint8_t page[FLASH_PAGE_SIZE];
     size_t page_used;
     size_t bytes_programmed;
+    size_t progress_base;
+    size_t progress_total;
 } FlashCacheWriter;
 
 typedef struct {
@@ -44,6 +44,8 @@ typedef struct {
 
 static FlashCacheState s_state;
 static char s_last_error[160];
+static FlashCacheProgressFn s_progress_fn;
+static void *s_progress_user;
 
 extern char __flash_binary_end;
 
@@ -84,6 +86,12 @@ static bool validate_cache_range(size_t rom_size, char *err, size_t err_size) {
     return true;
 }
 
+static void report_progress(size_t done, size_t total) {
+    if (s_progress_fn != NULL) {
+        s_progress_fn(done, total, s_progress_user);
+    }
+}
+
 static bool flash_cache_program_page(FlashCacheWriter *writer) {
     uint32_t save = save_and_disable_interrupts();
     flash_range_program(writer->write_offset, writer->page, FLASH_PAGE_SIZE);
@@ -92,6 +100,9 @@ static bool flash_cache_program_page(FlashCacheWriter *writer) {
     writer->bytes_programmed += FLASH_PAGE_SIZE;
     writer->page_used = 0;
     memset(writer->page, 0xff, sizeof(writer->page));
+
+    size_t pages_done = writer->bytes_programmed / FLASH_PAGE_SIZE;
+    report_progress(writer->progress_base + pages_done, writer->progress_total);
 
     return true;
 }
@@ -157,8 +168,6 @@ static bool cached_load(RomSource *self, size_t index,
     FlashCacheWriter writer;
     size_t streamed_size = 0;
     bool ok;
-    bool lockout_core1;
-    bool video_suspended = false;
     FlashCacheCompare cmp;
 
     if (out_buf == NULL || out_size == NULL) {
@@ -204,33 +213,34 @@ static bool cached_load(RomSource *self, size_t index,
     }
     streamed_size = 0;
 
-    lockout_core1 = multicore_lockout_victim_is_initialized(1);
-
     pico_video_backend_suspend_for_flash();
-    video_suspended = true;
 
-    if (lockout_core1) {
-        multicore_lockout_start_blocking();
-    }
+    uint32_t total_sectors = erase_size / FLASH_SECTOR_SIZE;
+    uint32_t total_pages = align_up_u32((uint32_t)rom_size, FLASH_PAGE_SIZE) / FLASH_PAGE_SIZE;
+    size_t progress_total = (size_t)total_sectors + (size_t)total_pages;
+    size_t progress_done = 0;
+
+    report_progress(0, progress_total);
 
     for (uint32_t off = 0; off < erase_size; off += FLASH_SECTOR_SIZE) {
         uint32_t save = save_and_disable_interrupts();
         flash_range_erase((uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET + off,
                           FLASH_SECTOR_SIZE);
         restore_interrupts(save);
+        ++progress_done;
+        report_progress(progress_done, progress_total);
     }
+
+    writer.progress_base = (size_t)total_sectors;
+    writer.progress_total = progress_total;
 
     ok = st->backing->load_stream(st->backing, index, flash_cache_write, &writer,
                                   &streamed_size, err, err_size);
     if (ok) {
         ok = flash_cache_flush(&writer);
     }
-    if (lockout_core1) {
-        multicore_lockout_end_blocking();
-    }
-    if (video_suspended) {
-        pico_video_backend_resume_after_flash();
-    }
+
+    pico_video_backend_resume_after_flash();
 
     if (!ok) {
         return false;
@@ -301,4 +311,9 @@ bool rom_source_flash_cache_init(RomSource *out_source, RomSource *backing) {
 
 const char *rom_source_flash_cache_last_error(void) {
     return s_last_error;
+}
+
+void rom_source_flash_cache_set_progress(FlashCacheProgressFn fn, void *user) {
+    s_progress_fn = fn;
+    s_progress_user = user;
 }
