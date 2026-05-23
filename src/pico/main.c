@@ -28,8 +28,6 @@ int main(void) {
     static RomSource                sd_rom_source;
     static RomSource                rom_source;
     MicronesFramePacer frame_pacer;
-    uint64_t fps_report_started_us = 0;
-    uint64_t fps_report_started_frames = 0;
 #if MICRONES_ENABLE_PERF_LOG
     uint64_t report_started_us = 0;
     uint64_t report_render_us = 0;
@@ -138,8 +136,6 @@ int main(void) {
         pico_video_backend_start_emulator();
 #endif
         micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
-        fps_report_started_us = time_us_64();
-        fps_report_started_frames = 0;
 
 #if MICRONES_ENABLE_PERF_LOG
         report_started_us = time_us_64();
@@ -333,21 +329,6 @@ int main(void) {
             }
 #endif
             micrones_frame_pacer_frame_done(&frame_pacer, micrones_pico_clock_now_ns());
-
-            {
-                uint64_t now_us = time_us_64();
-                if (now_us - fps_report_started_us >= 1000000ull) {
-                    uint64_t rendered = emulator_video.rendered_frames;
-                    uint64_t delta_frames = rendered - fps_report_started_frames;
-                    uint64_t delta_us = now_us - fps_report_started_us;
-                    double fps = delta_us != 0
-                        ? ((double)delta_frames * 1000000.0) / (double)delta_us
-                        : 0.0;
-                    printf("emu fps: %.2f\n", fps);
-                    fps_report_started_us = now_us;
-                    fps_report_started_frames = rendered;
-                }
-            }
         }
         pico_video_backend_start_test_pattern();
         while (true) {

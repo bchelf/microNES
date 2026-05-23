@@ -6,9 +6,7 @@
 #include "hardware/sync.h"
 #include "pico/multicore.h"
 
-#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
-#include "video_hstx.h"
-#endif
+#include "pico_video_backend.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -160,7 +158,7 @@ static bool cached_load(RomSource *self, size_t index,
     size_t streamed_size = 0;
     bool ok;
     bool lockout_core1;
-    bool hdmi_suspended = false;
+    bool video_suspended = false;
     FlashCacheCompare cmp;
 
     if (out_buf == NULL || out_size == NULL) {
@@ -206,15 +204,13 @@ static bool cached_load(RomSource *self, size_t index,
     }
     streamed_size = 0;
 
-    lockout_core1 = multicore_lockout_victim_is_initialized(1);
+    pico_video_backend_suspend_for_flash();
+    video_suspended = true;
+
+    lockout_core1 = !video_suspended && multicore_lockout_victim_is_initialized(1);
     if (lockout_core1) {
         multicore_lockout_start_blocking();
     }
-
-#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
-    video_hstx_stop();
-    hdmi_suspended = true;
-#endif
 
     {
         uint32_t save = save_and_disable_interrupts();
@@ -230,10 +226,8 @@ static bool cached_load(RomSource *self, size_t index,
     if (lockout_core1) {
         multicore_lockout_end_blocking();
     }
-    if (hdmi_suspended) {
-#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
-        video_hstx_start();
-#endif
+    if (video_suspended) {
+        pico_video_backend_resume_after_flash();
     }
 
     if (!ok) {

@@ -363,4 +363,6 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
         return;
     }
     *stats_out = s_stats;
+    stats_out->scanline = s_v_scanline;
+    stats_out->started = s_started;
 }

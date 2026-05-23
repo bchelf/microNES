@@ -100,6 +100,10 @@ void video_ntsc_init(void);
  */
 void video_ntsc_start(void);
 
+/* Stop PIO/DMA video generation so core 1 can be reset safely around flash
+ * erase/program operations. */
+void video_ntsc_stop(void);
+
 /*
  * Store the palette-to-luma lookup table used by render_scanline_composite().
  * palette_to_luma[i] must be in [0..7].  palette_size must be ≤ 64.

@@ -13,6 +13,8 @@ typedef struct {
     uint64_t swap_wait_us_max;
     uint32_t queue_stall_count;
     uint64_t queue_stall_us_total;
+    uint32_t video_scanline;
+    bool video_started;
 } PicoVideoBackendStats;
 
 const char *pico_video_backend_name(void);
@@ -20,6 +22,8 @@ const char *pico_video_backend_last_error(void);
 bool pico_video_backend_init(void);
 void pico_video_backend_start_test_pattern(void);
 void pico_video_backend_start_emulator(void);
+void pico_video_backend_suspend_for_flash(void);
+void pico_video_backend_resume_after_flash(void);
 void pico_video_backend_get_stats(PicoVideoBackendStats *stats_out);
 
 #endif

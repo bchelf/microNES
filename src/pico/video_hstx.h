@@ -10,6 +10,8 @@ typedef struct {
     uint64_t frames_presented;
     uint64_t present_us_total;
     uint64_t present_us_max;
+    uint32_t scanline;
+    bool started;
 } VideoHstxStats;
 
 bool video_hstx_init(void);
