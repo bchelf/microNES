@@ -254,12 +254,19 @@ void hdmi_pkt_make_avi_infoframe(HdmiPacket *pkt) {
     memset(body, 0, sizeof(body));
     /* Byte 1: Y[6:5]=0 (RGB), A0[4]=0, B[3:2]=0, S[1:0]=0. */
     body[0] = 0x00u;
-    /* Byte 2: C[7:6]=0 (no data), M[5:4]=10 (4:3), R[3:0]=8 (same as picture). */
-    body[1] = (uint8_t)((0u << 6) | (2u << 4) | 8u);
+    /* Byte 2: C[7:6]=0 (no data), M[5:4]=0 (no aspect ratio), R[3:0]=8
+     * (same as picture). VIC=0 below tells the sink "no CEA mode claimed,"
+     * so the aspect-ratio M field must also be 0 (per CEA-861). */
+    body[1] = (uint8_t)((0u << 6) | (0u << 4) | 8u);
     /* Byte 3: ITC[7]=0, EC[6:4]=0, Q[3:2]=2 (RGB full range), SC[1:0]=0. */
     body[2] = (uint8_t)(2u << 2);
-    /* Byte 4: VIC = 1 (640x480p @ 59.94/60). */
-    body[3] = 1u;
+    /* Byte 4: VIC = 0 — let the sink auto-detect from timing.
+     *
+     * We could claim VIC=1 (640x480p59.94, 25.175 MHz exact pixel clock) but
+     * our HSTX is running 25.0 MHz exactly (clk_sys/2/5). The 0.7%
+     * discrepancy is enough for some sinks to reject the InfoFrame and
+     * drop the link. VIC=0 sidesteps the issue. */
+    body[3] = 0u;
     /* Byte 5..13: pixel repetition and bar info zero. */
     pack_infoframe(pkt, HDMI_PKT_TYPE_INFOFRAME_AVI, 2u, 13u, body);
 }

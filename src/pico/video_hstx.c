@@ -167,6 +167,13 @@ static uint32_t s_vblank_line_vsync_on[] = {
 #ifndef MICRONES_HDMI_DATA_ISLANDS
 #define MICRONES_HDMI_DATA_ISLANDS 1
 #endif
+/* Toggle for the per-VBI-line PCM audio sample islands. When OFF, the
+ * control island (AVI InfoFrame + Audio InfoFrame + GCP + ACR) is still
+ * emitted on its scanline, but no PCM audio reaches the sink. Useful to
+ * isolate "control packets ok / audio packets bad" failures. */
+#ifndef MICRONES_HDMI_AUDIO_PACKETS
+#define MICRONES_HDMI_AUDIO_PACKETS 1
+#endif
 
 #if MICRONES_HDMI_VIDEO_PREAMBLE
 static uint32_t s_vactive_line[] = {
@@ -373,15 +380,19 @@ static void __scratch_x("") hstx_dma_irq(void) {
         ch->transfer_count = count_of(s_vblank_line_vsync_on);
     } else if (s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH) {
 #if MICRONES_HDMI_DATA_ISLANDS
-        if (s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
-            s_v_scanline <= HDMI_AUDIO_LAST_VBI_LINE) {
+        if (s_v_scanline == HDMI_CONTROL_VBI_LINE) {
+            ch->read_addr = (uintptr_t)s_hdmi_control_line_buf;
+            ch->transfer_count = HDMI_CONTROL_LINE_WORDS;
+        }
+#if MICRONES_HDMI_AUDIO_PACKETS
+        else if (s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
+                 s_v_scanline <= HDMI_AUDIO_LAST_VBI_LINE) {
             uint32_t line_idx = s_v_scanline - HDMI_AUDIO_FIRST_VBI_LINE;
             ch->read_addr = (uintptr_t)&s_hdmi_audio_line_buf[audio_buf][line_idx][0];
             ch->transfer_count = HDMI_AUDIO_LINE_WORDS;
-        } else if (s_v_scanline == HDMI_CONTROL_VBI_LINE) {
-            ch->read_addr = (uintptr_t)s_hdmi_control_line_buf;
-            ch->transfer_count = HDMI_CONTROL_LINE_WORDS;
-        } else
+        }
+#endif
+        else
 #endif
         {
             ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
@@ -623,7 +634,7 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
         }
     }
 
-#if MICRONES_HDMI_DATA_ISLANDS
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
     /* Refill the inactive audio data-island buffer and atomically swap.
      * This happens once per NES frame, which is close to once per display
      * frame; the receiver tolerates the small jitter via its audio FIFO. */
