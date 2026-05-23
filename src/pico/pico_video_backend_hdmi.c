@@ -2,6 +2,7 @@
 
 #include "video_hstx.h"
 
+#include <stdio.h>
 #include <string.h>
 
 const char *pico_video_backend_name(void) {

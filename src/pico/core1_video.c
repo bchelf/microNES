@@ -28,6 +28,8 @@ void core1_video_get_stats(Core1VideoStats *stats_out) {
 static void __not_in_flash_func(core1_entry)(void) {
     ScanlineQueueSlot slot;
 
+    multicore_lockout_victim_init();
+
     // Wait for the initial DMA frame to complete so the build buffer is free.
     video_ntsc_begin_frame();
 

@@ -144,15 +144,6 @@ bool parallel_tft_init(void) {
     sleep_ms(150);
     parallel_tft_select();
 
-    printf("tft: transport=%s clkdiv=%.2f data_base=%u wr=%u rs=%u cs=%u rst=%u rd=%u\n",
-           "parallel_8080",
-           (double)MICRONES_TFT_PARALLEL_CLKDIV,
-           MICRONES_TFT_PIN_D0_BASE,
-           MICRONES_TFT_PIN_WR,
-           MICRONES_TFT_PIN_RS,
-           MICRONES_TFT_PIN_CS,
-           MICRONES_TFT_PIN_RST,
-           MICRONES_TFT_PIN_RD);
     return true;
 }
 

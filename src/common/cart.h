@@ -30,6 +30,7 @@ typedef struct {
     uint32_t chr_mask;       /* chr_size - 1; use with & instead of % in hot paths */
     uint8_t *chr_row_pixels;
     size_t chr_row_count;
+    uint8_t chr_row_scratch[8];
     bool chr_is_ram;
     bool is_nes2;
     bool has_battery;        /* iNES flags6 bit 1: battery-backed PRG-RAM at $6000 */

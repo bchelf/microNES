@@ -135,6 +135,7 @@ void nes_set_sprite0_diag_window(Nes *nes, uint64_t frame_start, uint64_t frame_
 
 bool MICRONES_HOT_FUNC(nes_step_instruction)(Nes *nes) {
     bool ok = cpu6502_step(&nes->cpu, nes);
+    nes->stats.instruction_count = nes->cpu.insn_count;
     if (nes->pending_apu_cycles > 0) {
         apu_step(&nes->apu, nes->pending_apu_cycles);
         nes->pending_apu_cycles = 0;
@@ -152,8 +153,10 @@ bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
      * eliminating the CALL8+ENTRY+RETW overhead (~8-11 cycles) on every one
      * of the ~27,360 CPU instructions executed per frame. */
     if (!cpu6502_run_scanline(&nes->cpu, nes)) {
+        nes->stats.instruction_count = nes->cpu.insn_count;
         return false;
     }
+    nes->stats.instruction_count = nes->cpu.insn_count;
 
     /* Flush APU cycles accumulated across all instructions in this scanline.
      * Batching here (240×/frame) instead of per-instruction (~9828×/frame)

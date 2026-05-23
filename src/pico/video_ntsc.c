@@ -50,6 +50,7 @@
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/sync.h"
+#include "pico/multicore.h"
 #include "pico/stdlib.h"
 
 #include <math.h>
@@ -569,20 +570,17 @@ void video_ntsc_perf_get(MicronesVideoNtscPerfStats *out) {
 void video_ntsc_core1_entry(void) {
     uint32_t ch_mask = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
 
-    printf("[c1] entry: chan0=%u chan1=%u ch_mask=0x%08x\n",
-           s_dma_chan[0], s_dma_chan[1], (unsigned)ch_mask);
+    multicore_lockout_victim_init();
 
     /*
      * Hand DMA IRQ ownership to Core 1:
      *   • Disable IRQ_0 for our channels (Core 0 handler stops firing).
      *   • Register and enable IRQ_1 on Core 1's NVIC.
-     */
+    */
     dma_set_irq0_channel_mask_enabled(ch_mask, false);
-    printf("[c1] irq0 disabled for our channels\n");
 
     irq_set_exclusive_handler(DMA_IRQ_1, dma_irq1_handler);
     irq_set_enabled(DMA_IRQ_1, true);
-    printf("[c1] irq1 registered and enabled\n");
 
     ScanlineQueue *queue = core1_video_get_queue();
 
@@ -614,11 +612,6 @@ void video_ntsc_core1_entry(void) {
     pio_sm_set_enabled(s_pio, s_sm, true);
     gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
     dma_channel_start(s_dma_chan[0]);
-
-    printf("[c1] dma started: chan0_busy=%d chan1_busy=%d ints1=0x%08x\n",
-           (int)dma_channel_is_busy(s_dma_chan[0]),
-           (int)dma_channel_is_busy(s_dma_chan[1]),
-           (unsigned)dma_hw->ints1);
 
     /*
      * Pipeline state after start:

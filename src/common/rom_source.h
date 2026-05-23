@@ -42,6 +42,8 @@ typedef struct {
 } RomSourceEntry;
 
 typedef struct RomSource RomSource;
+typedef bool (*RomSourceStreamWriteFn)(void *user, const uint8_t *data, size_t size);
+
 struct RomSource {
     void *user;
     size_t (*count)(RomSource *self);
@@ -53,6 +55,15 @@ struct RomSource {
     bool (*load)(RomSource *self, size_t index,
                  uint8_t **out_buf, size_t *out_size,
                  char *err, size_t err_size);
+
+    /* Optional zero-copy-friendly load path.  The source streams the selected
+     * ROM into `write` without allocating a full image.  On success, out_size
+     * receives the ROM size.  Sources may leave this NULL; callers then fall
+     * back to load(). */
+    bool (*load_stream)(RomSource *self, size_t index,
+                        RomSourceStreamWriteFn write, void *write_user,
+                        size_t *out_size,
+                        char *err, size_t err_size);
 
     /* Free a buffer previously returned by load(). */
     void (*free_buf)(RomSource *self, uint8_t *buf);

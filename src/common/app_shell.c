@@ -57,6 +57,7 @@ static bool shell_launch(AppShell *shell, int index) {
         shell_set_status(shell, "Invalid selection");
         return false;
     }
+    const RomSourceEntry *entry = shell->source->entry(shell->source, (size_t)index);
 
     uint8_t *buf = NULL;
     size_t   sz  = 0;
@@ -82,8 +83,9 @@ static bool shell_launch(AppShell *shell, int index) {
         return false;
     }
 
-    /* Hold onto the buffer until the cart is unloaded.  The cart's prg_rom
-     * and chr_data pointers are aliases into this region. */
+    /* Hold onto the source buffer until the cart is unloaded.  Zero-copy CHR
+     * data still aliases this region, and some platforms may also keep PRG
+     * there if the optional SRAM copy fails. */
     shell->current_rom_buf  = buf;
     shell->current_rom_size = sz;
 

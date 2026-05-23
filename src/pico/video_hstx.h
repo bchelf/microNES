@@ -15,6 +15,7 @@ typedef struct {
 bool video_hstx_init(void);
 const char *video_hstx_last_error(void);
 void video_hstx_start(void);
+void video_hstx_stop(void);
 void video_hstx_draw_test_pattern(void);
 void video_hstx_present_frame(const NesFrameBuffer *frame);
 void video_hstx_get_stats(VideoHstxStats *stats_out);
