@@ -61,11 +61,15 @@ static int s_dmach_pong = -1;
  */
 #define HDMI_AUDIO_PACKETS_PER_LINE 8u
 #define HDMI_AUDIO_LINES            25u
-#define HDMI_AUDIO_FIRST_VBI_LINE   12u   /* V_BP starts at scanline 12. */
+/* The control island (AVI + Audio InfoFrame + GCP + ACR) goes on the FIRST
+ * line of V_BP — most TVs sample InfoFrames within a few lines of VSYNC and
+ * give up on the link if they don't see them early. Audio sample packets
+ * follow on the next 25 lines. */
+#define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
+#define HDMI_AUDIO_FIRST_VBI_LINE   (HDMI_CONTROL_VBI_LINE + 1u)
 #define HDMI_AUDIO_LAST_VBI_LINE    (HDMI_AUDIO_FIRST_VBI_LINE + HDMI_AUDIO_LINES - 1u)
 
 #define HDMI_CONTROL_PACKETS         4u   /* AVI + Audio IF + GCP + ACR */
-#define HDMI_CONTROL_VBI_LINE        (HDMI_AUDIO_LAST_VBI_LINE + 1u)
 
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */

@@ -47,16 +47,15 @@ typedef struct {
  * Bit-reversed BCH(64,56) generator polynomial.
  *
  * HDMI 1.4 §5.2.3.5 specifies G(x) = x^8 + x^7 + x^6 + x^4 + x^2 + 1 (0x1D5).
- * Bytes are transmitted LSB-first; this module processes them in transmit
- * order, so the feedback mask is the bit-reverse of the lower 8 bits of
- * G(x) (0xD5 reversed → 0xAB).
- *
- * If the receiver rejects packets during hardware bring-up, the most likely
- * culprit is this constant; the other commonly-cited value is 0x83. Override
- * by defining HDMI_BCH_POLY before including this header.
+ * Bytes are transmitted LSB-first; in principle the LSB-first feedback mask
+ * is the bit-reverse of the lower 8 bits of G(x) — 0xD5 reversed → 0xAB —
+ * but the commonly cited value in shipping RP2xxx HDMI implementations
+ * (Adam Heinrich's pico_dvi_audio, Wren6991's PicoDVI) is 0x83, and we
+ * default to that for compatibility. Override with -DHDMI_BCH_POLY=0xAB at
+ * configure time if your receiver prefers the mathematically derived value.
  */
 #ifndef HDMI_BCH_POLY
-#define HDMI_BCH_POLY 0xABu
+#define HDMI_BCH_POLY 0x83u
 #endif
 
 /* TERC4 codeword lookup (4-bit -> 10-bit TMDS). HDMI 1.4 Table 5-6. */

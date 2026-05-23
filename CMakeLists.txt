@@ -399,7 +399,14 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 )
             endif ()
         elseif (backend_name STREQUAL "hdmi")
-            pico_enable_stdio_usb(${target_name} 1)
+            # Default: silence USB+UART so HDMI doesn't share resources with
+            # stdio. Set -DMICRONES_HDMI_STDIO_USB=ON for a CDC ACM serial
+            # console (open /dev/ttyACM0 at any baud) for bring-up debugging.
+            if (MICRONES_HDMI_STDIO_USB)
+                pico_enable_stdio_usb(${target_name} 1)
+            else ()
+                pico_enable_stdio_usb(${target_name} 0)
+            endif ()
             pico_enable_stdio_uart(${target_name} 0)
             target_sources(${target_name} PRIVATE
                 src/pico/hdmi_data_island.c
