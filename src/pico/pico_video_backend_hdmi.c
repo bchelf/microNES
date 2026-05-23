@@ -2,6 +2,8 @@
 
 #include "video_hstx.h"
 
+#include "pico/stdlib.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -33,6 +35,9 @@ void pico_video_backend_suspend_for_flash(void) {
 
 void pico_video_backend_resume_after_flash(void) {
     video_hstx_start();
+    /* Give the HDMI sink time to lock onto the restored TMDS signal.
+     * Without this delay the monitor may fail to reacquire sync. */
+    sleep_ms(100);
 }
 
 void pico_video_backend_get_stats(PicoVideoBackendStats *stats_out) {

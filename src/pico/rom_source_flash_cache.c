@@ -204,17 +204,19 @@ static bool cached_load(RomSource *self, size_t index,
     }
     streamed_size = 0;
 
+    lockout_core1 = multicore_lockout_victim_is_initialized(1);
+
     pico_video_backend_suspend_for_flash();
     video_suspended = true;
 
-    lockout_core1 = !video_suspended && multicore_lockout_victim_is_initialized(1);
     if (lockout_core1) {
         multicore_lockout_start_blocking();
     }
 
-    {
+    for (uint32_t off = 0; off < erase_size; off += FLASH_SECTOR_SIZE) {
         uint32_t save = save_and_disable_interrupts();
-        flash_range_erase((uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET, erase_size);
+        flash_range_erase((uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET + off,
+                          FLASH_SECTOR_SIZE);
         restore_interrupts(save);
     }
 
