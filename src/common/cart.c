@@ -23,6 +23,14 @@ enum {
     INES_CHR_BANK_SIZE = 8 * 1024,
 };
 
+#ifndef MICRONES_CHR_ROW_CACHE_MAX_BYTES
+#define MICRONES_CHR_ROW_CACHE_MAX_BYTES 0xffffffffu
+#endif
+
+#ifndef MICRONES_PICO_PRG_SRAM_COPY_MAX
+#define MICRONES_PICO_PRG_SRAM_COPY_MAX 0xffffffffu
+#endif
+
 static void cart_set_error(char *error, size_t error_size, const char *message) {
     if (error != NULL && error_size > 0) {
         snprintf(error, error_size, "%s", message);
@@ -63,6 +71,12 @@ static bool cart_build_chr_row_cache(NesCartridge *cartridge, char *error, size_
 
     row_count = (cartridge->chr_size / 16u) * 8u;
     total_bytes = row_count * 8u;
+    if (total_bytes > (size_t)MICRONES_CHR_ROW_CACHE_MAX_BYTES) {
+        cartridge->chr_row_pixels = NULL;
+        cartridge->chr_row_count = 0;
+        return true;
+    }
+
     /* Prefer internal SRAM: chr_row_pixels is read on every PPU tile render
      * (33 tiles × 240 scanlines = 7920 reads per frame).  PSRAM reads go
      * through DCache and can cause miss pressure.  CART_MALLOC_INTERNAL uses
@@ -360,22 +374,22 @@ bool cart_load_ines_const_memory(
         return false;
     }
 
-    // PRG ROM is on the 6502 instruction-fetch hot path.  Flash-mapped DROM
-    // goes through DCache (shared with NES state and stack), causing miss
-    // pressure.  Copy PRG into internal SRAM for zero-wait-state fetches.
-    //
-    // Strategy (in priority order):
-    //  1. Internal SRAM  – fastest; use heap_caps_malloc(MALLOC_CAP_INTERNAL)
-    //     when PSRAM is active so the allocator doesn't fall back to PSRAM.
-    //  2. Any heap (PSRAM) – still 3-4× faster than flash DCache thrash.
-    //  3. Flash           – slowest; accepted if all else fails.
-    //
-    // chr_data stays in flash: its only hot user is the chr_row_pixels cache
-    // (already in DRAM), so flash latency there is acceptable.
-    uint8_t *prg_dram = (uint8_t *)CART_MALLOC_INTERNAL(cartridge->prg_rom_size);
+#if defined(ESP_PLATFORM) || defined(MICRONES_PICO_PLATFORM)
+    // PRG ROM is the CPU's hot instruction/data path.  ESP32-S3 benefits from
+    // keeping it in internal SRAM, and Pico HDMI needs to reduce XIP flash bus
+    // pressure so the HSTX scanline IRQ/DMA cadence stays stable.  CHR ROM can
+    // remain in the caller's flash-backed image; render-time tile rows use the
+    // decoded chr_row_pixels cache built above.
+    uint8_t *prg_dram = NULL;
+    if (cartridge->prg_rom_size <= (size_t)MICRONES_PICO_PRG_SRAM_COPY_MAX) {
+        prg_dram = (uint8_t *)CART_MALLOC_INTERNAL(cartridge->prg_rom_size);
+    }
     if (prg_dram == NULL) {
-        // Internal SRAM full (or non-ESP platform) – fall back to any heap.
-        prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
+        // Internal SRAM full or not a platform with a special allocator: fall
+        // back to the regular heap.
+        if (cartridge->prg_rom_size <= (size_t)MICRONES_PICO_PRG_SRAM_COPY_MAX) {
+            prg_dram = (uint8_t *)malloc(cartridge->prg_rom_size);
+        }
     }
     if (prg_dram != NULL) {
         const uint8_t *old_prg = cartridge->prg_rom;
@@ -386,7 +400,8 @@ bool cart_load_ines_const_memory(
         cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);
         cartridge->rom_image   = prg_dram;   // cart_unload will free this
     } else {
-        // Not enough heap for PRG copy – run from flash (slower but correct).
+        // Not enough heap for PRG copy – run from flash (slower but correct;
+        // HDMI may lose signal if XIP contention gets too high).
         cart_set_error(error, error_size,
             "PRG ROM DRAM copy failed; running from flash (expect lower fps)");
         cartridge->rom_image = NULL;       // do not free flash pointer
@@ -395,6 +410,7 @@ bool cart_load_ines_const_memory(
     }
     // If all mallocs fail, prg_rom stays pointing into flash – slower but correct.
     // rom_image stays NULL so cart_unload never tries to free the flash buffer.
+#endif
 
     return true;
 }

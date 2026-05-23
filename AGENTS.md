@@ -378,6 +378,48 @@ The IRQ disable is required because the DMA ISR (`audio_i2s_fill_dma_block`) als
 - `pack_symbols` loop: **15** iterations — 16 would shift d[0] off the top of the uint32_t word
 - `shift_right = false` (MSB first, left-shift OSR)
 
+## Pico SD ROM / Flash Cache Status
+
+The Pico menu can now load ROMs from SD into the external flash cache and run
+one game at a time from the menu. This has been validated informally on both
+analog and HDMI targets with many games, including:
+
+- Super Mario Bros
+- Tetris
+- Pac-Man
+- Ninja Gaiden
+- Dragon Warrior
+- Final Fantasy
+- Chip 'n Dale
+
+Important implementation notes:
+
+- Full ROM images do not need to be copied into SRAM.
+- ROMs are streamed from SD into the flash cache, then loaded zero-copy from XIP.
+- Small PRG ROMs may be copied into SRAM to avoid flash/XIP contention.
+- CHR ROM can remain in flash; CHR RAM remains in SRAM.
+- The flash cache suspend/resume path must coordinate with the active video backend.
+
+Remaining known issue:
+
+- Some ROM loads still intermittently kill the display signal and require a reboot.
+- The failure is more common around flash-cache rewrites than cache hits.
+- Analog had a confirmed RP2350 chained-DMA restart issue; the fix is to clear DMA
+  channel `EN` bits before aborting chained channels, then reinitialize/restart
+  the analog PIO/DMA/core1 path.
+- HDMI can still lose video on some loads. A useful clue: when HDMI loses video,
+  composite audio can continue, but it sounds scratchy, like frames are being
+  dropped or timing is unstable. This suggests the remaining failure may be a
+  load-time timing/resource-contention issue rather than the emulator fully
+  stopping.
+- Future debugging should distinguish:
+  - emulator still stepping vs. CPU/PPU stalled
+  - HDMI/HSTX frame counter still advancing vs. signal lost
+  - audio buffer underrun/overrun during and after flash writes
+  - cache hit vs. cache rewrite behavior
+  - whether SD streaming, flash erase/program, USB logging, or video resume is
+    consuming enough time/bus bandwidth to disturb output timing
+
 ## ESP32-S3 Implementation Notes
 
 ### Scope

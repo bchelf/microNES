@@ -70,10 +70,6 @@ static bool spi_tft_init(void) {
         return false;
     }
 
-    printf("tft: transport=%s actual=%luHz target=%uHz\n",
-           "spi_ili9341",
-           (unsigned long)baud,
-           MICRONES_TFT_SPI_BAUD_HZ);
     return true;
 }
 

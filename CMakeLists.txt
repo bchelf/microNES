@@ -23,6 +23,10 @@ option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic 
 
 if (MICRONES_PLATFORM STREQUAL "pico")
     set(PICO_BOARD pico2 CACHE STRING "Target board")
+    set(PICO_FLASH_SIZE_BYTES "16 * 1024 * 1024" CACHE STRING "Target board flash size")
+    set(MICRONES_PICO_FLASH_CACHE_OFFSET "4 * 1024 * 1024" CACHE STRING "Flash offset reserved for one cached ROM")
+    set(MICRONES_PICO_FLASH_CACHE_SIZE "0" CACHE STRING "Flash ROM cache size; 0 means from offset to end of flash")
+    option(MICRONES_PICO_ENABLE_FLASH_ROM_CACHE "Copy selected SD ROMs to XIP flash before launch" ON)
     include(pico_sdk_import.cmake)
 endif ()
 
@@ -125,6 +129,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         src/pico/pico_input.c
         src/pico/pico_status.c
         src/pico/pico_time.c
+        src/pico/rom_source_flash_cache.c
         src/pico/rom_source_sd.c
         src/pico/sd_spi.c
     )
@@ -136,7 +141,9 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         hardware_pwm
         hardware_timer
         hardware_vreg
+        hardware_flash
         m
+        pico_multicore
         pico_stdlib
     )
     # ROMs now load from the SD card at runtime; no embedded image, no
@@ -158,6 +165,8 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             MICRONES_ENABLE_APU_EMULATION=1
             MICRONES_ENABLE_FRAMEBUFFER=${framebuffer_enabled}
             MICRONES_ENABLE_STEP_PROFILING=0
+            MICRONES_CHR_ROW_CACHE_MAX_BYTES=32768
+            MICRONES_PICO_PRG_SRAM_COPY_MAX=65536
             MICRONES_PICO_PLATFORM=1
         )
         target_link_libraries(${target_name} PUBLIC pico_base_headers)
@@ -194,6 +203,29 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         endif ()
 
         target_compile_definitions(${target_name} PRIVATE MICRONES_ENABLE_PICO_VIDEO_STATS=0)
+        target_compile_definitions(${target_name} PRIVATE PICO_MALLOC_PANIC=0)
+
+        if (MICRONES_PICO_ENABLE_FLASH_ROM_CACHE)
+            if (MICRONES_PICO_FLASH_CACHE_SIZE STREQUAL "0")
+                math(EXPR _micrones_flash_cache_size "${PICO_FLASH_SIZE_BYTES} - (${MICRONES_PICO_FLASH_CACHE_OFFSET})")
+            else ()
+                math(EXPR _micrones_flash_cache_size "${MICRONES_PICO_FLASH_CACHE_SIZE}")
+            endif ()
+            if (_micrones_flash_cache_size LESS 0)
+                message(FATAL_ERROR "MICRONES_PICO_FLASH_CACHE_OFFSET is beyond PICO_FLASH_SIZE_BYTES")
+            endif ()
+            target_compile_definitions(${target_name} PRIVATE
+                MICRONES_PICO_ENABLE_FLASH_ROM_CACHE=1
+                MICRONES_PICO_FLASH_CACHE_OFFSET=${MICRONES_PICO_FLASH_CACHE_OFFSET}
+                MICRONES_PICO_FLASH_CACHE_SIZE=${_micrones_flash_cache_size}
+            )
+        else ()
+            target_compile_definitions(${target_name} PRIVATE
+                MICRONES_PICO_ENABLE_FLASH_ROM_CACHE=0
+                MICRONES_PICO_FLASH_CACHE_OFFSET=0
+                MICRONES_PICO_FLASH_CACHE_SIZE=0
+            )
+        endif ()
 
         if (MICRONES_ENABLE_PERF_LOG)
             target_compile_definitions(${target_name} PRIVATE MICRONES_ENABLE_PERF_LOG=1)
@@ -253,7 +285,6 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             target_link_libraries(${target_name} PRIVATE
                 hardware_dma
                 hardware_pio
-                pico_multicore
             )
             target_compile_definitions(${target_name} PRIVATE MICRONES_PICO_VIDEO_BACKEND_ANALOG=1)
 
@@ -345,7 +376,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 )
             endif ()
         elseif (backend_name STREQUAL "hdmi")
-            pico_enable_stdio_usb(${target_name} 0)
+            pico_enable_stdio_usb(${target_name} 1)
             pico_enable_stdio_uart(${target_name} 0)
             target_sources(${target_name} PRIVATE
                 src/pico/pico_video_backend_hdmi.c
@@ -357,7 +388,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             target_compile_definitions(${target_name} PRIVATE
                 MICRONES_PICO_VIDEO_BACKEND_HDMI=1
                 MICRONES_BOARD_V0_1=1
-                MICRONES_SYS_CLK_MHZ=250
+                MICRONES_SYS_CLK_MHZ=315
             )
 
             if (MICRONES_PICO_VIDEO_MODE STREQUAL "emulator")

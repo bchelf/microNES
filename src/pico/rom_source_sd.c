@@ -198,6 +198,7 @@ static bool sd_load(RomSource *self, size_t index,
     }
     SdRomEntry *e = &st->entries[index];
 
+
     uint8_t *buf = (uint8_t *)malloc(e->size);
     if (buf == NULL) {
         if (err && err_size) snprintf(err, err_size, "out of memory (%u bytes)",
@@ -226,6 +227,56 @@ static bool sd_load(RomSource *self, size_t index,
     return true;
 }
 
+static bool sd_load_stream(RomSource *self, size_t index,
+                           RomSourceStreamWriteFn write, void *write_user,
+                           size_t *out_size,
+                           char *err, size_t err_size) {
+    SdState *st = (SdState *)self->user;
+    uint8_t buf[512];
+    size_t total = 0;
+
+    if (write == NULL) {
+        if (err && err_size) snprintf(err, err_size, "missing stream writer");
+        return false;
+    }
+    if (index >= st->entry_count) {
+        if (err && err_size) snprintf(err, err_size, "index out of range");
+        return false;
+    }
+    SdRomEntry *e = &st->entries[index];
+
+    Fat32Entry fe;
+    memset(&fe, 0, sizeof(fe));
+    fe.first_cluster = e->first_cluster;
+    fe.size          = e->size;
+
+    Fat32File f;
+    fat32_open_file(&f, &fe);
+
+    while (total < e->size) {
+        size_t want = e->size - total;
+        if (want > sizeof(buf)) {
+            want = sizeof(buf);
+        }
+        size_t got = fat32_read(&f, buf, want);
+        if (got == 0) {
+            if (err && err_size) snprintf(err, err_size, "read %u/%u bytes",
+                                           (unsigned)total, (unsigned)e->size);
+            return false;
+        }
+        if (!write(write_user, buf, got)) {
+            if (err && err_size) snprintf(err, err_size, "stream write failed");
+            return false;
+        }
+        total += got;
+    }
+
+    if (out_size != NULL) {
+        *out_size = total;
+    }
+    return true;
+}
+
 static void sd_free_buf(RomSource *self, uint8_t *buf) {
     (void)self;
     free(buf);
@@ -251,6 +302,7 @@ bool rom_source_sd_init(RomSource *out_source) {
     out_source->count     = sd_count;
     out_source->entry     = sd_entry;
     out_source->load      = sd_load;
+    out_source->load_stream = sd_load_stream;
     out_source->free_buf  = sd_free_buf;
     out_source->refresh   = sd_refresh;
     /* save_load / save_store left NULL — write-side FAT32 is a follow-up. */

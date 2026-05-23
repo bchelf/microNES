@@ -50,6 +50,7 @@
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/sync.h"
+#include "pico/multicore.h"
 #include "pico/stdlib.h"
 
 #include <math.h>
@@ -392,6 +393,15 @@ static void dma_rearm(int buf_idx) {
     );
 }
 
+static void dma_abort_pair_cleanly(void) {
+    /* RP2350-E5: clear EN on chained channels before aborting, otherwise an
+     * abort can retrigger the partner and leave the pair half-running. */
+    hw_clear_bits(&dma_hw->ch[s_dma_chan[0]].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+    hw_clear_bits(&dma_hw->ch[s_dma_chan[1]].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+    dma_channel_abort(s_dma_chan[0]);
+    dma_channel_abort(s_dma_chan[1]);
+}
+
 static void setup_dma(void) {
     s_dma_chan[0] = dma_claim_unused_channel(true);
     s_dma_chan[1] = dma_claim_unused_channel(true);
@@ -509,6 +519,25 @@ void video_ntsc_start(void) {
     dma_channel_start(s_dma_chan[0]);        /* A starts, chains to B, B to A… */
 }
 
+void video_ntsc_stop(void) {
+    uint32_t ch_mask = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
+
+    irq_set_enabled(DMA_IRQ_0, false);
+    irq_set_enabled(DMA_IRQ_1, false);
+    dma_set_irq0_channel_mask_enabled(ch_mask, false);
+    dma_set_irq1_channel_mask_enabled(ch_mask, false);
+    dma_hw->ints0 = ch_mask;
+    dma_hw->ints1 = ch_mask;
+
+    dma_abort_pair_cleanly();
+
+    pio_sm_set_enabled(s_pio, s_sm, false);
+    pio_sm_clear_fifos(s_pio, s_sm);
+    pio_sm_restart(s_pio, s_sm);
+    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
+    s_dma_irq1_pending = false;
+}
+
 void video_ntsc_build_test_pattern_frame(void) {
     render_test_scanline(scanline_buf[0]);
     render_test_scanline(scanline_buf[1]);
@@ -569,20 +598,18 @@ void video_ntsc_perf_get(MicronesVideoNtscPerfStats *out) {
 void video_ntsc_core1_entry(void) {
     uint32_t ch_mask = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
 
-    printf("[c1] entry: chan0=%u chan1=%u ch_mask=0x%08x\n",
-           s_dma_chan[0], s_dma_chan[1], (unsigned)ch_mask);
+    multicore_lockout_victim_init();
 
     /*
      * Hand DMA IRQ ownership to Core 1:
      *   • Disable IRQ_0 for our channels (Core 0 handler stops firing).
      *   • Register and enable IRQ_1 on Core 1's NVIC.
-     */
+    */
     dma_set_irq0_channel_mask_enabled(ch_mask, false);
-    printf("[c1] irq0 disabled for our channels\n");
+    dma_set_irq1_channel_mask_enabled(ch_mask, false);
 
     irq_set_exclusive_handler(DMA_IRQ_1, dma_irq1_handler);
     irq_set_enabled(DMA_IRQ_1, true);
-    printf("[c1] irq1 registered and enabled\n");
 
     ScanlineQueue *queue = core1_video_get_queue();
 
@@ -593,10 +620,11 @@ void video_ntsc_core1_entry(void) {
     pio_sm_set_enabled(s_pio, s_sm, false);
     pio_sm_clear_fifos(s_pio, s_sm);
     pio_sm_restart(s_pio, s_sm);
+    video_ntsc_program_init(s_pio, s_sm, s_pio_offset, MICRONES_VIDEO_PIN_BASE,
+                            MICRONES_PIO_CLKDIV);
     pio_sm_exec(s_pio, s_sm, pio_encode_jmp(s_pio_offset));
 
-    dma_channel_abort(s_dma_chan[0]);
-    dma_channel_abort(s_dma_chan[1]);
+    dma_abort_pair_cleanly();
 
     /* Render lines 0 and 1 (both vsync: all code 0) */
     render_vsync_line(scanline_buf[0]);
@@ -609,16 +637,12 @@ void video_ntsc_core1_entry(void) {
     /* Clear any stale IRQ_1 flags */
     dma_hw->ints1      = ch_mask;
     s_dma_irq1_pending = false;
+    dma_set_irq1_channel_mask_enabled(ch_mask, true);
 
     /* Start: GP4 HIGH for line 0 sync, then start channel A */
     pio_sm_set_enabled(s_pio, s_sm, true);
     gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
     dma_channel_start(s_dma_chan[0]);
-
-    printf("[c1] dma started: chan0_busy=%d chan1_busy=%d ints1=0x%08x\n",
-           (int)dma_channel_is_busy(s_dma_chan[0]),
-           (int)dma_channel_is_busy(s_dma_chan[1]),
-           (unsigned)dma_hw->ints1);
 
     /*
      * Pipeline state after start:

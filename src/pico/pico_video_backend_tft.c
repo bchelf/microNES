@@ -23,6 +23,12 @@ void pico_video_backend_start_test_pattern(void) {
 void pico_video_backend_start_emulator(void) {
 }
 
+void pico_video_backend_suspend_for_flash(void) {
+}
+
+void pico_video_backend_resume_after_flash(void) {
+}
+
 void pico_video_backend_get_stats(PicoVideoBackendStats *stats_out) {
     PicoTftStats tft_stats;
 

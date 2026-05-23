@@ -2,6 +2,7 @@
 
 #include "video_hstx.h"
 
+#include <stdio.h>
 #include <string.h>
 
 const char *pico_video_backend_name(void) {
@@ -26,6 +27,14 @@ void pico_video_backend_start_emulator(void) {
     video_hstx_start();
 }
 
+void pico_video_backend_suspend_for_flash(void) {
+    video_hstx_stop();
+}
+
+void pico_video_backend_resume_after_flash(void) {
+    video_hstx_start();
+}
+
 void pico_video_backend_get_stats(PicoVideoBackendStats *stats_out) {
     VideoHstxStats hstx_stats;
 
@@ -39,4 +48,6 @@ void pico_video_backend_get_stats(PicoVideoBackendStats *stats_out) {
     stats_out->convert_us_total = hstx_stats.present_us_total;
     stats_out->swap_wait_us_total = hstx_stats.present_us_total;
     stats_out->swap_wait_us_max = hstx_stats.present_us_max;
+    stats_out->video_scanline = hstx_stats.scanline;
+    stats_out->video_started = hstx_stats.started;
 }

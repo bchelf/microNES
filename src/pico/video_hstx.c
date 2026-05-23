@@ -47,6 +47,7 @@
 #define NES_SCALE 2u
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
+#define HSTX_PIXEL_CLOCK_HZ 125000000u
 
 static uint32_t s_vblank_line_vsync_off[] = {
     HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH,
@@ -87,6 +88,8 @@ static bool s_dma_pong;
 static uint32_t s_v_scanline = 2u;
 static bool s_vactive_cmdlist_posted;
 static bool s_started;
+static bool s_irq_configured;
+static bool s_borders_dirty;
 static VideoHstxStats s_stats;
 static char s_last_error[64];
 
@@ -115,6 +118,17 @@ static const uint8_t k_nes_palette_rgb[64][3] = {
 static inline uint8_t rgb332(uint8_t r, uint8_t g, uint8_t b) {
     return (uint8_t)((r & 0xe0u) | ((g & 0xe0u) >> 3) | ((b & 0xc0u) >> 6));
 }
+
+static const uint8_t k_palette_rgb332[64] = {
+    0x6d, 0x03, 0x02, 0x46, 0x82, 0xa0, 0xa0, 0x80,
+    0x44, 0x0c, 0x0c, 0x08, 0x09, 0x00, 0x00, 0x00,
+    0xb6, 0x0f, 0x0b, 0x6b, 0xc3, 0xe1, 0xe4, 0xe8,
+    0xac, 0x14, 0x14, 0x15, 0x12, 0x00, 0x00, 0x00,
+    0xff, 0x37, 0x73, 0x8f, 0xef, 0xea, 0xed, 0xf5,
+    0xf4, 0xbc, 0x59, 0x5e, 0x1f, 0x6d, 0x00, 0x00,
+    0xff, 0xbf, 0xb7, 0xd7, 0xf7, 0xf7, 0xfa, 0xfe,
+    0xf9, 0xdd, 0xbe, 0xbf, 0x1f, 0xfb, 0x00, 0x00,
+};
 
 static void __scratch_x("") hstx_dma_irq(void) {
     uint32_t ch_num = s_dma_pong ? DMACH_PONG : DMACH_PING;
@@ -154,7 +168,7 @@ static void hstx_configure_peripheral(void) {
 
     clock_configure(clk_hstx, 0,
                     CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
-                    sys_hz, sys_hz / 2u);
+                    sys_hz, HSTX_PIXEL_CLOCK_HZ);
 
     hstx_ctrl_hw->expand_tmds =
         2  << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB |
@@ -192,6 +206,7 @@ static void hstx_configure_peripheral(void) {
 }
 
 static void hstx_configure_dma(void) {
+    const uint32_t mask = (1u << DMACH_PING) | (1u << DMACH_PONG);
     dma_channel_config c = dma_channel_get_default_config(DMACH_PING);
     channel_config_set_chain_to(&c, DMACH_PONG);
     channel_config_set_dreq(&c, DREQ_HSTX);
@@ -210,9 +225,14 @@ static void hstx_configure_dma(void) {
                           count_of(s_vblank_line_vsync_off),
                           false);
 
-    dma_hw->intr = (1u << DMACH_PING) | (1u << DMACH_PONG);
-    dma_hw->inte0 = (1u << DMACH_PING) | (1u << DMACH_PONG);
-    irq_set_exclusive_handler(DMA_IRQ_0, hstx_dma_irq);
+    dma_hw->intr = mask;
+    dma_hw->inte0 |= mask;
+    if (!s_irq_configured) {
+        irq_set_exclusive_handler(DMA_IRQ_0, hstx_dma_irq);
+        s_irq_configured = true;
+    }
+    irq_set_priority(DMA_IRQ_0, PICO_HIGHEST_IRQ_PRIORITY);
+    irq_set_priority(USBCTRL_IRQ, 0xc0);
     irq_set_enabled(DMA_IRQ_0, true);
 
     bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_DMA_W_BITS |
@@ -227,6 +247,8 @@ bool video_hstx_init(void) {
     s_v_scanline = 2u;
     s_vactive_cmdlist_posted = false;
     s_started = false;
+    s_irq_configured = false;
+    s_borders_dirty = true;
 
     hstx_configure_peripheral();
     for (uint32_t gpio = 12u; gpio <= 19u; ++gpio) {
@@ -244,8 +266,33 @@ void video_hstx_start(void) {
     if (s_started) {
         return;
     }
+    s_dma_pong = false;
+    s_v_scanline = 2u;
+    s_vactive_cmdlist_posted = false;
+    hstx_configure_peripheral();
+    hstx_configure_dma();
     s_started = true;
     dma_channel_start(DMACH_PING);
+}
+
+void video_hstx_stop(void) {
+    const uint32_t mask = (1u << DMACH_PING) | (1u << DMACH_PONG);
+
+    if (!s_started) {
+        return;
+    }
+
+    irq_set_enabled(DMA_IRQ_0, false);
+    dma_hw->inte0 &= ~mask;
+    dma_channel_abort(DMACH_PING);
+    dma_channel_abort(DMACH_PONG);
+    dma_hw->intr = mask;
+    hstx_ctrl_hw->csr = 0u;
+
+    s_dma_pong = false;
+    s_v_scanline = 2u;
+    s_vactive_cmdlist_posted = false;
+    s_started = false;
 }
 
 void video_hstx_present_frame(const NesFrameBuffer *frame) {
@@ -257,22 +304,25 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
 
     start_us = time_us_64();
 
+    if (s_borders_dirty) {
+        for (uint32_t y = 0u; y < NES_FRAME_HEIGHT; ++y) {
+            uint8_t *dst = &s_framebuf[y * MODE_H_ACTIVE_PIXELS];
+            memset(dst, 0, NES_VIEW_X);
+            memset(dst + NES_VIEW_X + (NES_FRAME_WIDTH * NES_SCALE), 0,
+                   MODE_H_ACTIVE_PIXELS - NES_VIEW_X - (NES_FRAME_WIDTH * NES_SCALE));
+        }
+        s_borders_dirty = false;
+    }
+
     for (uint32_t y = 0u; y < NES_FRAME_HEIGHT; ++y) {
         uint8_t *dst = &s_framebuf[y * MODE_H_ACTIVE_PIXELS];
         const uint8_t *src = nes_framebuffer_scanline_const(frame, (uint16_t)y);
 
-        memset(dst, 0, NES_VIEW_X);
-
         uint8_t *out = dst + NES_VIEW_X;
         for (uint32_t x = 0u; x < NES_FRAME_WIDTH; ++x) {
-            const uint8_t *rgb = k_nes_palette_rgb[src[x] & 0x3fu];
-            uint8_t c = rgb332(rgb[0], rgb[1], rgb[2]);
-            out[x * 2u + 0u] = c;
-            out[x * 2u + 1u] = c;
+            uint8_t c = k_palette_rgb332[src[x] & 0x3fu];
+            ((uint16_t *)out)[x] = (uint16_t)c | ((uint16_t)c << 8);
         }
-
-        memset(dst + NES_VIEW_X + (NES_FRAME_WIDTH * NES_SCALE), 0,
-               MODE_H_ACTIVE_PIXELS - NES_VIEW_X - (NES_FRAME_WIDTH * NES_SCALE));
     }
 
     uint64_t elapsed = time_us_64() - start_us;
@@ -305,6 +355,7 @@ void video_hstx_draw_test_pattern(void) {
             s_framebuf[y * MODE_H_ACTIVE_PIXELS + x] = c;
         }
     }
+    s_borders_dirty = true;
 }
 
 void video_hstx_get_stats(VideoHstxStats *stats_out) {
@@ -312,4 +363,6 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
         return;
     }
     *stats_out = s_stats;
+    stats_out->scanline = s_v_scanline;
+    stats_out->started = s_started;
 }

@@ -9,6 +9,7 @@
 #include "pico_video_backend.h"
 #include "pico_input.h"
 #include "pico_status.h"
+#include "rom_source_flash_cache.h"
 #include "rom_source.h"
 #include "rom_source_sd.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
@@ -24,6 +25,7 @@ int main(void) {
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
     static PicoEmulatorVideoAdapter emulator_video;
     static AppShell                 shell;
+    static RomSource                sd_rom_source;
     static RomSource                rom_source;
     MicronesFramePacer frame_pacer;
 #if MICRONES_ENABLE_PERF_LOG
@@ -91,9 +93,6 @@ int main(void) {
     }
 
     stdio_init_all();
-    printf("sys clock: %lu Hz  peri clock: %lu Hz\n",
-           (unsigned long)clock_get_hz(clk_sys),
-           (unsigned long)clock_get_hz(clk_peri));
 
     pico_input_init();
     pico_status_init();    /* lights power LED, arms reset-button edge detect */
@@ -103,20 +102,28 @@ int main(void) {
     }
     pico_audio_backend_init(audio_sample_rate);
 
+#if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR) && defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
+    /* Bring HDMI up before SD scanning / ROM menu setup so a missing display
+     * signal can be diagnosed independently from storage or cartridge load. */
+    pico_video_backend_start_emulator();
+#endif
+
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
     /* Bring up the adapter with no cart loaded — the ROM picker (AppShell)
      * will load cartridges on demand from the SD card. */
     if (emulator_video_adapter_init_empty(&emulator_video)) {
-        printf("video mode: emulator (%s)\n", pico_video_backend_name());
-
         /* Initialize the SD-card-backed ROM source.  If the card is missing
          * or the volume can't be mounted, the menu still runs and shows
          * "No ROMs found" until the user inserts a card and we can refresh. */
-        if (rom_source_sd_init(&rom_source)) {
-            printf("SD: mounted, %u ROM(s) listed\n",
-                   (unsigned)rom_source.count(&rom_source));
+        if (rom_source_sd_init(&sd_rom_source)) {
+#if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
+            if (!rom_source_flash_cache_init(&rom_source, &sd_rom_source)) {
+                rom_source = sd_rom_source;
+            }
+#else
+            rom_source = sd_rom_source;
+#endif
         } else {
-            printf("SD: %s\n", rom_source_sd_last_error());
             /* Fallback: empty source so the menu renders the "no ROMs"
              * screen.  Hot-insert support would re-init the SD source on
              * an explicit user trigger; not implemented here. */
@@ -125,7 +132,9 @@ int main(void) {
 
         app_shell_init(&shell, &rom_source, &emulator_video.nes);
 
+#if !defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
         pico_video_backend_start_emulator();
+#endif
         micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
 
 #if MICRONES_ENABLE_PERF_LOG
@@ -246,6 +255,43 @@ int main(void) {
                  * so the next iteration can decide whether to skip present. */
                 s_skip_present = (time_us_64() > frame_deadline_us);
             }
+#elif defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
+            {
+                if (!emulator_video_adapter_step_frame(&emulator_video)) {
+                    printf("emulator video failed: %s\n", emulator_video_adapter_last_error(&emulator_video));
+                    break;
+                }
+
+                /* Drain APU PCM samples into the audio backend.
+                 * The APU produces about 799 samples per NTSC frame at 48 kHz. */
+                {
+                    static int16_t pcm_tmp[256];
+                    size_t n;
+                    while ((n = nes_audio_read_samples(&emulator_video.nes, pcm_tmp,
+                                                       sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
+#if MICRONES_ENABLE_PERF_LOG
+                        size_t pushed = pico_audio_backend_push_samples(pcm_tmp, n);
+                        report_samples_drained += n;
+                        report_samples_dropped += (n - pushed);
+                        if (!report_saw_nonzero_sample) {
+                            for (size_t i = 0; i < n; ++i) {
+                                if (pcm_tmp[i] != 0) {
+                                    report_saw_nonzero_sample = true;
+                                    break;
+                                }
+                            }
+                        }
+#else
+                        pico_audio_backend_push_samples(pcm_tmp, n);
+#endif
+                    }
+#if MICRONES_ENABLE_PERF_LOG
+                    report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
+#endif
+                }
+
+                emulator_video_adapter_present_frame(&emulator_video);
+            }
 #else
             /* Analog path: render_frame handles step + present together,
              * matching the original loop structure. */
@@ -283,198 +329,6 @@ int main(void) {
             }
 #endif
             micrones_frame_pacer_frame_done(&frame_pacer, micrones_pico_clock_now_ns());
-
-#if MICRONES_ENABLE_PERF_LOG
-            if ((emulator_video.rendered_frames % 60u) == 0u) {
-                uint64_t now_us = time_us_64();
-                PicoVideoBackendStats backend_stats;
-                uint64_t delta_us = now_us - report_started_us;
-                uint64_t delta_render_us =
-                    emulator_video.profile_render_frame_us_total - report_render_us;
-                uint64_t delta_step_us =
-                    emulator_video.profile_step_scanline_us_total - report_step_us;
-                uint64_t delta_cpu_exec_us =
-                    emulator_video.nes.step_profile.cpu_exec_us_total - report_cpu_exec_us;
-                uint64_t delta_ppu_step_us =
-                    emulator_video.nes.step_profile.ppu_step_us_total - report_ppu_step_us;
-                uint64_t delta_ppu_render_us =
-                    emulator_video.nes.ppu.step_profile.render_us_total - report_ppu_render_us;
-                uint64_t delta_bus_reads =
-                    emulator_video.nes.step_profile.bus_read_count - report_bus_reads;
-                uint64_t delta_bus_writes =
-                    emulator_video.nes.step_profile.bus_write_count - report_bus_writes;
-                uint64_t delta_ppu_cycles =
-                    emulator_video.nes.ppu.step_profile.cycles_requested - report_ppu_cycles;
-                double fps = delta_us != 0 ? (60.0 * 1000000.0) / (double)delta_us : 0.0;
-                double frame_ms = delta_us / 60000.0;
-
-                pico_video_backend_get_stats(&backend_stats);
-#if defined(MICRONES_PICO_VIDEO_BACKEND_ANALOG)
-                {
-                    uint64_t delta_c1_convert_us = backend_stats.convert_us_total - report_c1_convert_us;
-                    uint64_t delta_c1_begin_wait_us = backend_stats.frame_begin_wait_us_total - report_c1_begin_wait_us;
-                    uint64_t delta_c1_frames = backend_stats.frames_presented - report_c1_frames;
-                    uint32_t delta_q_stall_count = backend_stats.queue_stall_count - report_q_stall_count;
-                    uint64_t delta_q_stall_us = backend_stats.queue_stall_us_total - report_q_stall_us;
-
-                    printf(
-                        "emu perf: frames=%llu fps=%.2f frame_ms=%.2f"
-                        " step=%.2fms cpu=%.2fms ppu=%.2fms ppu_render=%.2fms ppu_other=%.2fms"
-                        " c1_convert=%.2fms c1_wait=%.2fms c1_frames=%llu"
-                        " q_stalls=%u q_stall_ms=%.2f"
-                        " ntsc_wait=%.2fms ntsc_wait_max=%.2fms"
-                        " bus_r=%llu bus_w=%llu ppu_cycles=%llu cpu_instr=%llu ppu_frame=%llu"
-                        " src_nonzero=%u visible=%u gray=%u white=%u colors=%u range=%02x-%02x first_visible=%d,%d"
-                        " audio_buf=%u audio_underruns=%u\n",
-                        emulator_video.rendered_frames,
-                        fps,
-                        frame_ms,
-                        delta_step_us / 60000.0,
-                        delta_cpu_exec_us / 60000.0,
-                        delta_ppu_step_us / 60000.0,
-                        delta_ppu_render_us / 60000.0,
-                        (delta_ppu_step_us - delta_ppu_render_us) / 60000.0,
-                        delta_c1_frames > 0 ? (double)delta_c1_convert_us / ((double)delta_c1_frames * 1000.0) : 0.0,
-                        delta_c1_frames > 0 ? (double)delta_c1_begin_wait_us / ((double)delta_c1_frames * 1000.0) : 0.0,
-                        delta_c1_frames,
-                        delta_q_stall_count,
-                        delta_q_stall_us / 1000.0,
-                        (backend_stats.swap_wait_us_total - report_video_stats.swap_wait_us_total) / 60000.0,
-                        (double)backend_stats.swap_wait_us_max / 1000.0,
-                        delta_bus_reads,
-                        delta_bus_writes,
-                        delta_ppu_cycles,
-                        emulator_video.nes.stats.instruction_count,
-                        emulator_video.nes.ppu.frame_count,
-                        emulator_video.last_frame_source_nonzero_pixels,
-                        emulator_video.last_frame_visible_nonblack_pixels,
-                        emulator_video.last_frame_visible_gray_pixels,
-                        emulator_video.last_frame_visible_white_pixels,
-                        emulator_video.last_frame_unique_color_count,
-                        emulator_video.last_frame_min_pixel,
-                        emulator_video.last_frame_max_pixel,
-                        emulator_video.last_frame_first_visible_x,
-                        emulator_video.last_frame_first_visible_y,
-                        pico_audio_backend_buffer_level(),
-                        pico_audio_backend_underrun_count()
-                    );
-                }
-#else
-                {
-                    uint64_t delta_present_frames = backend_stats.frames_presented - report_c1_frames;
-                    uint64_t delta_present_us = backend_stats.convert_us_total - report_c1_convert_us;
-#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
-                    PicoTftStats tft_raw;
-                    video_tft_get_stats(&tft_raw);
-                    uint64_t delta_tft_convert_us = tft_raw.present_convert_us_total - report_tft_convert_us;
-                    uint64_t delta_tft_diff_us = tft_raw.present_diff_us_total - report_tft_diff_us;
-                    uint64_t delta_tft_spi_us = tft_raw.present_bus_us_total - report_tft_spi_us;
-                    uint64_t delta_tft_spans = tft_raw.spans_sent_total - report_tft_spans;
-#endif
-
-                    printf(
-                        "emu perf: backend=%s frames=%llu fps=%.2f frame_ms=%.2f"
-                        " step=%.2fms cpu=%.2fms ppu=%.2fms ppu_render=%.2fms ppu_other=%.2fms"
-                        " present=%.2fms present_frames=%llu present_max=%.2fms"
-#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
-                        " convert=%.2fms diff=%.2fms spi=%.2fms spans_pf=%.0f"
-#endif
-                        " bus_r=%llu bus_w=%llu ppu_cycles=%llu cpu_instr=%llu ppu_frame=%llu"
-                        " audio_buf=%u audio_underruns=%u\n",
-                        pico_video_backend_name(),
-                        emulator_video.rendered_frames,
-                        fps,
-                        frame_ms,
-                        delta_step_us / 60000.0,
-                        delta_cpu_exec_us / 60000.0,
-                        delta_ppu_step_us / 60000.0,
-                        delta_ppu_render_us / 60000.0,
-                        (delta_ppu_step_us - delta_ppu_render_us) / 60000.0,
-                        delta_present_frames > 0 ? (double)delta_present_us / ((double)delta_present_frames * 1000.0) : 0.0,
-                        delta_present_frames,
-                        (double)backend_stats.swap_wait_us_max / 1000.0,
-#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
-                        delta_present_frames > 0 ? (double)delta_tft_convert_us / ((double)delta_present_frames * 1000.0) : 0.0,
-                        delta_present_frames > 0 ? (double)delta_tft_diff_us / ((double)delta_present_frames * 1000.0) : 0.0,
-                        delta_present_frames > 0 ? (double)delta_tft_spi_us / ((double)delta_present_frames * 1000.0) : 0.0,
-                        delta_present_frames > 0 ? (double)delta_tft_spans / (double)delta_present_frames : 0.0,
-#endif
-                        delta_bus_reads,
-                        delta_bus_writes,
-                        delta_ppu_cycles,
-                        emulator_video.nes.stats.instruction_count,
-                        emulator_video.nes.ppu.frame_count,
-                        pico_audio_backend_buffer_level(),
-                        pico_audio_backend_underrun_count()
-                    );
-                }
-#endif
-                report_started_us = now_us;
-                report_render_us = emulator_video.profile_render_frame_us_total;
-                report_step_us = emulator_video.profile_step_scanline_us_total;
-                report_cpu_exec_us = emulator_video.nes.step_profile.cpu_exec_us_total;
-                report_ppu_step_us = emulator_video.nes.step_profile.ppu_step_us_total;
-                report_ppu_render_us = emulator_video.nes.ppu.step_profile.render_us_total;
-                report_bus_reads = emulator_video.nes.step_profile.bus_read_count;
-                report_bus_writes = emulator_video.nes.step_profile.bus_write_count;
-                report_ppu_cycles = emulator_video.nes.ppu.step_profile.cycles_requested;
-                report_c1_convert_us = backend_stats.convert_us_total;
-                report_c1_begin_wait_us = backend_stats.frame_begin_wait_us_total;
-                report_c1_frames = backend_stats.frames_presented;
-                report_q_stall_count = backend_stats.queue_stall_count;
-                report_q_stall_us = backend_stats.queue_stall_us_total;
-                report_video_stats.swap_wait_us_total = backend_stats.swap_wait_us_total;
-                report_video_stats.swap_wait_us_max = backend_stats.swap_wait_us_max;
-#if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
-                {
-                    PicoTftStats tft_raw;
-                    video_tft_get_stats(&tft_raw);
-                    report_tft_convert_us = tft_raw.present_convert_us_total;
-                    report_tft_diff_us = tft_raw.present_diff_us_total;
-                    report_tft_spi_us = tft_raw.present_bus_us_total;
-                    report_tft_spans = tft_raw.spans_sent_total;
-                }
-#endif
-
-                /* Exp A: audio pipeline shape — how many samples were produced
-                 * and pushed vs dropped over the last 60 NES frames.
-                 * Exp B: report whether any non-silent PCM was seen.
-                 * Expected at NTSC cadence: drained≈799/frame, dropped=0, nonzero=1.
-                 * If drained=0 → APU not producing (apu_step not running).
-                 * If nonzero=0 → APU producing silence (channels muted/not init).
-                 * If dropped>0  → PWM buffer backing up (unexpected at <60fps). */
-                printf(
-                    "audio diag:"
-                    " drained=%llu dropped=%llu nonzero=%u"
-                    " apu_int_drop=%llu apu_pcm_buf=%u"
-                    " underruns=%u overruns=%u buf_level=%u"
-                    " apu_samples=%llu apu_p0_en=%u apu_p0_lc=%u"
-                    " $4015_writes=%llu $4015_last=%02x"
-                    " $4003_writes=%llu fc_steps=%llu"
-                    " clip=%llu\n",
-                    report_samples_drained,
-                    report_samples_dropped,
-                    (unsigned)report_saw_nonzero_sample,
-                    report_apu_internal_dropped,
-                    emulator_video.nes.apu.pcm_count,
-                    pico_audio_backend_underrun_count(),
-                    pico_audio_backend_overrun_count(),
-                    pico_audio_backend_buffer_level(),
-                    emulator_video.nes.apu.sample_count,
-                    (unsigned)emulator_video.nes.apu.pulse[0].enabled,
-                    (unsigned)emulator_video.nes.apu.pulse[0].length_counter,
-                    emulator_video.nes.apu.register_write_count[0x15],
-                    (unsigned)emulator_video.nes.apu.registers[0x15],
-                    emulator_video.nes.apu.register_write_count[0x03],
-                    emulator_video.nes.apu.frame_counter_steps,
-                    emulator_video.nes.apu.clip_count
-                );
-                report_samples_drained = 0;
-                report_samples_dropped = 0;
-                report_apu_internal_dropped = 0;
-                report_saw_nonzero_sample = false;
-            }
-#endif /* MICRONES_ENABLE_PERF_LOG */
         }
         pico_video_backend_start_test_pattern();
         while (true) {
@@ -482,11 +336,8 @@ int main(void) {
         }
     }
 
-    printf("video mode: emulator init failed, falling back to test pattern\n");
-    printf("reason: %s\n", emulator_video_adapter_last_error(&emulator_video));
 #endif
 
-    printf("video mode: test pattern\n");
     pico_video_backend_start_test_pattern();
 
     /* 440 Hz square-wave test tone via PCM ring buffer. */

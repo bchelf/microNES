@@ -15,7 +15,7 @@
  * Bits in raw[] are in shift order: 0=A 1=B 2=Sel 3=Start 4=Up 5=Dn 6=L 7=R.
  * Build with -DMICRONES_NES_CTL_DEBUG=0 to disable. */
 #ifndef MICRONES_NES_CTL_DEBUG
-#define MICRONES_NES_CTL_DEBUG 1
+#define MICRONES_NES_CTL_DEBUG 0
 #endif
 
 // ── GPIO init ────────────────────────────────────────────────────────────

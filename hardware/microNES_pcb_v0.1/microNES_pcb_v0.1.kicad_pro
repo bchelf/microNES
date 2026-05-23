@@ -39,9 +39,9 @@
         "other_text_thickness": 0.15,
         "other_text_upright": false,
         "pads": {
-          "drill": 0.8,
-          "height": 1.27,
-          "width": 2.54
+          "drill": 1.7,
+          "height": 2.8,
+          "width": 2.8
         },
         "silk_line_width": 0.1,
         "silk_text_italic": false,
@@ -107,14 +107,6 @@
         ],
         [
           "clearance|129400077|72642366|864893b6-f6d8-49af-bf65-ed9ed617ade2|e1368a96-ec35-4a5f-bf52-c353374d7d4f",
-          ""
-        ],
-        [
-          "copper_edge_clearance|161090000|101050000|05f744fa-17a7-4167-9fc5-52dc5b481380|df617b2e-f48c-429b-8b06-2d6e16adec70",
-          ""
-        ],
-        [
-          "copper_edge_clearance|161090000|113750000|05f744fa-17a7-4167-9fc5-52dc5b481380|b6b81d8a-5cc0-41c8-a080-5eb52efcca8e",
           ""
         ]
       ],
@@ -203,7 +195,7 @@
         "min_track_width": 0.2,
         "min_via_annular_width": 0.05,
         "min_via_diameter": 0.3,
-        "solder_mask_to_copper_clearance": 0.0,
+        "solder_mask_to_copper_clearance": 0.005,
         "use_height_for_length_calcs": true
       },
       "teardrop_options": [
@@ -658,7 +650,7 @@
       "method": 0,
       "sort_order": 0
     },
-    "bom_export_filename": "BOM/microNES_pcb_v0.1_BOM.csv",
+    "bom_export_filename": "BOM/microES_v2.csv",
     "bom_fmt_presets": [],
     "bom_fmt_settings": {
       "field_delimiter": ",",
@@ -818,7 +810,7 @@
         "uuid": "aba63da5-2856-45d3-bb43-ffaad5b78152"
       }
     ],
-    "used_designators": "R40,#PWR41",
+    "used_designators": "",
     "variants": []
   },
   "sheets": [
