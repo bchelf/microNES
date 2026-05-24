@@ -46,10 +46,17 @@ static inline const uint8_t *nrom_ppu_row_pixels(const NesCartridge *cartridge, 
         return NULL;
     }
     if (cartridge->chr_row_pixels != NULL) {
-        return &cartridge->chr_row_pixels[nrom_chr_row_index(cartridge, pattern_addr) * 8u];
+        size_t idx = nrom_chr_row_index(cartridge, pattern_addr);
+        if (__builtin_expect(cartridge->mapper == 9, 0)) {
+            mmc2_latch_update((NesCartridge *)cartridge, pattern_addr);
+        }
+        return &cartridge->chr_row_pixels[idx * 8u];
     }
 
     mapped = mapper_chr_addr(cartridge, pattern_addr);
+    if (__builtin_expect(cartridge->mapper == 9, 0)) {
+        mmc2_latch_update((NesCartridge *)cartridge, pattern_addr);
+    }
 
     low_addr = (mapped & (size_t)~0x0fu) + (mapped & 0x07u);
     low = cartridge->chr_data[low_addr & cartridge->chr_mask];

@@ -431,12 +431,15 @@ bool cart_load_ines_const_memory(
         memcpy(prg_dram, old_prg, cartridge->prg_rom_size);
         cartridge->prg_rom     = prg_dram;
         /* Rebase precomputed bank pointers into the new DRAM allocation */
-        if (cartridge->mapper == 4) {
-            mmc3_rebase_banks(cartridge, old_prg);
-        } else {
-            cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);
-            cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);
+        if (cartridge->mapper == 4 || cartridge->mapper == 9) {
+            for (int i = 0; i < 4; ++i) {
+                if (cartridge->prg_banks_8k[i] != NULL) {
+                    cartridge->prg_banks_8k[i] = prg_dram + (size_t)(cartridge->prg_banks_8k[i] - old_prg);
+                }
+            }
         }
+        cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);
+        cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);
         cartridge->rom_image   = prg_dram;   // cart_unload will free this
     } else {
         // Not enough heap for PRG copy – run from flash (slower but correct;
