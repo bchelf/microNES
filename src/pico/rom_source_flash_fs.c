@@ -34,7 +34,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  supported;
     uint32_t prg_size;
     uint32_t chr_size;
-    uint8_t  reserved[8];
+    uint8_t  reserved[12];
 } FlashFsDirEntry;
 
 _Static_assert(sizeof(FlashFsDirEntry) == 128, "entry must be 128 bytes");
