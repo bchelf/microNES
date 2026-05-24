@@ -298,12 +298,12 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
     if (sd_count > FLASH_FS_MAX_ROMS)
         sd_count = FLASH_FS_MAX_ROMS;
 
-    FlashFsHeader hdr;
+    static FlashFsHeader hdr;
     memset(&hdr, 0, sizeof(hdr));
     memcpy(hdr.magic, FLASH_FS_MAGIC, 4);
     hdr.version = FLASH_FS_VERSION;
 
-    size_t sd_index_map[FLASH_FS_MAX_ROMS];
+    static size_t sd_index_map[FLASH_FS_MAX_ROMS];
     uint32_t data_cursor = FLASH_FS_DIR_SIZE;
 
     for (size_t i = 0; i < sd_count; ++i) {
