@@ -135,10 +135,12 @@ int main(void) {
             if (!rom_source_flash_cache_init(&rom_source, &sd_rom_source)) {
                 rom_source = sd_rom_source;
             } else {
+#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
                 static FlashProgressCtx s_progress_ctx;
                 s_progress_ctx.adapter = &emulator_video;
                 s_progress_ctx.fb = &shell.menu_fb;
                 rom_source_flash_cache_set_progress(flash_progress_cb, &s_progress_ctx);
+#endif
             }
 #else
             rom_source = sd_rom_source;
