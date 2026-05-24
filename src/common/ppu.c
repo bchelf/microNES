@@ -1,5 +1,6 @@
 #include "ppu.h"
 
+#include "mmc3.h"
 #include "nrom.h"
 
 #include <string.h>
@@ -1475,6 +1476,9 @@ static inline void ppu_finish_scanline(Ppu *ppu, NesCartridge *cartridge) {
         if (ppu_rendering_enabled(ppu)) {
             ppu_increment_vertical_v(ppu);
             ppu_copy_horizontal_bits_from_temp(ppu);
+            if (cartridge->mapper == 4) {
+                mmc3_scanline_tick(cartridge);
+            }
         }
     }
 

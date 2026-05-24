@@ -33,15 +33,22 @@ idf_component_register(
     SRCS
         # Portable NES emulator core
         "${MICRONES_APU_SOURCE}"
+        "${MICRONES_COMMON_DIR}/axrom.c"
         "${MICRONES_COMMON_DIR}/cart.c"
+        "${MICRONES_COMMON_DIR}/cnrom.c"
+        "${MICRONES_COMMON_DIR}/colordreams.c"
         "${MICRONES_COMMON_DIR}/cpu6502.c"
         "${MICRONES_COMMON_DIR}/cpu6502_opcode.c"
         "${MICRONES_COMMON_DIR}/frame_pacer.c"
+        "${MICRONES_COMMON_DIR}/gxrom.c"
         "${MICRONES_COMMON_DIR}/input.c"
         "${MICRONES_COMMON_DIR}/mmc1.c"
+        "${MICRONES_COMMON_DIR}/mmc2.c"
+        "${MICRONES_COMMON_DIR}/mmc3.c"
         "${MICRONES_COMMON_DIR}/nes.c"
         "${MICRONES_COMMON_DIR}/nrom.c"
         "${MICRONES_COMMON_DIR}/ppu.c"
+        "${MICRONES_COMMON_DIR}/uxrom.c"
         # ESP32-S3 frontend
         "main.c"
         "display.c"

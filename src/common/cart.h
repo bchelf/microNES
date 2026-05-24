@@ -50,6 +50,24 @@ typedef struct {
     uint8_t mmc1_chr0;         /* CHR bank 0 register */
     uint8_t mmc1_chr1;         /* CHR bank 1 register */
     uint8_t mmc1_prg;          /* PRG bank register */
+    /* MMC3 / mapper 4 state */
+    const uint8_t *prg_banks_8k[4];
+    uint8_t mmc3_bank_select;
+    uint8_t mmc3_bank_data[8];
+    uint8_t mmc3_irq_latch;
+    uint8_t mmc3_irq_counter;
+    bool mmc3_irq_reload;
+    bool mmc3_irq_enabled;
+    bool irq_pending;
+    /* CNROM / mapper 3 (also reused by ColorDreams / GxROM for CHR bank) */
+    uint8_t cnrom_chr_bank;
+    /* MMC2 / mapper 9 state */
+    uint8_t mmc2_chr0_fd;
+    uint8_t mmc2_chr0_fe;
+    uint8_t mmc2_chr1_fd;
+    uint8_t mmc2_chr1_fe;
+    bool mmc2_latch0;
+    bool mmc2_latch1;
 } NesCartridge;
 
 bool cart_load_ines_file(NesCartridge *cartridge, const char *path, char *error, size_t error_size);

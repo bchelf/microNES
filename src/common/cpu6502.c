@@ -86,6 +86,9 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
         if (__builtin_expect(mask != 0u, 1)) {
             return nes->prg_bank_lo[off & mask];
         }
+        if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9, 0)) {
+            return nes->cartridge.prg_banks_8k[off >> 13][off & 0x1fffu];
+        }
         if (off < 0x4000u) {
             return nes->prg_bank_lo[off];
         }
@@ -116,6 +119,9 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
         if (__builtin_expect(mask != 0u, 1)) {
             lo = nes->prg_bank_lo[lo_off & mask];
             hi = nes->prg_bank_lo[hi_off & mask];
+        } else if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9, 0)) {
+            lo = nes->cartridge.prg_banks_8k[lo_off >> 13][lo_off & 0x1fffu];
+            hi = nes->cartridge.prg_banks_8k[hi_off >> 13][hi_off & 0x1fffu];
         } else {
             lo = (lo_off < 0x4000u)
                 ? nes->prg_bank_lo[lo_off]
@@ -445,6 +451,11 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
         nes->ppu.nmi_pending = false;
         ++nes->stats.nmi_count;
         cpu_service_interrupt(cpu, nes, 0xfffau, false);
+        return true;
+    }
+    if (nes->cartridge.irq_pending && (cpu->p & CPU6502_FLAG_I) == 0) {
+        nes->cartridge.irq_pending = false;
+        cpu_service_interrupt(cpu, nes, 0xfffeu, false);
         return true;
     }
 

@@ -2,16 +2,23 @@
 #define MICRONES_NES_H
 
 #include "apu.h"
+#include "axrom.h"
 #include "cart.h"
+#include "cnrom.h"
+#include "colordreams.h"
 #include "cpu6502.h"
 #include "cpu6502_opcode.h"
 #include "framebuffer.h"
+#include "gxrom.h"
 #include "input.h"
 #include "mmc1.h"
+#include "mmc2.h"
+#include "mmc3.h"
 #include "nrom.h"
 #include "ppu.h"
 #include "runtime_config.h"
 #include "scanline.h"
+#include "uxrom.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -153,15 +160,14 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
 #if MICRONES_ENABLE_STEP_PROFILING
     ++nes->step_profile.bus_read_count;
 #endif
-    // PRG ROM is checked first: the majority of reads are instruction fetches
-    // and data from the $8000-$FFFF range.
-    // prg_bank_lo/hi are cached at small Nes offsets (28/32) so each PRG read
-    // costs a single L32I instead of L32R+ADD through the ~70 KB cartridge offset.
     if (addr >= 0x8000u) {
         uint32_t off = (uint32_t)(addr - 0x8000u);
         uint32_t mask = nes->prg_fetch_mask;
         if (__builtin_expect(mask != 0u, 1)) {
             return nes->prg_bank_lo[off & mask];
+        }
+        if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9, 0)) {
+            return nes->cartridge.prg_banks_8k[off >> 13][off & 0x1fffu];
         }
         if (off < 0x4000u) {
             return nes->prg_bank_lo[off];
@@ -227,11 +233,39 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
         return;
     }
     if (addr >= 0x8000u) {
-        if (nes->cartridge.mapper == 1) {
+        switch (nes->cartridge.mapper) {
+        case 1:
             mmc1_cpu_write(&nes->cartridge, addr, value);
-            nes_sync_prg_cache(nes);  /* keep hot cache in sync after bank switch */
+            nes_sync_prg_cache(nes);
+            break;
+        case 2:
+            uxrom_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);
+            break;
+        case 3:
+            cnrom_cpu_write(&nes->cartridge, addr, value);
+            break;
+        case 4:
+            mmc3_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);
+            break;
+        case 7:
+            axrom_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);
+            break;
+        case 9:
+            mmc2_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);
+            break;
+        case 11:
+            colordreams_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);
+            break;
+        case 66:
+            gxrom_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);
+            break;
         }
-        /* mapper 0 / NROM: writes to cartridge space are ignored */
         return;
     }
 }
