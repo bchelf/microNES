@@ -20,6 +20,21 @@
 
 #include <stdio.h>
 
+#if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE && defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
+#include "rom_menu.h"
+typedef struct {
+    PicoEmulatorVideoAdapter *adapter;
+    NesFrameBuffer *fb;
+} FlashProgressCtx;
+
+static void flash_progress_cb(size_t done, size_t total, void *user) {
+    FlashProgressCtx *ctx = (FlashProgressCtx *)user;
+    int pct = (total > 0) ? (int)((done * 100u) / total) : 0;
+    rom_menu_render_loading(ctx->fb, NULL, pct);
+    emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
+}
+#endif
+
 int main(void) {
     const uint32_t audio_sample_rate = pico_audio_backend_preferred_sample_rate();
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
@@ -119,6 +134,13 @@ int main(void) {
 #if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
             if (!rom_source_flash_cache_init(&rom_source, &sd_rom_source)) {
                 rom_source = sd_rom_source;
+            } else {
+#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
+                static FlashProgressCtx s_progress_ctx;
+                s_progress_ctx.adapter = &emulator_video;
+                s_progress_ctx.fb = &shell.menu_fb;
+                rom_source_flash_cache_set_progress(flash_progress_cb, &s_progress_ctx);
+#endif
             }
 #else
             rom_source = sd_rom_source;
@@ -194,6 +216,11 @@ int main(void) {
             reset_button_was_down = reset_button_down;
 
             AppShellFrame frame = app_shell_begin_frame(&shell, input_pair.players[0]);
+
+            if (frame.just_entered_run) {
+                micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
+            }
+
             if (!frame.stepping_nes) {
                 emulator_video_adapter_present_framebuffer(
                     &emulator_video, app_shell_menu_framebuffer(&shell));

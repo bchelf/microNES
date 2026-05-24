@@ -1,5 +1,6 @@
 #include "video_hstx.h"
 
+#include "hardware/address_mapped.h"
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
@@ -41,8 +42,8 @@
 #define HSTX_CMD_TMDS        (0x2u << 12)
 #define HSTX_CMD_NOP         (0xfu << 12)
 
-#define DMACH_PING 0u
-#define DMACH_PONG 1u
+static int s_dmach_ping = -1;
+static int s_dmach_pong = -1;
 
 #define NES_SCALE 2u
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
@@ -131,7 +132,7 @@ static const uint8_t k_palette_rgb332[64] = {
 };
 
 static void __scratch_x("") hstx_dma_irq(void) {
-    uint32_t ch_num = s_dma_pong ? DMACH_PONG : DMACH_PING;
+    uint32_t ch_num = s_dma_pong ? (uint32_t)s_dmach_pong : (uint32_t)s_dmach_ping;
     dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
     dma_hw->intr = 1u << ch_num;
     s_dma_pong = !s_dma_pong;
@@ -206,20 +207,20 @@ static void hstx_configure_peripheral(void) {
 }
 
 static void hstx_configure_dma(void) {
-    const uint32_t mask = (1u << DMACH_PING) | (1u << DMACH_PONG);
-    dma_channel_config c = dma_channel_get_default_config(DMACH_PING);
-    channel_config_set_chain_to(&c, DMACH_PONG);
+    const uint32_t mask = (1u << s_dmach_ping) | (1u << s_dmach_pong);
+    dma_channel_config c = dma_channel_get_default_config((uint)s_dmach_ping);
+    channel_config_set_chain_to(&c, (uint)s_dmach_pong);
     channel_config_set_dreq(&c, DREQ_HSTX);
-    dma_channel_configure(DMACH_PING, &c,
+    dma_channel_configure((uint)s_dmach_ping, &c,
                           &hstx_fifo_hw->fifo,
                           s_vblank_line_vsync_off,
                           count_of(s_vblank_line_vsync_off),
                           false);
 
-    c = dma_channel_get_default_config(DMACH_PONG);
-    channel_config_set_chain_to(&c, DMACH_PING);
+    c = dma_channel_get_default_config((uint)s_dmach_pong);
+    channel_config_set_chain_to(&c, (uint)s_dmach_ping);
     channel_config_set_dreq(&c, DREQ_HSTX);
-    dma_channel_configure(DMACH_PONG, &c,
+    dma_channel_configure((uint)s_dmach_pong, &c,
                           &hstx_fifo_hw->fifo,
                           s_vblank_line_vsync_off,
                           count_of(s_vblank_line_vsync_off),
@@ -250,6 +251,13 @@ bool video_hstx_init(void) {
     s_irq_configured = false;
     s_borders_dirty = true;
 
+    if (s_dmach_ping < 0) {
+        s_dmach_ping = dma_claim_unused_channel(true);
+    }
+    if (s_dmach_pong < 0) {
+        s_dmach_pong = dma_claim_unused_channel(true);
+    }
+
     hstx_configure_peripheral();
     for (uint32_t gpio = 12u; gpio <= 19u; ++gpio) {
         gpio_set_function(gpio, GPIO_FUNC_HSTX);
@@ -272,11 +280,11 @@ void video_hstx_start(void) {
     hstx_configure_peripheral();
     hstx_configure_dma();
     s_started = true;
-    dma_channel_start(DMACH_PING);
+    dma_channel_start((uint)s_dmach_ping);
 }
 
 void video_hstx_stop(void) {
-    const uint32_t mask = (1u << DMACH_PING) | (1u << DMACH_PONG);
+    const uint32_t mask = (1u << s_dmach_ping) | (1u << s_dmach_pong);
 
     if (!s_started) {
         return;
@@ -284,8 +292,13 @@ void video_hstx_stop(void) {
 
     irq_set_enabled(DMA_IRQ_0, false);
     dma_hw->inte0 &= ~mask;
-    dma_channel_abort(DMACH_PING);
-    dma_channel_abort(DMACH_PONG);
+
+    /* RP2350-E5: clear EN bits before aborting chained channels, otherwise
+     * an abort can retrigger the partner and leave the pair half-running. */
+    hw_clear_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+    hw_clear_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+    dma_channel_abort((uint)s_dmach_ping);
+    dma_channel_abort((uint)s_dmach_pong);
     dma_hw->intr = mask;
     hstx_ctrl_hw->csr = 0u;
 
