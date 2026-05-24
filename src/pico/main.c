@@ -25,10 +25,12 @@
 typedef struct {
     PicoEmulatorVideoAdapter *adapter;
     NesFrameBuffer *fb;
+    bool video_suspended;
 } FlashProgressCtx;
 
 static void flash_progress_cb(size_t done, size_t total, void *user) {
     FlashProgressCtx *ctx = (FlashProgressCtx *)user;
+    if (ctx->video_suspended) return;
     int pct = (total > 0) ? (int)((done * 100u) / total) : 0;
     rom_menu_render_loading(ctx->fb, "SD -> Flash", pct);
     emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
@@ -41,11 +43,16 @@ static void flash_pre_flash_cb(void *user) {
         emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
         sleep_ms(17);
     }
+    ctx->video_suspended = true;
 }
+
+static FlashProgressCtx *s_progress_ctx_ptr;
 
 static bool import_fn(RomSource *flash_source, RomSource *sd_source, void *user) {
     (void)user;
-    return rom_source_flash_fs_copy_from(flash_source, sd_source);
+    bool ok = rom_source_flash_fs_copy_from(flash_source, sd_source);
+    if (s_progress_ctx_ptr) s_progress_ctx_ptr->video_suspended = false;
+    return ok;
 }
 
 static bool erase_fn(RomSource *flash_source, void *user) {
@@ -167,6 +174,8 @@ int main(void) {
             static FlashProgressCtx s_progress_ctx;
             s_progress_ctx.adapter = &emulator_video;
             s_progress_ctx.fb = &shell.menu_fb;
+            s_progress_ctx.video_suspended = false;
+            s_progress_ctx_ptr = &s_progress_ctx;
             rom_source_flash_fs_set_progress(flash_progress_cb, &s_progress_ctx);
             rom_source_flash_fs_set_pre_flash(flash_pre_flash_cb, &s_progress_ctx);
             app_shell_set_erase(&shell, erase_fn, NULL);
