@@ -3,6 +3,7 @@
 #include "hardware/flash.h"
 #include "hardware/regs/addressmap.h"
 #include "hardware/sync.h"
+#include "pico/time.h"
 
 #include "pico_video_backend.h"
 
