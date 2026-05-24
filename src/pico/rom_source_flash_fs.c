@@ -58,6 +58,8 @@ static FlashFsState s_state;
 static char s_last_error[160];
 static FlashFsProgressFn s_progress_fn;
 static void *s_progress_user;
+static FlashFsPreFlashFn s_pre_flash_fn;
+static void *s_pre_flash_user;
 
 extern char __flash_binary_end;
 
@@ -214,6 +216,11 @@ void rom_source_flash_fs_set_progress(FlashFsProgressFn fn, void *user) {
     s_progress_user = user;
 }
 
+void rom_source_flash_fs_set_pre_flash(FlashFsPreFlashFn fn, void *user) {
+    s_pre_flash_fn = fn;
+    s_pre_flash_user = user;
+}
+
 typedef struct {
     uint32_t write_offset;
     uint8_t  page[FLASH_PAGE_SIZE];
@@ -352,6 +359,9 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
     size_t progress_done  = 0;
 
     report_progress(0, progress_total);
+
+    if (s_pre_flash_fn != NULL)
+        s_pre_flash_fn(s_pre_flash_user);
 
     printf("[flash_fs] erasing %u bytes (%zu x 64KB blocks)...\n",
            (unsigned)erase_end_aligned, total_erase_blocks);

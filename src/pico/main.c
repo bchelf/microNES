@@ -34,6 +34,13 @@ static void flash_progress_cb(size_t done, size_t total, void *user) {
     emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
 }
 
+static void flash_pre_flash_cb(void *user) {
+    FlashProgressCtx *ctx = (FlashProgressCtx *)user;
+    rom_menu_render_loading(ctx->fb, "This may take 2-3 min", 0);
+    emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
+    sleep_ms(3000);
+}
+
 static bool import_fn(RomSource *flash_source, RomSource *sd_source, void *user) {
     (void)user;
     return rom_source_flash_fs_copy_from(flash_source, sd_source);
@@ -159,6 +166,7 @@ int main(void) {
             s_progress_ctx.adapter = &emulator_video;
             s_progress_ctx.fb = &shell.menu_fb;
             rom_source_flash_fs_set_progress(flash_progress_cb, &s_progress_ctx);
+            rom_source_flash_fs_set_pre_flash(flash_pre_flash_cb, &s_progress_ctx);
             app_shell_set_erase(&shell, erase_fn, NULL);
             if (sd_ok) {
                 app_shell_set_import(&shell, &sd_rom_source, import_fn, NULL);

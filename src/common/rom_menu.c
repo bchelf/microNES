@@ -237,21 +237,15 @@ static void format_info_tag(const RomSourceEntry *e, char *out, size_t out_size)
         if (out != NULL && out_size > 0) out[0] = '\0';
         return;
     }
-    if (!e->supported) {
-        if (e->mapper == 0xFFFFu)
-            snprintf(out, out_size, "N/A");
-        else
-            snprintf(out, out_size, "N/A (M%u)", (unsigned)e->mapper);
-        return;
-    }
-    if (e->file_size == 0) {
+    if (e->mapper == 0xFFFFu) {
         snprintf(out, out_size, "?");
         return;
     }
-    uint32_t bytes = e->file_size;
-    uint32_t secs = (bytes + 25000u - 1u) / 25000u;
-    if (secs == 0) secs = 1;
-    snprintf(out, out_size, "%us", (unsigned)secs);
+    if (!e->supported) {
+        snprintf(out, out_size, "M%u", (unsigned)e->mapper);
+        return;
+    }
+    snprintf(out, out_size, "M%u", (unsigned)e->mapper);
 }
 
 static void draw_centered_text(NesFrameBuffer *fb, int y, const char *text, uint8_t color) {
@@ -300,7 +294,7 @@ void rom_menu_render(const RomMenu *menu,
     /* Column headers. */
     font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, MENU_COL_HDR_Y, "Name", MENU_TEXT_FAINT);
     {
-        const char *rt_hdr = "Load Time";
+        const char *rt_hdr = "Mapper";
         int rt_w = font5x7_text_width(rt_hdr);
         font5x7_draw_text(fb, MENU_SAFE_RIGHT - rt_w - 4, MENU_COL_HDR_Y, rt_hdr, MENU_TEXT_FAINT);
     }
@@ -316,20 +310,26 @@ void rom_menu_render(const RomMenu *menu,
         rows_to_draw = MENU_VISIBLE_ROWS;
     }
 
+    enum { MENU_ACTION_H = MENU_ITEM_H + 2 };
+
     for (int row = 0; row < rows_to_draw; ++row) {
         int idx = top + row;
-        int y = MENU_LIST_TOP_Y + row * MENU_ITEM_H;
+        int y = MENU_LIST_TOP_Y;
+        for (int r = 0; r < row; ++r) {
+            int ri = top + r;
+            y += (has_actions && ri >= rom_count) ? MENU_ACTION_H : MENU_ITEM_H;
+        }
         bool is_selected = (idx == selected);
+        int item_h = (has_actions && idx >= rom_count) ? MENU_ACTION_H : MENU_ITEM_H;
 
         if (idx >= rom_count && has_actions) {
-            /* Action items: separator line, then action labels. */
             if (idx == rom_count) {
                 fill_rect(fb, MENU_SAFE_LEFT + 4, y, MENU_SAFE_WIDTH - 8, 1, MENU_TEXT_DIM);
-                y += 1;
+                y += 2;
             }
             if (is_selected) {
                 fill_rect(fb, MENU_SAFE_LEFT, y,
-                          MENU_SAFE_WIDTH, MENU_ITEM_H, MENU_BAR);
+                          MENU_SAFE_WIDTH, item_h, MENU_BAR);
             }
             const char *label;
             uint8_t color;
@@ -340,7 +340,7 @@ void rom_menu_render(const RomMenu *menu,
                 label = "Copy from SD Card";
                 color = is_selected ? MENU_TEXT : MENU_TEXT_FAINT;
             }
-            font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, y + 1, label, color);
+            font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, y + 2, label, color);
             continue;
         }
 
