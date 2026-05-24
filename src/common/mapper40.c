@@ -2,16 +2,20 @@
 
 /*
  * Mapper 40: pirate FDS-to-cartridge SMB2J board.
+ * Source: FCEUX 40.cpp, Mesen2 Mapper40.h (both agree exactly).
  *
- * PRG layout:
- *   $6000-$7FFF: switchable 8 KB (selected by $E000 write, bits 0-2)
- *   $8000-$FFFF: fixed to last 32 KB of PRG ROM
+ * PRG layout (64 KB = 8 x 8 KB banks):
+ *   $6000-$7FFF: fixed bank 6
+ *   $8000-$9FFF: fixed bank 4
+ *   $A000-$BFFF: fixed bank 5
+ *   $C000-$DFFF: switchable (default bank 0, selected by $E000 writes)
+ *   $E000-$FFFF: fixed bank 7 (vectors)
  *
  * Registers:
  *   $8000: IRQ disable, acknowledge, counter reset
  *   $A000: IRQ enable (counter starts from 0)
  *   $C000: ignored
- *   $E000: bank select (bits 0-2 -> 8KB bank at $6000)
+ *   $E000: bank select (bits 0-2 -> 8KB bank at $C000)
  *
  * IRQ: 12-bit counter increments each CPU cycle; fires at 4096.
  */
@@ -21,20 +25,16 @@ enum {
 };
 
 void mapper40_cart_init(NesCartridge *cart) {
-    size_t last_32k = cart->prg_rom_size >= 0x8000u
-        ? cart->prg_rom_size - 0x8000u
-        : 0u;
-
     cart->m40_irq_enabled = false;
     cart->m40_irq_counter = 0;
     cart->irq_pending = false;
 
     cart->m40_prg_6000 = cart->prg_rom + 6u * 0x2000u;
 
-    cart->prg_banks_8k[0] = cart->prg_rom + last_32k;
-    cart->prg_banks_8k[1] = cart->prg_rom + last_32k + 0x2000u;
-    cart->prg_banks_8k[2] = cart->prg_rom + last_32k + 0x4000u;
-    cart->prg_banks_8k[3] = cart->prg_rom + last_32k + 0x6000u;
+    cart->prg_banks_8k[0] = cart->prg_rom + 4u * 0x2000u;
+    cart->prg_banks_8k[1] = cart->prg_rom + 5u * 0x2000u;
+    cart->prg_banks_8k[2] = cart->prg_rom + 0u * 0x2000u;
+    cart->prg_banks_8k[3] = cart->prg_rom + 7u * 0x2000u;
 
     cart->prg_bank_lo = cart->prg_banks_8k[0];
     cart->prg_bank_hi = cart->prg_banks_8k[2];
@@ -59,7 +59,8 @@ void mapper40_cpu_write(NesCartridge *cart, uint16_t addr, uint8_t value) {
         if (offset + 0x2000u > cart->prg_rom_size) {
             offset %= cart->prg_rom_size;
         }
-        cart->m40_prg_6000 = cart->prg_rom + offset;
+        cart->prg_banks_8k[2] = cart->prg_rom + offset;
+        cart->prg_bank_hi = cart->prg_banks_8k[2];
         break;
     }
     }

@@ -264,6 +264,7 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
             break;
         case 40:
             mapper40_cpu_write(&nes->cartridge, addr, value);
+            nes_sync_prg_cache(nes);
             break;
         case 11:
             colordreams_cpu_write(&nes->cartridge, addr, value);
