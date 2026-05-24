@@ -206,8 +206,8 @@ static dma_channel_config s_dma_cfg[2];
 /* =========================================================================
  * State shared between IRQ handler and Core 1 loop
  * ========================================================================= */
-static volatile bool s_dma_irq1_pending = false;
-static volatile int  s_idle_buf         = 0;
+static volatile uint32_t s_dma_event_count = 0;
+static volatile int  s_idle_buf           = 0;
 
 /* =========================================================================
  * Performance counters
@@ -472,8 +472,8 @@ static void __isr dma_irq1_handler(void) {
     uint32_t status = dma_hw->ints1 & mask;
     dma_hw->ints1   = status;
 
-    s_idle_buf         = (status & (1u << s_dma_chan[0])) ? 0 : 1;
-    s_dma_irq1_pending = true;
+    s_idle_buf = (status & (1u << s_dma_chan[0])) ? 0 : 1;
+    ++s_dma_event_count;
     /* Core 1 wakes from __wfe() automatically on IRQ return. */
 }
 
@@ -535,7 +535,7 @@ void video_ntsc_stop(void) {
     pio_sm_clear_fifos(s_pio, s_sm);
     pio_sm_restart(s_pio, s_sm);
     gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
-    s_dma_irq1_pending = false;
+    s_dma_event_count = 0;
 }
 
 void video_ntsc_build_test_pattern_frame(void) {
@@ -635,8 +635,8 @@ void video_ntsc_core1_entry(void) {
     dma_rearm(1);
 
     /* Clear any stale IRQ_1 flags */
-    dma_hw->ints1      = ch_mask;
-    s_dma_irq1_pending = false;
+    dma_hw->ints1       = ch_mask;
+    s_dma_event_count   = 0;
     dma_set_irq1_channel_mask_enabled(ch_mask, true);
 
     /* Start: GP4 HIGH for line 0 sync, then start channel A */
@@ -655,10 +655,35 @@ void video_ntsc_core1_entry(void) {
     int render_line  = 2;
     while (true) {
         /* ---- Wait for DMA IRQ_1 (fires when a channel completes) ---- */
-        while (!s_dma_irq1_pending) {
+        while (s_dma_event_count == 0) {
             __wfe();
         }
-        s_dma_irq1_pending = false;
+
+        /*
+         * Read and clear the event count atomically w.r.t. the ISR.
+         * If events > 1, Core 1 fell behind — the DMA chain kept running
+         * with stale buffer data.  Skip the missed lines to re-sync.
+         */
+        uint32_t save = save_and_disable_interrupts();
+        uint32_t events = s_dma_event_count;
+        s_dma_event_count = 0;
+        restore_interrupts(save);
+
+        if (events > 1) {
+            uint32_t skip = events - 1u;
+            for (uint32_t i = 0; i < skip; ++i) {
+                int skipped_render = render_line;
+                if (skipped_render >= (int)VIDEO_ACTIVE_START_LINE &&
+                    skipped_render < (int)VIDEO_ACTIVE_END_LINE) {
+                    ScanlineQueueSlot discard;
+                    scanline_queue_pop_blocking(queue, &discard);
+                }
+                display_line++;
+                if (display_line >= (int)VIDEO_LINES_PER_FRAME) display_line = 0;
+                render_line++;
+                if (render_line >= (int)VIDEO_LINES_PER_FRAME) render_line = 0;
+            }
+        }
 
         /*
          * At this point:

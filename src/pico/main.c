@@ -175,6 +175,7 @@ int main(void) {
             uint64_t frame_deadline_us;
 #endif
             {
+#if !defined(MICRONES_PICO_VIDEO_BACKEND_ANALOG)
                 uint64_t wait_until_ns = 0u;
                 uint64_t now_ns = micrones_pico_clock_now_ns();
 
@@ -184,6 +185,7 @@ int main(void) {
                         &frame_pacer,
                         micrones_pico_clock_now_ns());
                 }
+#endif
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
                 frame_deadline_us = (frame_pacer.next_deadline_ns + 999ull) / 1000ull;
 #endif
@@ -224,8 +226,10 @@ int main(void) {
             if (!frame.stepping_nes) {
                 emulator_video_adapter_present_framebuffer(
                     &emulator_video, app_shell_menu_framebuffer(&shell));
+#if !defined(MICRONES_PICO_VIDEO_BACKEND_ANALOG)
                 micrones_frame_pacer_frame_done(&frame_pacer,
                                                 micrones_pico_clock_now_ns());
+#endif
                 continue;
             }
             nes_set_controller_state(&emulator_video.nes, 0, frame.forwarded);
@@ -355,7 +359,9 @@ int main(void) {
 #endif
             }
 #endif
+#if !defined(MICRONES_PICO_VIDEO_BACKEND_ANALOG)
             micrones_frame_pacer_frame_done(&frame_pacer, micrones_pico_clock_now_ns());
+#endif
         }
         pico_video_backend_start_test_pattern();
         while (true) {
