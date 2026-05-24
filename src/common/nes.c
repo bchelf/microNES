@@ -1,5 +1,6 @@
 #include "nes.h"
 
+#include "mmc3.h"
 #include "nrom.h"
 
 #include <stdarg.h>
@@ -106,6 +107,13 @@ void nes_reset(Nes *nes) {
     apu_reset(&nes->apu);
     input_controller_reset(&nes->controllers[0]);
     input_controller_reset(&nes->controllers[1]);
+    switch (nes->cartridge.mapper) {
+    case 1: mmc1_cart_init(&nes->cartridge); break;
+    case 4:
+        mmc3_cart_init(&nes->cartridge);
+        nes->cartridge.irq_pending = false;
+        break;
+    }
     nes_sync_prg_cache(nes);
     nes_clear_runtime_state(nes);
     cpu6502_reset(&nes->cpu, nes);

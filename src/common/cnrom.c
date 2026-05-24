@@ -10,5 +10,7 @@ void cnrom_cart_init(NesCartridge *cart) {
 
 void cnrom_cpu_write(NesCartridge *cart, uint16_t addr, uint8_t value) {
     (void)addr;
-    cart->cnrom_chr_bank = (uint8_t)(value & 0x03u);
+    if (cart->chr_size >= 0x2000u) {
+        cart->cnrom_chr_bank = (uint8_t)(value % (cart->chr_size / 0x2000u));
+    }
 }
