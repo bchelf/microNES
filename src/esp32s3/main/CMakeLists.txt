@@ -42,6 +42,7 @@ idf_component_register(
         "${MICRONES_COMMON_DIR}/frame_pacer.c"
         "${MICRONES_COMMON_DIR}/gxrom.c"
         "${MICRONES_COMMON_DIR}/input.c"
+        "${MICRONES_COMMON_DIR}/mapper40.c"
         "${MICRONES_COMMON_DIR}/mmc1.c"
         "${MICRONES_COMMON_DIR}/mmc2.c"
         "${MICRONES_COMMON_DIR}/mmc3.c"

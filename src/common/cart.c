@@ -3,6 +3,7 @@
 #include "cnrom.h"
 #include "colordreams.h"
 #include "gxrom.h"
+#include "mapper40.h"
 #include "mmc1.h"
 #include "mmc2.h"
 #include "mmc3.h"
@@ -161,12 +162,11 @@ static bool cart_parse_ines_image(
     }
     cartridge->mapper = (uint8_t)mapper;
     switch (cartridge->mapper) {
-    case 0: case 1: case 2: case 3: case 4: case 7: case 9: case 11: case 66:
+    case 0: case 1: case 2: case 3: case 4: case 7: case 9: case 11: case 40: case 66:
         break;
     default:
         cart_set_error(error, error_size,
-            "unsupported mapper (only 0/NROM, 1/MMC1, 2/UxROM, 3/CNROM, "
-            "4/MMC3, 7/AxROM, 9/MMC2, 11/ColorDreams, 66/GxROM)");
+            "unsupported mapper (supported: 0-4, 7, 9, 11, 40, 66)");
         return false;
     }
 
@@ -273,6 +273,9 @@ static bool cart_parse_ines_image(
         break;
     case 11:
         colordreams_cart_init(cartridge);
+        break;
+    case 40:
+        mapper40_cart_init(cartridge);
         break;
     case 66:
         gxrom_cart_init(cartridge);
@@ -431,11 +434,14 @@ bool cart_load_ines_const_memory(
         memcpy(prg_dram, old_prg, cartridge->prg_rom_size);
         cartridge->prg_rom     = prg_dram;
         /* Rebase precomputed bank pointers into the new DRAM allocation */
-        if (cartridge->mapper == 4 || cartridge->mapper == 9) {
+        if (cartridge->mapper == 4 || cartridge->mapper == 9 || cartridge->mapper == 40) {
             for (int i = 0; i < 4; ++i) {
                 if (cartridge->prg_banks_8k[i] != NULL) {
                     cartridge->prg_banks_8k[i] = prg_dram + (size_t)(cartridge->prg_banks_8k[i] - old_prg);
                 }
+            }
+            if (cartridge->mapper == 40 && cartridge->m40_prg_6000 != NULL) {
+                cartridge->m40_prg_6000 = prg_dram + (size_t)(cartridge->m40_prg_6000 - old_prg);
             }
         }
         cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);

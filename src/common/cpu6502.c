@@ -86,7 +86,8 @@ static inline uint8_t cpu_fetch8(Cpu6502 *cpu, Nes *nes) {
         if (__builtin_expect(mask != 0u, 1)) {
             return nes->prg_bank_lo[off & mask];
         }
-        if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9, 0)) {
+        if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9
+                            || nes->cartridge.mapper == 40, 0)) {
             return nes->cartridge.prg_banks_8k[off >> 13][off & 0x1fffu];
         }
         if (off < 0x4000u) {
@@ -119,7 +120,8 @@ static inline uint16_t cpu_fetch16(Cpu6502 *cpu, Nes *nes) {
         if (__builtin_expect(mask != 0u, 1)) {
             lo = nes->prg_bank_lo[lo_off & mask];
             hi = nes->prg_bank_lo[hi_off & mask];
-        } else if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9, 0)) {
+        } else if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9
+                                    || nes->cartridge.mapper == 40, 0)) {
             lo = nes->cartridge.prg_banks_8k[lo_off >> 13][lo_off & 0x1fffu];
             hi = nes->cartridge.prg_banks_8k[hi_off >> 13][hi_off & 0x1fffu];
         } else {

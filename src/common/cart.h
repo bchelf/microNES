@@ -68,6 +68,10 @@ typedef struct {
     uint8_t mmc2_chr1_fe;
     bool mmc2_latch0;
     bool mmc2_latch1;
+    /* Mapper 40 (pirate SMB2J) state */
+    const uint8_t *m40_prg_6000;
+    uint16_t m40_irq_counter;
+    bool m40_irq_enabled;
 } NesCartridge;
 
 bool cart_load_ines_file(NesCartridge *cartridge, const char *path, char *error, size_t error_size);

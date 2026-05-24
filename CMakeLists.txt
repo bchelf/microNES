@@ -57,6 +57,7 @@ set(MICRONES_COMMON_SOURCES
     src/common/frame_pacer.c
     src/common/gxrom.c
     src/common/input.c
+    src/common/mapper40.c
     src/common/mmc1.c
     src/common/mmc2.c
     src/common/mmc3.c

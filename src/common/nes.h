@@ -11,6 +11,7 @@
 #include "framebuffer.h"
 #include "gxrom.h"
 #include "input.h"
+#include "mapper40.h"
 #include "mmc1.h"
 #include "mmc2.h"
 #include "mmc3.h"
@@ -166,7 +167,8 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
         if (__builtin_expect(mask != 0u, 1)) {
             return nes->prg_bank_lo[off & mask];
         }
-        if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9, 0)) {
+        if (__builtin_expect(nes->cartridge.mapper == 4 || nes->cartridge.mapper == 9
+                            || nes->cartridge.mapper == 40, 0)) {
             return nes->cartridge.prg_banks_8k[off >> 13][off & 0x1fffu];
         }
         if (off < 0x4000u) {
@@ -190,6 +192,9 @@ static inline uint8_t nes_cpu_bus_read_fast(Nes *nes, uint16_t addr) {
         return apu_cpu_read(&nes->apu, addr);
     }
     if (addr >= 0x6000u && addr < 0x8000u) {
+        if (__builtin_expect(nes->cartridge.mapper == 40, 0)) {
+            return nes->cartridge.m40_prg_6000[addr - 0x6000u];
+        }
         return nes->wram[addr - 0x6000u];
     }
     return 0;
@@ -256,6 +261,9 @@ static inline void nes_cpu_bus_write_fast(Nes *nes, uint16_t addr, uint8_t value
         case 9:
             mmc2_cpu_write(&nes->cartridge, addr, value);
             nes_sync_prg_cache(nes);
+            break;
+        case 40:
+            mapper40_cpu_write(&nes->cartridge, addr, value);
             break;
         case 11:
             colordreams_cpu_write(&nes->cartridge, addr, value);
