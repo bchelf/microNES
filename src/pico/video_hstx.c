@@ -244,6 +244,16 @@ static inline uint8_t rgb332(uint8_t r, uint8_t g, uint8_t b) {
     return (uint8_t)((r & 0xe0u) | ((g & 0xe0u) >> 3) | ((b & 0xc0u) >> 6));
 }
 
+static uint8_t k_palette_rgb332[64];
+
+static void init_palette_rgb332(void) {
+    for (uint32_t i = 0u; i < 64u; ++i) {
+        k_palette_rgb332[i] = rgb332(k_nes_palette_rgb[i][0],
+                                     k_nes_palette_rgb[i][1],
+                                     k_nes_palette_rgb[i][2]);
+    }
+}
+
 /* --- HDMI data island helpers ------------------------------------------ */
 
 #if MICRONES_HDMI_DATA_ISLANDS
@@ -483,6 +493,7 @@ bool video_hstx_init(void) {
     s_started = false;
     s_irq_configured = false;
     s_borders_dirty = true;
+    init_palette_rgb332();
 
     if (s_dmach_ping < 0) {
         s_dmach_ping = dma_claim_unused_channel(true);
