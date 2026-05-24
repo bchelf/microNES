@@ -1,6 +1,6 @@
-CMakeFiles/micrones_core.dir/src/common/ppu.c.o: \
-  /home/runner/work/microNES/microNES/src/common/ppu.c \
-  /home/runner/work/microNES/microNES/src/common/ppu.h \
+CMakeFiles/micrones_core.dir/src/common/gxrom.c.o: \
+  /home/runner/work/microNES/microNES/src/common/gxrom.c \
+  /home/runner/work/microNES/microNES/src/common/gxrom.h \
   /home/runner/work/microNES/microNES/src/common/cart.h \
   /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/stdbool.h \
   /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/stdbool.h \
@@ -16,15 +16,4 @@ CMakeFiles/micrones_core.dir/src/common/ppu.c.o: \
   /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/stdint.h \
   /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/stdint.h \
   /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/alltypes.h \
-  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/stdint.h \
-  /home/runner/work/microNES/microNES/src/common/framebuffer.h \
-  /home/runner/work/microNES/microNES/src/common/runtime_config.h \
-  /home/runner/work/microNES/microNES/src/common/scanline.h \
-  /home/runner/work/microNES/microNES/src/common/mmc3.h \
-  /home/runner/work/microNES/microNES/src/common/nrom.h \
-  /home/runner/work/microNES/microNES/src/common/mmc1.h \
-  /home/runner/work/microNES/microNES/src/common/mmc2.h \
-  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/string.h \
-  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/string.h \
-  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/features.h \
-  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/strings.h
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/stdint.h

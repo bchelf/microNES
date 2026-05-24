@@ -190,6 +190,30 @@ src/common/apu_micrones.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.s
 .PHONY : src/common/apu_micrones.c.s
 
+src/common/axrom.o: src/common/axrom.c.o
+.PHONY : src/common/axrom.o
+
+# target to build an object file
+src/common/axrom.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/axrom.c.o
+.PHONY : src/common/axrom.c.o
+
+src/common/axrom.i: src/common/axrom.c.i
+.PHONY : src/common/axrom.i
+
+# target to preprocess a source file
+src/common/axrom.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/axrom.c.i
+.PHONY : src/common/axrom.c.i
+
+src/common/axrom.s: src/common/axrom.c.s
+.PHONY : src/common/axrom.s
+
+# target to generate assembly for a file
+src/common/axrom.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/axrom.c.s
+.PHONY : src/common/axrom.c.s
+
 src/common/cart.o: src/common/cart.c.o
 .PHONY : src/common/cart.o
 
@@ -213,6 +237,54 @@ src/common/cart.s: src/common/cart.c.s
 src/common/cart.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/cart.c.s
 .PHONY : src/common/cart.c.s
+
+src/common/cnrom.o: src/common/cnrom.c.o
+.PHONY : src/common/cnrom.o
+
+# target to build an object file
+src/common/cnrom.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/cnrom.c.o
+.PHONY : src/common/cnrom.c.o
+
+src/common/cnrom.i: src/common/cnrom.c.i
+.PHONY : src/common/cnrom.i
+
+# target to preprocess a source file
+src/common/cnrom.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/cnrom.c.i
+.PHONY : src/common/cnrom.c.i
+
+src/common/cnrom.s: src/common/cnrom.c.s
+.PHONY : src/common/cnrom.s
+
+# target to generate assembly for a file
+src/common/cnrom.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/cnrom.c.s
+.PHONY : src/common/cnrom.c.s
+
+src/common/colordreams.o: src/common/colordreams.c.o
+.PHONY : src/common/colordreams.o
+
+# target to build an object file
+src/common/colordreams.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/colordreams.c.o
+.PHONY : src/common/colordreams.c.o
+
+src/common/colordreams.i: src/common/colordreams.c.i
+.PHONY : src/common/colordreams.i
+
+# target to preprocess a source file
+src/common/colordreams.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/colordreams.c.i
+.PHONY : src/common/colordreams.c.i
+
+src/common/colordreams.s: src/common/colordreams.c.s
+.PHONY : src/common/colordreams.s
+
+# target to generate assembly for a file
+src/common/colordreams.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/colordreams.c.s
+.PHONY : src/common/colordreams.c.s
 
 src/common/cpu6502.o: src/common/cpu6502.c.o
 .PHONY : src/common/cpu6502.o
@@ -310,6 +382,30 @@ src/common/frame_pacer.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.s
 .PHONY : src/common/frame_pacer.c.s
 
+src/common/gxrom.o: src/common/gxrom.c.o
+.PHONY : src/common/gxrom.o
+
+# target to build an object file
+src/common/gxrom.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/gxrom.c.o
+.PHONY : src/common/gxrom.c.o
+
+src/common/gxrom.i: src/common/gxrom.c.i
+.PHONY : src/common/gxrom.i
+
+# target to preprocess a source file
+src/common/gxrom.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/gxrom.c.i
+.PHONY : src/common/gxrom.c.i
+
+src/common/gxrom.s: src/common/gxrom.c.s
+.PHONY : src/common/gxrom.s
+
+# target to generate assembly for a file
+src/common/gxrom.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/gxrom.c.s
+.PHONY : src/common/gxrom.c.s
+
 src/common/input.o: src/common/input.c.o
 .PHONY : src/common/input.o
 
@@ -334,6 +430,30 @@ src/common/input.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/input.c.s
 .PHONY : src/common/input.c.s
 
+src/common/mapper40.o: src/common/mapper40.c.o
+.PHONY : src/common/mapper40.o
+
+# target to build an object file
+src/common/mapper40.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mapper40.c.o
+.PHONY : src/common/mapper40.c.o
+
+src/common/mapper40.i: src/common/mapper40.c.i
+.PHONY : src/common/mapper40.i
+
+# target to preprocess a source file
+src/common/mapper40.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mapper40.c.i
+.PHONY : src/common/mapper40.c.i
+
+src/common/mapper40.s: src/common/mapper40.c.s
+.PHONY : src/common/mapper40.s
+
+# target to generate assembly for a file
+src/common/mapper40.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mapper40.c.s
+.PHONY : src/common/mapper40.c.s
+
 src/common/mmc1.o: src/common/mmc1.c.o
 .PHONY : src/common/mmc1.o
 
@@ -357,6 +477,54 @@ src/common/mmc1.s: src/common/mmc1.c.s
 src/common/mmc1.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc1.c.s
 .PHONY : src/common/mmc1.c.s
+
+src/common/mmc2.o: src/common/mmc2.c.o
+.PHONY : src/common/mmc2.o
+
+# target to build an object file
+src/common/mmc2.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc2.c.o
+.PHONY : src/common/mmc2.c.o
+
+src/common/mmc2.i: src/common/mmc2.c.i
+.PHONY : src/common/mmc2.i
+
+# target to preprocess a source file
+src/common/mmc2.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc2.c.i
+.PHONY : src/common/mmc2.c.i
+
+src/common/mmc2.s: src/common/mmc2.c.s
+.PHONY : src/common/mmc2.s
+
+# target to generate assembly for a file
+src/common/mmc2.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc2.c.s
+.PHONY : src/common/mmc2.c.s
+
+src/common/mmc3.o: src/common/mmc3.c.o
+.PHONY : src/common/mmc3.o
+
+# target to build an object file
+src/common/mmc3.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.o
+.PHONY : src/common/mmc3.c.o
+
+src/common/mmc3.i: src/common/mmc3.c.i
+.PHONY : src/common/mmc3.i
+
+# target to preprocess a source file
+src/common/mmc3.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.i
+.PHONY : src/common/mmc3.c.i
+
+src/common/mmc3.s: src/common/mmc3.c.s
+.PHONY : src/common/mmc3.s
+
+# target to generate assembly for a file
+src/common/mmc3.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/mmc3.c.s
+.PHONY : src/common/mmc3.c.s
 
 src/common/nes.o: src/common/nes.c.o
 .PHONY : src/common/nes.o
@@ -478,6 +646,30 @@ src/common/smb1_bg_classifier.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.s
 .PHONY : src/common/smb1_bg_classifier.c.s
 
+src/common/uxrom.o: src/common/uxrom.c.o
+.PHONY : src/common/uxrom.o
+
+# target to build an object file
+src/common/uxrom.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/uxrom.c.o
+.PHONY : src/common/uxrom.c.o
+
+src/common/uxrom.i: src/common/uxrom.c.i
+.PHONY : src/common/uxrom.i
+
+# target to preprocess a source file
+src/common/uxrom.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/uxrom.c.i
+.PHONY : src/common/uxrom.c.i
+
+src/common/uxrom.s: src/common/uxrom.c.s
+.PHONY : src/common/uxrom.s
+
+# target to generate assembly for a file
+src/common/uxrom.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/uxrom.c.s
+.PHONY : src/common/uxrom.c.s
+
 src/web/web_main.o: src/web/web_main.c.o
 .PHONY : src/web/web_main.o
 
@@ -518,9 +710,18 @@ help:
 	@echo "... src/common/apu_micrones.o"
 	@echo "... src/common/apu_micrones.i"
 	@echo "... src/common/apu_micrones.s"
+	@echo "... src/common/axrom.o"
+	@echo "... src/common/axrom.i"
+	@echo "... src/common/axrom.s"
 	@echo "... src/common/cart.o"
 	@echo "... src/common/cart.i"
 	@echo "... src/common/cart.s"
+	@echo "... src/common/cnrom.o"
+	@echo "... src/common/cnrom.i"
+	@echo "... src/common/cnrom.s"
+	@echo "... src/common/colordreams.o"
+	@echo "... src/common/colordreams.i"
+	@echo "... src/common/colordreams.s"
 	@echo "... src/common/cpu6502.o"
 	@echo "... src/common/cpu6502.i"
 	@echo "... src/common/cpu6502.s"
@@ -533,12 +734,24 @@ help:
 	@echo "... src/common/frame_pacer.o"
 	@echo "... src/common/frame_pacer.i"
 	@echo "... src/common/frame_pacer.s"
+	@echo "... src/common/gxrom.o"
+	@echo "... src/common/gxrom.i"
+	@echo "... src/common/gxrom.s"
 	@echo "... src/common/input.o"
 	@echo "... src/common/input.i"
 	@echo "... src/common/input.s"
+	@echo "... src/common/mapper40.o"
+	@echo "... src/common/mapper40.i"
+	@echo "... src/common/mapper40.s"
 	@echo "... src/common/mmc1.o"
 	@echo "... src/common/mmc1.i"
 	@echo "... src/common/mmc1.s"
+	@echo "... src/common/mmc2.o"
+	@echo "... src/common/mmc2.i"
+	@echo "... src/common/mmc2.s"
+	@echo "... src/common/mmc3.o"
+	@echo "... src/common/mmc3.i"
+	@echo "... src/common/mmc3.s"
 	@echo "... src/common/nes.o"
 	@echo "... src/common/nes.i"
 	@echo "... src/common/nes.s"
@@ -554,6 +767,9 @@ help:
 	@echo "... src/common/smb1_bg_classifier.o"
 	@echo "... src/common/smb1_bg_classifier.i"
 	@echo "... src/common/smb1_bg_classifier.s"
+	@echo "... src/common/uxrom.o"
+	@echo "... src/common/uxrom.i"
+	@echo "... src/common/uxrom.s"
 	@echo "... src/web/web_main.o"
 	@echo "... src/web/web_main.i"
 	@echo "... src/web/web_main.s"

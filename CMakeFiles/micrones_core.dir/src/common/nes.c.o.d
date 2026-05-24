@@ -4,42 +4,50 @@ CMakeFiles/micrones_core.dir/src/common/nes.c.o: \
   /home/runner/work/microNES/microNES/src/common/apu.h \
   /home/runner/work/microNES/microNES/src/common/apu_micrones.h \
   /home/runner/work/microNES/microNES/src/common/runtime_config.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/stdint.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/stdint.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/alltypes.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/stdint.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/stdbool.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/stdbool.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/stddef.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/stddef.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stddef_header_macro.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stddef_ptrdiff_t.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stddef_size_t.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stddef_wchar_t.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stddef_null.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stddef_max_align_t.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stddef_offsetof.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/stdint.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/stdint.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/alltypes.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/bits/stdint.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/stdbool.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/stdbool.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/stddef.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/stddef.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stddef_header_macro.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stddef_ptrdiff_t.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stddef_size_t.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stddef_wchar_t.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stddef_null.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stddef_max_align_t.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stddef_offsetof.h \
+  /home/runner/work/microNES/microNES/src/common/axrom.h \
   /home/runner/work/microNES/microNES/src/common/cart.h \
+  /home/runner/work/microNES/microNES/src/common/cnrom.h \
+  /home/runner/work/microNES/microNES/src/common/colordreams.h \
   /home/runner/work/microNES/microNES/src/common/cpu6502.h \
   /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.h \
   /home/runner/work/microNES/microNES/src/common/framebuffer.h \
+  /home/runner/work/microNES/microNES/src/common/gxrom.h \
   /home/runner/work/microNES/microNES/src/common/input.h \
+  /home/runner/work/microNES/microNES/src/common/mapper40.h \
   /home/runner/work/microNES/microNES/src/common/mmc1.h \
+  /home/runner/work/microNES/microNES/src/common/mmc2.h \
+  /home/runner/work/microNES/microNES/src/common/mmc3.h \
   /home/runner/work/microNES/microNES/src/common/nrom.h \
   /home/runner/work/microNES/microNES/src/common/ppu.h \
   /home/runner/work/microNES/microNES/src/common/scanline.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/stdarg.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/stdarg.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/stdarg.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stdarg_header_macro.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stdarg___gnuc_va_list.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_list.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_arg.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stdarg___va_copy.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_copy.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/stdio.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/wasi/api.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/features.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/string.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/string.h \
-  /home/runner/work/_temp/29ac2ae0-07c5-4375-b6dd-f53c6400e39b/emsdk-main/upstream/emscripten/cache/sysroot/include/strings.h
+  /home/runner/work/microNES/microNES/src/common/uxrom.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/stdarg.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/stdarg.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/stdarg.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stdarg_header_macro.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stdarg___gnuc_va_list.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_list.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_arg.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stdarg___va_copy.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/lib/clang/20/include/__stdarg_va_copy.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/stdio.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/wasi/api.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/features.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/string.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/string.h \
+  /home/runner/work/_temp/18fa7d72-4e4e-411f-9cb0-85b943263dbc/emsdk-main/upstream/emscripten/cache/sysroot/include/strings.h
