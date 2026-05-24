@@ -47,18 +47,26 @@ endif ()
 set(MICRONES_COMMON_SOURCES
     ${MICRONES_APU_SOURCE}
     src/common/app_shell.c
+    src/common/axrom.c
     src/common/cart.c
+    src/common/cnrom.c
+    src/common/colordreams.c
     src/common/cpu6502.c
     src/common/cpu6502_opcode.c
     src/common/font_5x7.c
     src/common/frame_pacer.c
+    src/common/gxrom.c
     src/common/input.c
+    src/common/mapper40.c
     src/common/mmc1.c
+    src/common/mmc2.c
+    src/common/mmc3.c
     src/common/nes.c
     src/common/nrom.c
     src/common/ppu.c
     src/common/rom_menu.c
     src/common/smb1_bg_classifier.c
+    src/common/uxrom.c
 )
 
 if (NOT MICRONES_PLATFORM STREQUAL "pico")

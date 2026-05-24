@@ -1,5 +1,6 @@
 #include "nes.h"
 
+#include "mmc3.h"
 #include "nrom.h"
 
 #include <stdarg.h>
@@ -106,6 +107,13 @@ void nes_reset(Nes *nes) {
     apu_reset(&nes->apu);
     input_controller_reset(&nes->controllers[0]);
     input_controller_reset(&nes->controllers[1]);
+    switch (nes->cartridge.mapper) {
+    case 1: mmc1_cart_init(&nes->cartridge); break;
+    case 4:
+        mmc3_cart_init(&nes->cartridge);
+        nes->cartridge.irq_pending = false;
+        break;
+    }
     nes_sync_prg_cache(nes);
     nes_clear_runtime_state(nes);
     cpu6502_reset(&nes->cpu, nes);
@@ -137,6 +145,9 @@ bool MICRONES_HOT_FUNC(nes_step_instruction)(Nes *nes) {
     bool ok = cpu6502_step(&nes->cpu, nes);
     nes->stats.instruction_count = nes->cpu.insn_count;
     if (nes->pending_apu_cycles > 0) {
+        if (nes->cartridge.mapper == 40) {
+            mapper40_tick(&nes->cartridge, nes->pending_apu_cycles);
+        }
         apu_step(&nes->apu, nes->pending_apu_cycles);
         nes->pending_apu_cycles = 0;
     }
@@ -157,6 +168,11 @@ bool MICRONES_HOT_FUNC(nes_step_scanline)(Nes *nes) {
         return false;
     }
     nes->stats.instruction_count = nes->cpu.insn_count;
+
+    /* Mapper 40 IRQ ticks on CPU cycles, batched per-scanline. */
+    if (nes->cartridge.mapper == 40 && nes->pending_apu_cycles > 0) {
+        mapper40_tick(&nes->cartridge, nes->pending_apu_cycles);
+    }
 
     /* Flush APU cycles accumulated across all instructions in this scanline.
      * Batching here (240×/frame) instead of per-instruction (~9828×/frame)

@@ -1,5 +1,13 @@
 #include "cart.h"
+#include "axrom.h"
+#include "cnrom.h"
+#include "colordreams.h"
+#include "gxrom.h"
+#include "mapper40.h"
 #include "mmc1.h"
+#include "mmc2.h"
+#include "mmc3.h"
+#include "uxrom.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -153,8 +161,12 @@ static bool cart_parse_ines_image(
         return false;
     }
     cartridge->mapper = (uint8_t)mapper;
-    if (cartridge->mapper != 0 && cartridge->mapper != 1) {
-        cart_set_error(error, error_size, "only mapper 0 (NROM) and mapper 1 (MMC1) are supported");
+    switch (cartridge->mapper) {
+    case 0: case 1: case 2: case 3: case 4: case 7: case 9: case 11: case 40: case 66:
+        break;
+    default:
+        cart_set_error(error, error_size,
+            "unsupported mapper (supported: 0-4, 7, 9, 11, 40, 66)");
         return false;
     }
 
@@ -234,14 +246,40 @@ static bool cart_parse_ines_image(
     cartridge->chr_mask = (uint32_t)(cartridge->chr_size - 1u);
 
     /* Initialize PRG bank window pointers used by the hot CPU read path */
-    if (cartridge->mapper == 0) {
+    switch (cartridge->mapper) {
+    case 0:
         cartridge->prg_bank_lo = cartridge->prg_rom;
         cartridge->prg_bank_hi = (cartridge->prg_rom_size == 0x4000u)
-            ? cartridge->prg_rom                        /* 16 KiB: mirror */
-            : cartridge->prg_rom + 0x4000u;             /* 32 KiB: second half */
-    } else {
-        /* mapper 1 / MMC1: mmc1_cart_init sets shift register and bank pointers */
+            ? cartridge->prg_rom
+            : cartridge->prg_rom + 0x4000u;
+        break;
+    case 1:
         mmc1_cart_init(cartridge);
+        break;
+    case 2:
+        uxrom_cart_init(cartridge);
+        break;
+    case 3:
+        cnrom_cart_init(cartridge);
+        break;
+    case 4:
+        mmc3_cart_init(cartridge);
+        break;
+    case 7:
+        axrom_cart_init(cartridge);
+        break;
+    case 9:
+        mmc2_cart_init(cartridge);
+        break;
+    case 11:
+        colordreams_cart_init(cartridge);
+        break;
+    case 40:
+        mapper40_cart_init(cartridge);
+        break;
+    case 66:
+        gxrom_cart_init(cartridge);
+        break;
     }
 
     if (!cart_build_chr_row_cache(cartridge, error, error_size)) {
@@ -396,6 +434,16 @@ bool cart_load_ines_const_memory(
         memcpy(prg_dram, old_prg, cartridge->prg_rom_size);
         cartridge->prg_rom     = prg_dram;
         /* Rebase precomputed bank pointers into the new DRAM allocation */
+        if (cartridge->mapper == 4 || cartridge->mapper == 9 || cartridge->mapper == 40) {
+            for (int i = 0; i < 4; ++i) {
+                if (cartridge->prg_banks_8k[i] != NULL) {
+                    cartridge->prg_banks_8k[i] = prg_dram + (size_t)(cartridge->prg_banks_8k[i] - old_prg);
+                }
+            }
+            if (cartridge->mapper == 40 && cartridge->m40_prg_6000 != NULL) {
+                cartridge->m40_prg_6000 = prg_dram + (size_t)(cartridge->m40_prg_6000 - old_prg);
+            }
+        }
         cartridge->prg_bank_lo = prg_dram + (size_t)(cartridge->prg_bank_lo - old_prg);
         cartridge->prg_bank_hi = prg_dram + (size_t)(cartridge->prg_bank_hi - old_prg);
         cartridge->rom_image   = prg_dram;   // cart_unload will free this

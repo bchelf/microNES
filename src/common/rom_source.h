@@ -84,7 +84,13 @@ struct RomSource {
 /* Single source of truth for which mappers the core implements.  Used at
  * refresh() time by platform sources to populate entry->supported. */
 static inline bool rom_source_mapper_supported(uint16_t mapper) {
-    return mapper == 0u || mapper == 1u;
+    switch (mapper) {
+    case 0: case 1: case 2: case 3: case 4: case 7:
+    case 9: case 11: case 40: case 66:
+        return true;
+    default:
+        return false;
+    }
 }
 
 /* Construct a no-op RomSource that exposes zero entries and rejects loads.

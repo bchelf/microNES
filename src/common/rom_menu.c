@@ -64,9 +64,10 @@ enum {
 
     MENU_HEADER_H           = 14,
     MENU_HEADER_TOP_Y       = MENU_SAFE_TOP,
-    MENU_LIST_TOP_Y         = MENU_HEADER_TOP_Y + MENU_HEADER_H + 4,
+    MENU_COL_HDR_Y          = MENU_HEADER_TOP_Y + MENU_HEADER_H + 3,
+    MENU_LIST_TOP_Y         = MENU_COL_HDR_Y + 9,
     MENU_ITEM_H             = 8,
-    MENU_VISIBLE_ROWS       = 22,
+    MENU_VISIBLE_ROWS       = 21,
     MENU_LIST_BOTTOM_Y      = MENU_LIST_TOP_Y + MENU_VISIBLE_ROWS * MENU_ITEM_H,
     MENU_STATUS_Y           = MENU_LIST_BOTTOM_Y + 3,
     MENU_FOOTER_Y           = MENU_SAFE_BOTTOM - 7,
@@ -212,22 +213,26 @@ RomMenuResult rom_menu_step(RomMenu *menu,
     return ROM_MENU_RESULT_NONE;
 }
 
-static void format_mapper_tag(const RomSourceEntry *e, char *out, size_t out_size) {
+static void format_info_tag(const RomSourceEntry *e, char *out, size_t out_size) {
     if (e == NULL) {
-        if (out != NULL && out_size > 0) {
-            out[0] = '\0';
-        }
+        if (out != NULL && out_size > 0) out[0] = '\0';
         return;
     }
-    if (e->mapper == 0xFFFFu) {
+    if (!e->supported) {
+        if (e->mapper == 0xFFFFu)
+            snprintf(out, out_size, "N/A");
+        else
+            snprintf(out, out_size, "N/A (M%u)", (unsigned)e->mapper);
+        return;
+    }
+    if (e->file_size == 0) {
         snprintf(out, out_size, "?");
         return;
     }
-    if (e->supported) {
-        snprintf(out, out_size, "M%u", (unsigned)e->mapper);
-    } else {
-        snprintf(out, out_size, "M%u*", (unsigned)e->mapper);
-    }
+    uint32_t bytes = e->file_size;
+    uint32_t secs = (bytes + 25000u - 1u) / 25000u;
+    if (secs == 0) secs = 1;
+    snprintf(out, out_size, "%us", (unsigned)secs);
 }
 
 static void draw_centered_text(NesFrameBuffer *fb, int y, const char *text, uint8_t color) {
@@ -273,6 +278,14 @@ void rom_menu_render(const RomMenu *menu,
         return;
     }
 
+    /* Column headers. */
+    font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, MENU_COL_HDR_Y, "Name", MENU_TEXT_FAINT);
+    {
+        const char *rt_hdr = "Load Time";
+        int rt_w = font5x7_text_width(rt_hdr);
+        font5x7_draw_text(fb, MENU_SAFE_RIGHT - rt_w - 4, MENU_COL_HDR_Y, rt_hdr, MENU_TEXT_FAINT);
+    }
+
     int top = menu != NULL ? menu->top : 0;
     int selected = menu != NULL ? menu->selected : 0;
     int rows_to_draw = n - top;
@@ -306,11 +319,10 @@ void rom_menu_render(const RomMenu *menu,
         }
 
         const char *name = e != NULL ? e->name : "";
-        /* Truncate to fit in the safe-area pixel width. */
         char trim[ROM_SOURCE_NAME_MAX];
         snprintf(trim, sizeof(trim), "%s", name);
-        char tag[8];
-        format_mapper_tag(e, tag, sizeof(tag));
+        char tag[16];
+        format_info_tag(e, tag, sizeof(tag));
         int tag_w = font5x7_text_width(tag);
         int max_name_px = MENU_SAFE_WIDTH - 4 - tag_w - 8 - 4;
         int max_chars = max_name_px / FONT5X7_CELL_W;
