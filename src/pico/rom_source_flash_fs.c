@@ -307,20 +307,22 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
         return false;
     }
 
-    size_t total_sectors = align_up_sector(data_cursor) / FLASH_SECTOR_SIZE;
-    size_t total_pages   = (data_cursor + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE;
-    size_t progress_total = total_sectors + total_pages + hdr.rom_count;
+    #define ERASE_BLOCK_SIZE (64u * 1024u)
+    uint32_t erase_end = align_up_sector(data_cursor);
+    uint32_t erase_end_aligned = (erase_end + ERASE_BLOCK_SIZE - 1u) & ~(ERASE_BLOCK_SIZE - 1u);
+    size_t total_erase_blocks = erase_end_aligned / ERASE_BLOCK_SIZE;
+    size_t total_pages = (data_cursor + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE;
+    size_t progress_total = total_erase_blocks + total_pages + hdr.rom_count;
     size_t progress_done  = 0;
 
     report_progress(0, progress_total);
 
     pico_video_backend_suspend_for_flash();
 
-    uint32_t erase_end = align_up_sector(data_cursor);
-    for (uint32_t off = 0; off < erase_end; off += FLASH_SECTOR_SIZE) {
+    for (uint32_t off = 0; off < erase_end_aligned; off += ERASE_BLOCK_SIZE) {
         uint32_t save = save_and_disable_interrupts();
         flash_range_erase((uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET + off,
-                          FLASH_SECTOR_SIZE);
+                          ERASE_BLOCK_SIZE);
         restore_interrupts(save);
         ++progress_done;
         report_progress(progress_done, progress_total);
