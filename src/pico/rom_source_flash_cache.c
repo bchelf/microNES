@@ -195,23 +195,32 @@ static bool cached_load(RomSource *self, size_t index,
     writer.write_offset = (uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET;
     memset(writer.page, 0xff, sizeof(writer.page));
 
+    printf("[flash] load index=%u rom_size=%u erase_size=%u\n",
+           (unsigned)index, (unsigned)rom_size, (unsigned)erase_size);
+
     memset(&cmp, 0, sizeof(cmp));
     cmp.xip = (const uint8_t *)((uintptr_t)XIP_BASE + (uintptr_t)MICRONES_PICO_FLASH_CACHE_OFFSET);
     ok = st->backing->load_stream(st->backing, index, flash_cache_compare_write, &cmp,
                                   &streamed_size, err, err_size);
     if (ok && streamed_size == rom_size && !cmp.mismatch) {
+        printf("[flash] cache HIT\n");
         *out_buf = (uint8_t *)cmp.xip;
         *out_size = rom_size;
         set_error("");
         return true;
     }
     if (!cmp.mismatch && !ok) {
+        printf("[flash] compare stream failed\n");
         return false;
     }
     if (err != NULL && err_size > 0) {
         err[0] = '\0';
     }
     streamed_size = 0;
+
+    printf("[flash] cache MISS, erasing %u sectors, programming %u pages\n",
+           (unsigned)(erase_size / FLASH_SECTOR_SIZE),
+           (unsigned)(align_up_u32((uint32_t)rom_size, FLASH_PAGE_SIZE) / FLASH_PAGE_SIZE));
 
     pico_video_backend_suspend_for_flash();
 
@@ -222,6 +231,7 @@ static bool cached_load(RomSource *self, size_t index,
 
     report_progress(0, progress_total);
 
+    uint64_t erase_start_us = time_us_64();
     for (uint32_t off = 0; off < erase_size; off += FLASH_SECTOR_SIZE) {
         uint32_t save = save_and_disable_interrupts();
         flash_range_erase((uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET + off,
@@ -230,22 +240,31 @@ static bool cached_load(RomSource *self, size_t index,
         ++progress_done;
         report_progress(progress_done, progress_total);
     }
+    printf("[flash] erase done in %llu ms\n",
+           (time_us_64() - erase_start_us) / 1000u);
 
     writer.progress_base = (size_t)total_sectors;
     writer.progress_total = progress_total;
 
+    uint64_t prog_start_us = time_us_64();
     ok = st->backing->load_stream(st->backing, index, flash_cache_write, &writer,
                                   &streamed_size, err, err_size);
     if (ok) {
         ok = flash_cache_flush(&writer);
     }
+    printf("[flash] program done in %llu ms, streamed=%u/%u ok=%d\n",
+           (time_us_64() - prog_start_us) / 1000u,
+           (unsigned)streamed_size, (unsigned)rom_size, (int)ok);
 
     pico_video_backend_resume_after_flash();
 
     if (!ok) {
+        printf("[flash] program FAILED\n");
         return false;
     }
     if (streamed_size != rom_size) {
+        printf("[flash] size mismatch: streamed %u expected %u\n",
+               (unsigned)streamed_size, (unsigned)rom_size);
         if (err && err_size) {
             snprintf(err, err_size, "streamed %u/%u bytes",
                      (unsigned)streamed_size, (unsigned)rom_size);
@@ -253,6 +272,9 @@ static bool cached_load(RomSource *self, size_t index,
         return false;
     }
 
+    printf("[flash] load OK, XIP at 0x%08x, %u bytes\n",
+           (unsigned)(XIP_BASE + MICRONES_PICO_FLASH_CACHE_OFFSET),
+           (unsigned)rom_size);
     *out_buf = (uint8_t *)((uintptr_t)XIP_BASE + (uintptr_t)MICRONES_PICO_FLASH_CACHE_OFFSET);
     *out_size = rom_size;
     set_error("");

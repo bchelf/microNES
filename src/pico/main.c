@@ -214,6 +214,12 @@ int main(void) {
             reset_button_was_down = reset_button_down;
 
             AppShellFrame frame = app_shell_begin_frame(&shell, input_pair.players[0]);
+
+            if (frame.just_entered_run) {
+                printf("[main] game launched, resetting frame pacer\n");
+                micrones_frame_pacer_init(&frame_pacer, true, micrones_pico_clock_now_ns());
+            }
+
             if (!frame.stepping_nes) {
                 emulator_video_adapter_present_framebuffer(
                     &emulator_video, app_shell_menu_framebuffer(&shell));
@@ -277,10 +283,15 @@ int main(void) {
             }
 #elif defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
             {
+                static uint32_t s_diag_frame_count = 0;
+                static uint64_t s_diag_last_us = 0;
+
+                uint64_t step_start_us = time_us_64();
                 if (!emulator_video_adapter_step_frame(&emulator_video)) {
-                    printf("emulator video failed: %s\n", emulator_video_adapter_last_error(&emulator_video));
+                    printf("[main] HDMI: step_frame FAILED: %s\n", emulator_video_adapter_last_error(&emulator_video));
                     break;
                 }
+                uint64_t step_us = time_us_64() - step_start_us;
 
                 /* Drain APU PCM samples into the audio backend.
                  * The APU produces about 799 samples per NTSC frame at 48 kHz. */
@@ -310,42 +321,82 @@ int main(void) {
 #endif
                 }
 
+                uint64_t present_start_us = time_us_64();
                 emulator_video_adapter_present_frame(&emulator_video);
+                uint64_t present_us = time_us_64() - present_start_us;
+
+                ++s_diag_frame_count;
+                if (s_diag_frame_count % 60u == 0u) {
+                    PicoVideoBackendStats vstat;
+                    pico_video_backend_get_stats(&vstat);
+                    uint64_t now = time_us_64();
+                    uint64_t interval_us = now - s_diag_last_us;
+                    s_diag_last_us = now;
+                    printf("[diag] emu=%u hstx=%llu step=%lluus pres=%lluus interval=%lluus audio_buf=%u\n",
+                           s_diag_frame_count,
+                           vstat.frames_presented,
+                           step_us, present_us,
+                           interval_us,
+                           pico_audio_backend_buffer_level());
+                }
             }
 #else
             /* Analog path: render_frame handles step + present together,
              * matching the original loop structure. */
-            if (!emulator_video_adapter_render_frame(&emulator_video)) {
-                printf("emulator video failed: %s\n", emulator_video_adapter_last_error(&emulator_video));
-                break;
-            }
-
-            /* Drain APU PCM samples into the audio backend.
-             * The APU produces about 799 samples per NTSC frame at 48 kHz. */
             {
-                static int16_t pcm_tmp[256];
-                size_t n;
-                while ((n = nes_audio_read_samples(&emulator_video.nes, pcm_tmp,
-                                                   sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
+                static uint32_t s_diag_frame_count = 0;
+                static uint64_t s_diag_last_us = 0;
+
+                uint64_t render_start_us = time_us_64();
+                if (!emulator_video_adapter_render_frame(&emulator_video)) {
+                    printf("[main] Analog: render_frame FAILED: %s\n", emulator_video_adapter_last_error(&emulator_video));
+                    break;
+                }
+                uint64_t render_us = time_us_64() - render_start_us;
+
+                /* Drain APU PCM samples into the audio backend.
+                 * The APU produces about 799 samples per NTSC frame at 48 kHz. */
+                {
+                    static int16_t pcm_tmp[256];
+                    size_t n;
+                    while ((n = nes_audio_read_samples(&emulator_video.nes, pcm_tmp,
+                                                       sizeof(pcm_tmp) / sizeof(pcm_tmp[0]))) > 0) {
 #if MICRONES_ENABLE_PERF_LOG
-                    size_t pushed = pico_audio_backend_push_samples(pcm_tmp, n);
-                    report_samples_drained += n;
-                    report_samples_dropped += (n - pushed);
-                    if (!report_saw_nonzero_sample) {
-                        for (size_t i = 0; i < n; ++i) {
-                            if (pcm_tmp[i] != 0) {
-                                report_saw_nonzero_sample = true;
-                                break;
+                        size_t pushed = pico_audio_backend_push_samples(pcm_tmp, n);
+                        report_samples_drained += n;
+                        report_samples_dropped += (n - pushed);
+                        if (!report_saw_nonzero_sample) {
+                            for (size_t i = 0; i < n; ++i) {
+                                if (pcm_tmp[i] != 0) {
+                                    report_saw_nonzero_sample = true;
+                                    break;
+                                }
                             }
                         }
-                    }
 #else
-                    pico_audio_backend_push_samples(pcm_tmp, n);
+                        pico_audio_backend_push_samples(pcm_tmp, n);
+#endif
+                    }
+#if MICRONES_ENABLE_PERF_LOG
+                    report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
 #endif
                 }
-#if MICRONES_ENABLE_PERF_LOG
-                report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
-#endif
+
+                ++s_diag_frame_count;
+                if (s_diag_frame_count % 60u == 0u) {
+                    PicoVideoBackendStats vstat;
+                    pico_video_backend_get_stats(&vstat);
+                    uint64_t now = time_us_64();
+                    uint64_t interval_us = now - s_diag_last_us;
+                    s_diag_last_us = now;
+                    printf("[diag] emu=%u vid=%llu render=%lluus interval=%lluus qstall=%u audio_buf=%u\n",
+                           s_diag_frame_count,
+                           vstat.frames_presented,
+                           render_us,
+                           interval_us,
+                           vstat.queue_stall_count,
+                           pico_audio_backend_buffer_level());
+                }
             }
 #endif
             micrones_frame_pacer_frame_done(&frame_pacer, micrones_pico_clock_now_ns());
