@@ -37,8 +37,10 @@ static void flash_progress_cb(size_t done, size_t total, void *user) {
 static void flash_pre_flash_cb(void *user) {
     FlashProgressCtx *ctx = (FlashProgressCtx *)user;
     rom_menu_render_loading(ctx->fb, "This may take 2-3 min", 0);
-    emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
-    sleep_ms(3000);
+    for (int i = 0; i < 180; ++i) {
+        emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
+        sleep_ms(17);
+    }
 }
 
 static bool import_fn(RomSource *flash_source, RomSource *sd_source, void *user) {
