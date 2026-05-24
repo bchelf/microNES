@@ -24,17 +24,25 @@ enum {
     MAPPER40_IRQ_PERIOD = 4096,
 };
 
+static inline size_t mapper40_bank_offset(const NesCartridge *cart, size_t from_end) {
+    size_t n8k = cart->prg_rom_size / 0x2000u;
+    return ((n8k - 1u - from_end) % n8k) * 0x2000u;
+}
+
 void mapper40_cart_init(NesCartridge *cart) {
     cart->m40_irq_enabled = false;
     cart->m40_irq_counter = 0;
     cart->irq_pending = false;
 
-    cart->m40_prg_6000 = cart->prg_rom + 6u * 0x2000u;
+    /* FCEUX ~N = count N banks from the end of PRG ROM.
+     * $6000 = ~1 (second-to-last), $8000 = ~3, $A000 = ~2,
+     * $C000 = reg (default 0), $E000 = ~0 (last, vectors). */
+    cart->m40_prg_6000 = cart->prg_rom + mapper40_bank_offset(cart, 1);
 
-    cart->prg_banks_8k[0] = cart->prg_rom + 4u * 0x2000u;
-    cart->prg_banks_8k[1] = cart->prg_rom + 5u * 0x2000u;
-    cart->prg_banks_8k[2] = cart->prg_rom + 0u * 0x2000u;
-    cart->prg_banks_8k[3] = cart->prg_rom + 7u * 0x2000u;
+    cart->prg_banks_8k[0] = cart->prg_rom + mapper40_bank_offset(cart, 3);
+    cart->prg_banks_8k[1] = cart->prg_rom + mapper40_bank_offset(cart, 2);
+    cart->prg_banks_8k[2] = cart->prg_rom;
+    cart->prg_banks_8k[3] = cart->prg_rom + mapper40_bank_offset(cart, 0);
 
     cart->prg_bank_lo = cart->prg_banks_8k[0];
     cart->prg_bank_hi = cart->prg_banks_8k[2];
@@ -54,12 +62,9 @@ void mapper40_cpu_write(NesCartridge *cart, uint16_t addr, uint8_t value) {
     case 0xc000u:
         break;
     case 0xe000u: {
-        uint8_t bank = value & 0x07u;
-        size_t offset = (size_t)bank * 0x2000u;
-        if (offset + 0x2000u > cart->prg_rom_size) {
-            offset %= cart->prg_rom_size;
-        }
-        cart->prg_banks_8k[2] = cart->prg_rom + offset;
+        size_t n8k = cart->prg_rom_size / 0x2000u;
+        size_t bank = (size_t)(value & 0x07u) % n8k;
+        cart->prg_banks_8k[2] = cart->prg_rom + bank * 0x2000u;
         cart->prg_bank_hi = cart->prg_banks_8k[2];
         break;
     }
