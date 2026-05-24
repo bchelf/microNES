@@ -78,13 +78,15 @@ void hdmi_di_encode_packet(const HdmiPacket *pkt,
                            uint32_t out_words[HDMI_PACKET_RAW_WORDS]);
 
 /*
- * Emit a full data-island block: preamble (8 px) + leading guard band (2 px)
- * + N packets + trailing guard band (2 px). Returns the number of RAW words
- * written. `out_words` must hold at least 12 + 32*npackets entries.
+ * Emit a data-island body: leading guard band (2 px) + N packets (32 px each)
+ * + trailing guard band (2 px). Does NOT include the 8-pixel preamble — the
+ * caller emits the preamble separately as HSTX_CMD_RAW_REPEAT|8 followed by
+ * a NOP, matching the pico_hdmi library's proven layout. Returns the number
+ * of RAW words written (= 4 + 32*npackets).
  */
-uint32_t hdmi_di_emit_block(const HdmiPacket *packets, uint32_t npackets,
-                            uint32_t hsync_active, uint32_t vsync_active,
-                            uint32_t *out_words);
+uint32_t hdmi_di_emit_island_body(const HdmiPacket *packets, uint32_t npackets,
+                                  uint32_t hsync_active, uint32_t vsync_active,
+                                  uint32_t *out_words);
 
 /* --- Helpers to build the packets we use. --------------------------------- */
 

@@ -97,8 +97,8 @@ static void test_block_word_count(void) {
     hdmi_pkt_make_avi_infoframe(&pkts[0]);
     hdmi_pkt_make_audio_infoframe(&pkts[1]);
     hdmi_pkt_make_general_control(&pkts[2], 0, 1);
-    uint32_t buf[8 + 2 + 32 * 3 + 2];
-    uint32_t n = hdmi_di_emit_block(pkts, 3u, 0u, 0u, buf);
+    uint32_t buf[2 + 32 * 3 + 2]; /* guard + 3 packets + guard (no preamble) */
+    uint32_t n = hdmi_di_emit_island_body(pkts, 3u, 0u, 0u, buf);
     if (n != (uint32_t)sizeof(buf) / 4u) {
         fprintf(stderr, "FAIL: block size = %u, expected %u\n",
                 n, (unsigned)(sizeof(buf) / 4u));

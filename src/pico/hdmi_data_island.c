@@ -133,26 +133,10 @@ void hdmi_di_encode_packet(const HdmiPacket *pkt,
     }
 }
 
-uint32_t hdmi_di_emit_block(const HdmiPacket *packets, uint32_t npackets,
-                            uint32_t hsync_active, uint32_t vsync_active,
-                            uint32_t *out) {
+uint32_t hdmi_di_emit_island_body(const HdmiPacket *packets, uint32_t npackets,
+                                  uint32_t hsync_active, uint32_t vsync_active,
+                                  uint32_t *out) {
     uint32_t *p = out;
-
-    uint32_t preamble_word = hdmi_di_preamble_word;
-    /* The 8-cycle preamble must reflect the live H/V sync line state too.
-     * Patch CH0 lower 10 bits to the right TMDS control codeword.
-     */
-    {
-        uint16_t ch0;
-        if (vsync_active && hsync_active) ch0 = TMDS_CTRL_00;
-        else if (vsync_active)            ch0 = TMDS_CTRL_01;
-        else if (hsync_active)            ch0 = TMDS_CTRL_10;
-        else                              ch0 = TMDS_CTRL_11;
-        preamble_word = pack_tmds_ctl(ch0, TMDS_CTRL_01, TMDS_CTRL_01);
-    }
-    for (uint32_t i = 0u; i < HDMI_DI_PREAMBLE_PIXELS; ++i) {
-        *p++ = preamble_word;
-    }
 
     uint32_t gb = di_guardband_word(hsync_active, vsync_active);
     *p++ = gb;
