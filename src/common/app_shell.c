@@ -58,24 +58,15 @@ static bool shell_launch(AppShell *shell, int index) {
         return false;
     }
     const RomSourceEntry *entry = shell->source->entry(shell->source, (size_t)index);
-    printf("[shell] launching index=%d name='%s' mapper=%u prg=%u chr=%u file=%u\n",
-           index,
-           entry ? entry->name : "?",
-           entry ? (unsigned)entry->mapper : 0xFFFFu,
-           entry ? (unsigned)entry->prg_size : 0u,
-           entry ? (unsigned)entry->chr_size : 0u,
-           entry ? (unsigned)entry->file_size : 0u);
 
     uint8_t *buf = NULL;
     size_t   sz  = 0;
     char     err[160];
     err[0] = '\0';
     if (!shell->source->load(shell->source, (size_t)index, &buf, &sz, err, sizeof(err))) {
-        printf("[shell] source->load FAILED: %s\n", err[0] ? err : "unknown");
         shell_set_status(shell, "Load failed: %s", err[0] ? err : "unknown error");
         return false;
     }
-    printf("[shell] source->load OK, buf=%p sz=%u\n", (void *)buf, (unsigned)sz);
 
     /* Fresh NES state for the new ROM. */
     nes_destroy(shell->nes);
@@ -87,15 +78,10 @@ static bool shell_launch(AppShell *shell, int index) {
     if (!nes_load_cartridge_const_memory(shell->nes, buf, sz)) {
         char msg[160];
         snprintf(msg, sizeof(msg), "%s", nes_last_error(shell->nes));
-        printf("[shell] cart load FAILED: %s\n", msg);
         shell->source->free_buf(shell->source, buf);
         shell_set_status(shell, "Load failed: %s", msg[0] ? msg : "unknown error");
         return false;
     }
-    printf("[shell] cart loaded OK, mapper=%u prg_rom=%p chr=%p\n",
-           (unsigned)shell->nes->cartridge.mapper,
-           (void *)shell->nes->cartridge.prg_rom,
-           (void *)shell->nes->cartridge.chr_data);
 
     /* Hold onto the source buffer until the cart is unloaded.  Zero-copy CHR
      * data still aliases this region, and some platforms may also keep PRG
