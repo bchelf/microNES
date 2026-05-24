@@ -38,6 +38,11 @@ static bool import_fn(RomSource *flash_source, RomSource *sd_source, void *user)
     (void)user;
     return rom_source_flash_fs_copy_from(flash_source, sd_source);
 }
+
+static bool erase_fn(RomSource *flash_source, void *user) {
+    (void)user;
+    return rom_source_flash_fs_erase(flash_source);
+}
 #endif
 
 int main(void) {
@@ -154,6 +159,7 @@ int main(void) {
             s_progress_ctx.adapter = &emulator_video;
             s_progress_ctx.fb = &shell.menu_fb;
             rom_source_flash_fs_set_progress(flash_progress_cb, &s_progress_ctx);
+            app_shell_set_erase(&shell, erase_fn, NULL);
             if (sd_ok) {
                 app_shell_set_import(&shell, &sd_rom_source, import_fn, NULL);
             }

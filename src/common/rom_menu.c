@@ -127,8 +127,15 @@ static int find_next_navigable(RomSource *source, int from, int dir) {
     return clamp_int(from, 0, n - 1);
 }
 
-static void move_selection(RomMenu *menu, RomSource *source, int dir) {
+static int menu_total_items(RomMenu *menu, RomSource *source) {
     int n = source != NULL ? (int)source->count(source) : 0;
+    if (menu->show_flash_actions && n > 0)
+        n += 2;
+    return n;
+}
+
+static void move_selection(RomMenu *menu, RomSource *source, int dir) {
+    int n = menu_total_items(menu, source);
     if (n <= 0) {
         menu->selected = 0;
         menu->top = 0;
@@ -140,7 +147,12 @@ static void move_selection(RomMenu *menu, RomSource *source, int dir) {
     } else if (next >= n) {
         next = 0;                 /* wrap to top */
     }
-    menu->selected = find_next_navigable(source, next, dir);
+    int rom_count = source != NULL ? (int)source->count(source) : 0;
+    if (next < rom_count) {
+        menu->selected = find_next_navigable(source, next, dir);
+    } else {
+        menu->selected = next;
+    }
 
     /* Keep selection visible. */
     if (menu->selected < menu->top) {
@@ -188,7 +200,8 @@ RomMenuResult rom_menu_step(RomMenu *menu,
     }
 
     /* Clamp on every step in case the source mutated under us. */
-    int n = source != NULL ? (int)source->count(source) : 0;
+    int n = menu_total_items(menu, source);
+    int rom_count = source != NULL ? (int)source->count(source) : 0;
     if (n <= 0) {
         menu->selected = 0;
         menu->top = 0;
@@ -200,10 +213,16 @@ RomMenuResult rom_menu_step(RomMenu *menu,
 
     /* Launch on Start or A. */
     if ((pressed & (NES_BUTTON_START | NES_BUTTON_A)) != 0u && n > 0) {
-        const RomSourceEntry *e = source->entry(source, (size_t)menu->selected);
         if (out_index != NULL) {
             *out_index = menu->selected;
         }
+        if (menu->show_flash_actions && menu->selected == rom_count) {
+            return ROM_MENU_RESULT_ERASE_FLASH;
+        }
+        if (menu->show_flash_actions && menu->selected == rom_count + 1) {
+            return ROM_MENU_RESULT_IMPORT;
+        }
+        const RomSourceEntry *e = source->entry(source, (size_t)menu->selected);
         if (e != NULL && e->supported) {
             return ROM_MENU_RESULT_LAUNCH;
         }
@@ -286,18 +305,46 @@ void rom_menu_render(const RomMenu *menu,
         font5x7_draw_text(fb, MENU_SAFE_RIGHT - rt_w - 4, MENU_COL_HDR_Y, rt_hdr, MENU_TEXT_FAINT);
     }
 
+    int rom_count = n;
+    bool has_actions = menu != NULL && menu->show_flash_actions && rom_count > 0;
+    int total_items = has_actions ? rom_count + 2 : rom_count;
+
     int top = menu != NULL ? menu->top : 0;
     int selected = menu != NULL ? menu->selected : 0;
-    int rows_to_draw = n - top;
+    int rows_to_draw = total_items - top;
     if (rows_to_draw > MENU_VISIBLE_ROWS) {
         rows_to_draw = MENU_VISIBLE_ROWS;
     }
 
     for (int row = 0; row < rows_to_draw; ++row) {
         int idx = top + row;
-        const RomSourceEntry *e = source->entry(source, (size_t)idx);
         int y = MENU_LIST_TOP_Y + row * MENU_ITEM_H;
         bool is_selected = (idx == selected);
+
+        if (idx >= rom_count && has_actions) {
+            /* Action items: separator line, then action labels. */
+            if (idx == rom_count) {
+                fill_rect(fb, MENU_SAFE_LEFT + 4, y, MENU_SAFE_WIDTH - 8, 1, MENU_TEXT_DIM);
+                y += 1;
+            }
+            if (is_selected) {
+                fill_rect(fb, MENU_SAFE_LEFT, y,
+                          MENU_SAFE_WIDTH, MENU_ITEM_H, MENU_BAR);
+            }
+            const char *label;
+            uint8_t color;
+            if (idx == rom_count) {
+                label = "Erase Flash";
+                color = is_selected ? MENU_TEXT : MENU_TEXT_ERROR;
+            } else {
+                label = "Copy from SD Card";
+                color = is_selected ? MENU_TEXT : MENU_TEXT_FAINT;
+            }
+            font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, y + 1, label, color);
+            continue;
+        }
+
+        const RomSourceEntry *e = source->entry(source, (size_t)idx);
         bool supported = e != NULL && e->supported;
 
         if (is_selected) {
@@ -338,15 +385,15 @@ void rom_menu_render(const RomMenu *menu,
     }
 
     /* Scroll bar hint on the right when list is taller than window. */
-    if (n > MENU_VISIBLE_ROWS) {
+    if (total_items > MENU_VISIBLE_ROWS) {
         int track_x = MENU_SAFE_RIGHT - 2;
         fill_rect(fb, track_x, MENU_LIST_TOP_Y, 2,
                   MENU_VISIBLE_ROWS * MENU_ITEM_H, MENU_TEXT_DIM);
         int track_h = MENU_VISIBLE_ROWS * MENU_ITEM_H;
-        int thumb_h = (MENU_VISIBLE_ROWS * track_h) / n;
+        int thumb_h = (MENU_VISIBLE_ROWS * track_h) / total_items;
         if (thumb_h < 4) thumb_h = 4;
         int thumb_y = MENU_LIST_TOP_Y + (top * (track_h - thumb_h)) /
-                      (n > MENU_VISIBLE_ROWS ? (n - MENU_VISIBLE_ROWS) : 1);
+                      (total_items > MENU_VISIBLE_ROWS ? (total_items - MENU_VISIBLE_ROWS) : 1);
         fill_rect(fb, track_x, thumb_y, 2, thumb_h, MENU_TEXT);
     }
 
@@ -439,6 +486,36 @@ void rom_menu_render_import(const RomMenu *menu,
     draw_centered_text(fb, MENU_FOOTER_Y,
                        "Press Start/A to copy ROMs to flash",
                        MENU_TEXT_FAINT);
+}
+
+void rom_menu_render_confirm(NesFrameBuffer *fb,
+                             const char *title,
+                             const char *detail) {
+    if (fb == NULL) return;
+
+    clear_fb(fb, MENU_BG);
+
+    enum {
+        BOX_W  = 200,
+        BOX_H  = 56,
+        BOX_X  = (NES_FRAME_WIDTH  - BOX_W) / 2,
+        BOX_Y  = (NES_FRAME_HEIGHT - BOX_H) / 2 - 10,
+    };
+
+    fill_rect(fb, BOX_X, BOX_Y, BOX_W, BOX_H, MENU_BG);
+    fill_rect(fb, BOX_X, BOX_Y, BOX_W, 1, MENU_TEXT_DIM);
+    fill_rect(fb, BOX_X, BOX_Y + BOX_H - 1, BOX_W, 1, MENU_TEXT_DIM);
+    fill_rect(fb, BOX_X, BOX_Y, 1, BOX_H, MENU_TEXT_DIM);
+    fill_rect(fb, BOX_X + BOX_W - 1, BOX_Y, 1, BOX_H, MENU_TEXT_DIM);
+
+    if (title != NULL) {
+        draw_centered_text(fb, BOX_Y + 8, title, MENU_TEXT_ERROR);
+    }
+    if (detail != NULL) {
+        draw_centered_text(fb, BOX_Y + 22, detail, MENU_TEXT);
+    }
+
+    draw_centered_text(fb, BOX_Y + 38, "A = confirm   B = cancel", MENU_TEXT_FAINT);
 }
 
 void rom_menu_render_loading(NesFrameBuffer *fb, const char *name, int pct) {

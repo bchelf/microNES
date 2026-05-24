@@ -120,6 +120,10 @@ static void shell_render_current(AppShell *shell) {
     if (shell->state == APP_SHELL_STATE_IMPORT) {
         rom_menu_render_import(&shell->menu, shell->import_source,
                                &shell->menu_fb, shell->status);
+    } else if (shell->state == APP_SHELL_STATE_CONFIRM_ERASE) {
+        rom_menu_render_confirm(&shell->menu_fb,
+                                "Erase all ROMs from flash?",
+                                "This cannot be undone.");
     } else {
         rom_menu_render(&shell->menu, shell->source,
                         &shell->menu_fb, shell->status);
@@ -151,6 +155,20 @@ void app_shell_set_import(AppShell *shell,
     shell->import_source  = import_source;
     shell->import_fn      = import_fn;
     shell->import_fn_user = import_fn_user;
+    shell->menu.show_flash_actions =
+        (import_fn != NULL || shell->erase_fn != NULL);
+    shell_decide_state(shell);
+    shell_render_current(shell);
+}
+
+void app_shell_set_erase(AppShell *shell,
+                         AppShellEraseFn erase_fn,
+                         void *erase_fn_user) {
+    if (shell == NULL) return;
+    shell->erase_fn      = erase_fn;
+    shell->erase_fn_user = erase_fn_user;
+    shell->menu.show_flash_actions =
+        (shell->import_fn != NULL || erase_fn != NULL);
     shell_decide_state(shell);
     shell_render_current(shell);
 }
@@ -166,7 +184,8 @@ void app_shell_destroy(AppShell *shell) {
 
 bool app_shell_in_menu(const AppShell *shell) {
     return shell != NULL && (shell->state == APP_SHELL_STATE_MENU ||
-                             shell->state == APP_SHELL_STATE_IMPORT);
+                             shell->state == APP_SHELL_STATE_IMPORT ||
+                             shell->state == APP_SHELL_STATE_CONFIRM_ERASE);
 }
 
 const NesFrameBuffer *app_shell_menu_framebuffer(const AppShell *shell) {
@@ -179,7 +198,8 @@ const char *app_shell_status(const AppShell *shell) {
 
 void app_shell_request_menu(AppShell *shell) {
     if (shell == NULL || shell->state == APP_SHELL_STATE_MENU ||
-        shell->state == APP_SHELL_STATE_IMPORT) {
+        shell->state == APP_SHELL_STATE_IMPORT ||
+        shell->state == APP_SHELL_STATE_CONFIRM_ERASE) {
         return;
     }
     shell_unload_running(shell);
@@ -217,6 +237,31 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
     uint8_t prev = shell->prev_buttons;
     uint8_t curr = input.buttons;
 
+    if (shell->state == APP_SHELL_STATE_CONFIRM_ERASE) {
+        uint8_t pressed = (uint8_t)(~prev & curr);
+        if ((pressed & NES_BUTTON_A) != 0u && shell->erase_fn != NULL) {
+            bool ok = shell->erase_fn(shell->source, shell->erase_fn_user);
+            if (ok) {
+                if (shell->source != NULL && shell->source->refresh != NULL)
+                    shell->source->refresh(shell->source);
+                shell_set_status(shell, "Flash erased");
+                rom_menu_init(&shell->menu);
+                shell->menu.show_flash_actions =
+                    (shell->import_fn != NULL || shell->erase_fn != NULL);
+                shell_decide_state(shell);
+            } else {
+                shell_set_status(shell, "Erase failed");
+                shell->state = APP_SHELL_STATE_MENU;
+            }
+        } else if ((pressed & NES_BUTTON_B) != 0u) {
+            shell_set_status(shell, "");
+            shell->state = APP_SHELL_STATE_MENU;
+        }
+        shell_render_current(shell);
+        shell->prev_buttons = curr;
+        return out;
+    }
+
     if (shell->state == APP_SHELL_STATE_IMPORT) {
         RomMenuResult r = rom_menu_step_import(&shell->menu,
                                                shell->import_source,
@@ -229,6 +274,8 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
                     shell->source->refresh(shell->source);
                 shell_set_status(shell, "");
                 rom_menu_init(&shell->menu);
+                shell->menu.show_flash_actions =
+                    (shell->import_fn != NULL || shell->erase_fn != NULL);
                 shell_decide_state(shell);
             } else {
                 shell_set_status(shell, "Copy failed");
@@ -243,7 +290,33 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         int chosen = -1;
         RomMenuResult r = rom_menu_step(&shell->menu, shell->source,
                                         prev, curr, &chosen);
-        if (r == ROM_MENU_RESULT_LAUNCH) {
+        if (r == ROM_MENU_RESULT_ERASE_FLASH) {
+            shell->state = APP_SHELL_STATE_CONFIRM_ERASE;
+            shell_render_current(shell);
+            shell->prev_buttons = curr;
+            return out;
+        } else if (r == ROM_MENU_RESULT_IMPORT && shell->import_fn != NULL) {
+            if (shell->import_source != NULL &&
+                shell->import_source->refresh != NULL) {
+                shell->import_source->refresh(shell->import_source);
+            }
+            bool ok = shell->import_fn(shell->source, shell->import_source,
+                                       shell->import_fn_user);
+            if (ok) {
+                if (shell->source != NULL && shell->source->refresh != NULL)
+                    shell->source->refresh(shell->source);
+                shell_set_status(shell, "");
+                rom_menu_init(&shell->menu);
+                shell->menu.show_flash_actions =
+                    (shell->import_fn != NULL || shell->erase_fn != NULL);
+                shell_decide_state(shell);
+            } else {
+                shell_set_status(shell, "Copy failed");
+            }
+            shell_render_current(shell);
+            shell->prev_buttons = curr;
+            return out;
+        } else if (r == ROM_MENU_RESULT_LAUNCH) {
             if (shell_launch(shell, chosen)) {
                 out.just_entered_run = true;
                 out.stepping_nes = true;

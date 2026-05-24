@@ -176,6 +176,10 @@ bool rom_source_flash_fs_init(RomSource *out_source) {
     }
 
     uintptr_t image_end = (uintptr_t)&__flash_binary_end - (uintptr_t)XIP_BASE;
+    printf("[flash_fs] init: firmware_end=0x%x, cache_offset=0x%x, cache_size=%u bytes\n",
+           (unsigned)image_end,
+           (unsigned)MICRONES_PICO_FLASH_CACHE_OFFSET,
+           (unsigned)MICRONES_PICO_FLASH_CACHE_SIZE);
     if ((uint32_t)image_end > (uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET) {
         set_error("firmware overlaps flash cache (%u > %u)",
                   (unsigned)image_end,
@@ -196,6 +200,7 @@ bool rom_source_flash_fs_init(RomSource *out_source) {
     out_source->save_store = fs_save_store;
 
     load_directory();
+    printf("[flash_fs] found %zu ROMs in flash\n", s_state.count);
     set_error("");
     return true;
 }
@@ -250,6 +255,29 @@ static bool writer_write(void *user, const uint8_t *data, size_t size) {
     return true;
 }
 
+bool rom_source_flash_fs_erase(RomSource *self) {
+    (void)self;
+    if (MICRONES_PICO_FLASH_CACHE_SIZE == 0u) {
+        set_error("flash region not configured");
+        return false;
+    }
+
+    printf("[flash_fs] erasing directory (2 sectors)...\n");
+    pico_video_backend_suspend_for_flash();
+    for (uint32_t off = 0; off < FLASH_FS_DIR_SIZE; off += FLASH_SECTOR_SIZE) {
+        uint32_t save = save_and_disable_interrupts();
+        flash_range_erase((uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET + off,
+                          FLASH_SECTOR_SIZE);
+        restore_interrupts(save);
+    }
+    pico_video_backend_resume_after_flash();
+
+    load_directory();
+    printf("[flash_fs] erase complete, rom_count=%zu\n", s_state.count);
+    set_error("");
+    return true;
+}
+
 bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
     (void)self;
     if (sd_source == NULL) {
@@ -262,6 +290,7 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
     }
 
     size_t sd_count = sd_source->count(sd_source);
+    printf("[flash_fs] SD card has %zu ROMs\n", sd_count);
     if (sd_count == 0) {
         set_error("no ROMs on SD card");
         return false;
@@ -281,8 +310,12 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
         const RomSourceEntry *se = sd_source->entry(sd_source, i);
         if (se == NULL || se->file_size == 0) continue;
         uint32_t aligned_size = align_up_sector(se->file_size);
-        if (data_cursor + aligned_size > (uint32_t)MICRONES_PICO_FLASH_CACHE_SIZE)
+        if (data_cursor + aligned_size > (uint32_t)MICRONES_PICO_FLASH_CACHE_SIZE) {
+            printf("[flash_fs] flash full after %u ROMs (%u/%u bytes used)\n",
+                   (unsigned)hdr.rom_count, (unsigned)data_cursor,
+                   (unsigned)MICRONES_PICO_FLASH_CACHE_SIZE);
             break;
+        }
 
         size_t fi = hdr.rom_count;
         sd_index_map[fi] = i;
@@ -307,6 +340,9 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
         return false;
     }
 
+    printf("[flash_fs] copying %u ROMs, %u bytes total\n",
+           (unsigned)hdr.rom_count, (unsigned)data_cursor);
+
     #define ERASE_BLOCK_SIZE (64u * 1024u)
     uint32_t erase_end = align_up_sector(data_cursor);
     uint32_t erase_end_aligned = (erase_end + ERASE_BLOCK_SIZE - 1u) & ~(ERASE_BLOCK_SIZE - 1u);
@@ -317,6 +353,8 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
 
     report_progress(0, progress_total);
 
+    printf("[flash_fs] erasing %u bytes (%zu x 64KB blocks)...\n",
+           (unsigned)erase_end_aligned, total_erase_blocks);
     pico_video_backend_suspend_for_flash();
 
     for (uint32_t off = 0; off < erase_end_aligned; off += ERASE_BLOCK_SIZE) {
@@ -327,7 +365,9 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
         ++progress_done;
         report_progress(progress_done, progress_total);
     }
+    printf("[flash_fs] erase complete\n");
 
+    printf("[flash_fs] writing directory header...\n");
     FlashWriter writer;
     writer_init(&writer, (uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET);
     writer_write(&writer, (const uint8_t *)&hdr, sizeof(hdr));
@@ -336,6 +376,9 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
     for (uint8_t fi = 0; fi < hdr.rom_count; ++fi) {
         FlashFsDirEntry *de = &hdr.entries[fi];
         size_t sd_idx = sd_index_map[fi];
+        printf("[flash_fs] [%u/%u] copying \"%s\" (%u bytes) to flash offset 0x%x...\n",
+               (unsigned)(fi + 1), (unsigned)hdr.rom_count,
+               de->name, (unsigned)de->data_size, (unsigned)de->data_offset);
         writer_init(&writer, (uint32_t)MICRONES_PICO_FLASH_CACHE_OFFSET + de->data_offset);
 
         if (sd_source->load_stream != NULL) {
@@ -347,6 +390,7 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
             if (ok) writer_flush_page(&writer);
             if (!ok) {
                 pico_video_backend_resume_after_flash();
+                printf("[flash_fs] FAILED: %s\n", err);
                 set_error("stream ROM %u failed: %s", (unsigned)fi, err);
                 return false;
             }
@@ -357,6 +401,7 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
             err[0] = '\0';
             if (!sd_source->load(sd_source, sd_idx, &buf, &sz, err, sizeof(err))) {
                 pico_video_backend_resume_after_flash();
+                printf("[flash_fs] FAILED: %s\n", err);
                 set_error("load ROM %u failed: %s", (unsigned)fi, err);
                 return false;
             }
@@ -365,6 +410,7 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
             sd_source->free_buf(sd_source, buf);
         }
 
+        printf("[flash_fs] [%u/%u] done\n", (unsigned)(fi + 1), (unsigned)hdr.rom_count);
         ++progress_done;
         report_progress(progress_done, progress_total);
     }
@@ -372,6 +418,7 @@ bool rom_source_flash_fs_copy_from(RomSource *self, RomSource *sd_source) {
     pico_video_backend_resume_after_flash();
 
     load_directory();
+    printf("[flash_fs] copy complete, %zu ROMs now in flash\n", s_state.count);
     set_error("");
     return true;
 }

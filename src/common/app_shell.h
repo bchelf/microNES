@@ -13,11 +13,13 @@ typedef enum {
     APP_SHELL_STATE_MENU = 0,
     APP_SHELL_STATE_RUNNING,
     APP_SHELL_STATE_IMPORT,
+    APP_SHELL_STATE_CONFIRM_ERASE,
 } AppShellState;
 
 typedef bool (*AppShellImportFn)(RomSource *flash_source,
                                 RomSource *sd_source,
                                 void *user);
+typedef bool (*AppShellEraseFn)(RomSource *flash_source, void *user);
 
 typedef struct {
     AppShellState state;
@@ -44,6 +46,8 @@ typedef struct {
 
     AppShellImportFn import_fn;
     void            *import_fn_user;
+    AppShellEraseFn  erase_fn;
+    void            *erase_fn_user;
 
     /* Transient text shown above the menu footer (e.g. error from a load
      * attempt).  Cleared on the next selection change. */
@@ -66,6 +70,10 @@ void app_shell_set_import(AppShell *shell,
                           RomSource *import_source,
                           AppShellImportFn import_fn,
                           void *import_fn_user);
+
+void app_shell_set_erase(AppShell *shell,
+                         AppShellEraseFn erase_fn,
+                         void *erase_fn_user);
 
 /* Tear down the shell, freeing any in-flight ROM buffer.  Does not destroy
  * the NES (caller owns it). */
