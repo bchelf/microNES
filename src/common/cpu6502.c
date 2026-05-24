@@ -354,6 +354,42 @@ static inline void cpu_rra(Cpu6502 *cpu, Nes *nes, uint16_t addr) {
     cpu_adc(cpu, m);
 }
 
+/* ANC: A &= imm, C = bit 7 of result. */
+static inline void cpu_anc(Cpu6502 *cpu, uint8_t value) {
+    cpu->a &= value;
+    cpu_set_zn(cpu, cpu->a);
+    if (cpu->a & 0x80u) cpu->p |= CPU6502_FLAG_C;
+    else cpu->p &= (uint8_t)~CPU6502_FLAG_C;
+}
+
+/* ALR: A = (A & imm) >> 1. */
+static inline void cpu_alr(Cpu6502 *cpu, uint8_t value) {
+    cpu->a &= value;
+    cpu->a = cpu_lsr_value(cpu, cpu->a);
+}
+
+/* ARR: A = (A & imm), then ROR with funky flag behavior. */
+static inline void cpu_arr(Cpu6502 *cpu, uint8_t value) {
+    cpu->a &= value;
+    cpu->a = cpu_ror_value(cpu, cpu->a);
+    uint8_t b6 = (cpu->a >> 6) & 1u;
+    uint8_t b5 = (cpu->a >> 5) & 1u;
+    if (b6) cpu->p |= CPU6502_FLAG_C;
+    else cpu->p &= (uint8_t)~CPU6502_FLAG_C;
+    if (b6 ^ b5) cpu->p |= CPU6502_FLAG_V;
+    else cpu->p &= (uint8_t)~CPU6502_FLAG_V;
+}
+
+/* AXS/SBX: X = (A & X) - imm. Sets C like CMP (C=1 when no borrow). */
+static inline void cpu_axs(Cpu6502 *cpu, uint8_t value) {
+    uint8_t ax = (uint8_t)(cpu->a & cpu->x);
+    uint16_t tmp = (uint16_t)ax - value;
+    cpu->x = (uint8_t)tmp;
+    if (ax >= value) cpu->p |= CPU6502_FLAG_C;
+    else cpu->p &= (uint8_t)~CPU6502_FLAG_C;
+    cpu_set_zn(cpu, cpu->x);
+}
+
 static void cpu_service_interrupt(Cpu6502 *cpu, Nes *nes, uint16_t vector, bool set_break_flag) {
 #if MICRONES_ENABLE_STEP_PROFILING
     uint64_t cpu_started_us = nes_profile_now_us(nes);
@@ -1310,6 +1346,24 @@ bool MICRONES_HOT_FUNC(cpu6502_step)(Cpu6502 *cpu, Nes *nes) {
     case 0xb3: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_indy(cpu, nes, &page_crossed))); cycles = page_crossed ? 6 : 5; break;
     case 0xb7: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_zpy(cpu, nes)));            cycles = 4; break;
     case 0xbf: cpu_lax(cpu, cpu_read(cpu, nes, cpu_addr_absy(cpu, nes, &page_crossed))); cycles = page_crossed ? 5 : 4; break;
+
+    /* ANC: A &= imm, C = N */
+    case 0x0b: case 0x2b: cpu_anc(cpu, cpu_fetch8(cpu, nes)); cycles = 2; break;
+
+    /* ALR: A = (A & imm) >> 1 */
+    case 0x4b: cpu_alr(cpu, cpu_fetch8(cpu, nes)); cycles = 2; break;
+
+    /* ARR: A = (A & imm) ROR */
+    case 0x6b: cpu_arr(cpu, cpu_fetch8(cpu, nes)); cycles = 2; break;
+
+    /* AXS/SBX: X = (A & X) - imm */
+    case 0xcb: cpu_axs(cpu, cpu_fetch8(cpu, nes)); cycles = 2; break;
+
+    /* USBC: same as SBC #imm */
+    case 0xeb: cpu_sbc(cpu, cpu_fetch8(cpu, nes)); cycles = 2; break;
+
+    /* LAX #imm: unstable, but A = X = (A | 0xEE) & imm is a common model */
+    case 0xab: cpu_lax(cpu, cpu_fetch8(cpu, nes)); cycles = 2; break;
 
     /* DCP: DEC mem, CMP A */
     case 0xc3: cpu_dcp(cpu, nes, cpu_addr_indx(cpu, nes));           cycles = 8; break;
