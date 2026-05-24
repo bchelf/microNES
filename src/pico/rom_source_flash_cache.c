@@ -219,18 +219,17 @@ static bool cached_load(RomSource *self, size_t index,
     }
     streamed_size = 0;
 
-    printf("[flash] cache MISS, erasing %u sectors, programming %u pages\n",
-           (unsigned)(erase_size / FLASH_SECTOR_SIZE),
-           (unsigned)(align_up_u32((uint32_t)rom_size, FLASH_PAGE_SIZE) / FLASH_PAGE_SIZE));
-
-    pico_video_backend_suspend_for_flash();
-
     uint32_t total_sectors = erase_size / FLASH_SECTOR_SIZE;
     uint32_t total_pages = align_up_u32((uint32_t)rom_size, FLASH_PAGE_SIZE) / FLASH_PAGE_SIZE;
     size_t progress_total = (size_t)total_sectors + (size_t)total_pages;
     size_t progress_done = 0;
 
+    printf("[flash] cache MISS, erasing %u sectors, programming %u pages\n",
+           (unsigned)total_sectors, (unsigned)total_pages);
+
     report_progress(0, progress_total);
+
+    pico_video_backend_suspend_for_flash();
 
     uint64_t erase_start_us = time_us_64();
     for (uint32_t off = 0; off < erase_size; off += FLASH_SECTOR_SIZE) {
