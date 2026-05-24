@@ -9,7 +9,7 @@
 #include "pico_video_backend.h"
 #include "pico_input.h"
 #include "pico_status.h"
-#include "rom_source_flash_cache.h"
+#include "rom_source_flash_fs.h"
 #include "rom_source.h"
 #include "rom_source_sd.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
@@ -20,18 +20,44 @@
 
 #include <stdio.h>
 
-#if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE && defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
+#if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
 #include "rom_menu.h"
 typedef struct {
     PicoEmulatorVideoAdapter *adapter;
     NesFrameBuffer *fb;
+    bool video_suspended;
 } FlashProgressCtx;
 
 static void flash_progress_cb(size_t done, size_t total, void *user) {
     FlashProgressCtx *ctx = (FlashProgressCtx *)user;
+    if (ctx->video_suspended) return;
     int pct = (total > 0) ? (int)((done * 100u) / total) : 0;
-    rom_menu_render_loading(ctx->fb, NULL, pct);
+    rom_menu_render_loading(ctx->fb, "SD -> Flash", pct);
     emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
+}
+
+static void flash_pre_flash_cb(void *user) {
+    FlashProgressCtx *ctx = (FlashProgressCtx *)user;
+    rom_menu_render_loading(ctx->fb, "This may take 2-3 min", 0);
+    for (int i = 0; i < 180; ++i) {
+        emulator_video_adapter_present_framebuffer(ctx->adapter, ctx->fb);
+        sleep_ms(17);
+    }
+    ctx->video_suspended = true;
+}
+
+static FlashProgressCtx *s_progress_ctx_ptr;
+
+static bool import_fn(RomSource *flash_source, RomSource *sd_source, void *user) {
+    (void)user;
+    bool ok = rom_source_flash_fs_copy_from(flash_source, sd_source);
+    if (s_progress_ctx_ptr) s_progress_ctx_ptr->video_suspended = false;
+    return ok;
+}
+
+static bool erase_fn(RomSource *flash_source, void *user) {
+    (void)user;
+    return rom_source_flash_fs_erase(flash_source);
 }
 #endif
 
@@ -127,32 +153,39 @@ int main(void) {
     /* Bring up the adapter with no cart loaded — the ROM picker (AppShell)
      * will load cartridges on demand from the SD card. */
     if (emulator_video_adapter_init_empty(&emulator_video)) {
-        /* Initialize the SD-card-backed ROM source.  If the card is missing
-         * or the volume can't be mounted, the menu still runs and shows
-         * "No ROMs found" until the user inserts a card and we can refresh. */
-        if (rom_source_sd_init(&sd_rom_source)) {
+        /* Initialize the flash-filesystem-backed ROM source.  The flash
+         * FS stores ROMs permanently in the 12 MB flash region after
+         * firmware.  If no ROMs are in flash yet, the shell enters
+         * import mode and lets the user copy from SD card. */
 #if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
-            if (!rom_source_flash_cache_init(&rom_source, &sd_rom_source)) {
-                rom_source = sd_rom_source;
-            } else {
-#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
-                static FlashProgressCtx s_progress_ctx;
-                s_progress_ctx.adapter = &emulator_video;
-                s_progress_ctx.fb = &shell.menu_fb;
-                rom_source_flash_cache_set_progress(flash_progress_cb, &s_progress_ctx);
-#endif
-            }
-#else
-            rom_source = sd_rom_source;
-#endif
-        } else {
-            /* Fallback: empty source so the menu renders the "no ROMs"
-             * screen.  Hot-insert support would re-init the SD source on
-             * an explicit user trigger; not implemented here. */
+        if (!rom_source_flash_fs_init(&rom_source)) {
             rom_source_make_empty(&rom_source);
         }
+#else
+        rom_source_make_empty(&rom_source);
+#endif
+
+        bool sd_ok = rom_source_sd_init(&sd_rom_source);
 
         app_shell_init(&shell, &rom_source, &emulator_video.nes);
+
+#if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
+        {
+            static FlashProgressCtx s_progress_ctx;
+            s_progress_ctx.adapter = &emulator_video;
+            s_progress_ctx.fb = &shell.menu_fb;
+            s_progress_ctx.video_suspended = false;
+            s_progress_ctx_ptr = &s_progress_ctx;
+            rom_source_flash_fs_set_progress(flash_progress_cb, &s_progress_ctx);
+            rom_source_flash_fs_set_pre_flash(flash_pre_flash_cb, &s_progress_ctx);
+            app_shell_set_erase(&shell, erase_fn, NULL);
+            if (sd_ok) {
+                app_shell_set_import(&shell, &sd_rom_source, import_fn, NULL);
+            }
+        }
+#else
+        (void)sd_ok;
+#endif
 
 #if !defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
         pico_video_backend_start_emulator();

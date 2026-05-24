@@ -12,11 +12,19 @@
 typedef enum {
     APP_SHELL_STATE_MENU = 0,
     APP_SHELL_STATE_RUNNING,
+    APP_SHELL_STATE_IMPORT,
+    APP_SHELL_STATE_CONFIRM_ERASE,
 } AppShellState;
+
+typedef bool (*AppShellImportFn)(RomSource *flash_source,
+                                RomSource *sd_source,
+                                void *user);
+typedef bool (*AppShellEraseFn)(RomSource *flash_source, void *user);
 
 typedef struct {
     AppShellState state;
     RomSource    *source;
+    RomSource    *import_source;
     Nes          *nes;
     RomMenu       menu;
     NesFrameBuffer menu_fb;
@@ -36,6 +44,11 @@ typedef struct {
     uint8_t      *current_rom_buf;
     size_t        current_rom_size;
 
+    AppShellImportFn import_fn;
+    void            *import_fn_user;
+    AppShellEraseFn  erase_fn;
+    void            *erase_fn_user;
+
     /* Transient text shown above the menu footer (e.g. error from a load
      * attempt).  Cleared on the next selection change. */
     char          status[160];
@@ -43,8 +56,24 @@ typedef struct {
 
 /* Initialize the shell.  source must outlive the shell.  nes must be a
  * fully-initialized Nes that the shell will manage (load/reset/destroy as
- * the user picks ROMs).  Calls source->refresh() if non-NULL. */
+ * the user picks ROMs).  Calls source->refresh() if non-NULL.
+ *
+ * import_source (may be NULL) is an SD-card source used when the primary
+ * source has zero entries — the shell enters import mode, showing the SD
+ * card contents greyed out and offering to copy them into flash.
+ *
+ * import_fn (may be NULL) is called when the user triggers the import.
+ * It receives the primary source, import_source, and import_fn_user.  */
 void app_shell_init(AppShell *shell, RomSource *source, Nes *nes);
+
+void app_shell_set_import(AppShell *shell,
+                          RomSource *import_source,
+                          AppShellImportFn import_fn,
+                          void *import_fn_user);
+
+void app_shell_set_erase(AppShell *shell,
+                         AppShellEraseFn erase_fn,
+                         void *erase_fn_user);
 
 /* Tear down the shell, freeing any in-flight ROM buffer.  Does not destroy
  * the NES (caller owns it). */
