@@ -3,20 +3,22 @@
 /*
  * Mapper 40: pirate FDS-to-cartridge SMB2J board.
  *
- * PRG layout (128 KB / 8 x 16 KB):
- *   $6000-$7FFF: switchable 8 KB bank (from the 8 KB sub-banks)
- *   $8000-$9FFF: fixed to PRG bank 6 (8 KB at prg_rom + 0xC000)
- *   $A000-$BFFF: fixed to PRG bank 7 (8 KB at prg_rom + 0xE000)
- *   $C000-$DFFF: fixed to PRG bank ~4 typically
- *   $E000-$FFFF: fixed to PRG bank 9 / last (vectors)
- *
- * Simplified: fixed 32K at $8000-$FFFF = banks 4-7 of PRG.
- * Switchable 8K at $6000-$7FFF selected by writes to $8000-$FFFF.
+ * PRG layout (8 x 8 KB banks):
+ *   $6000-$7FFF: switchable 8 KB (default bank 0)
+ *   $8000-$9FFF: fixed bank 4
+ *   $A000-$BFFF: fixed bank 5
+ *   $C000-$DFFF: fixed bank 6
+ *   $E000-$FFFF: fixed bank 7 (vectors)
  *
  * CHR: 8 KB, not banked.
  *
- * IRQ: cycle-count timer. Writing $A000-$BFFF disables and resets.
- *      Writing $C000-$DFFF enables. Fires after 4096 M2 cycles.
+ * Registers (accent on $E000 range for writes):
+ *   $8000: IRQ disable, acknowledge, counter reset
+ *   $A000: IRQ enable (counter starts from 0)
+ *   $C000: ignored
+ *   $E000: bank select (bits 0-2 -> $6000 window)
+ *
+ * IRQ: 12-bit counter increments each CPU cycle; fires at 4096.
  */
 
 enum {
@@ -28,15 +30,12 @@ void mapper40_cart_init(NesCartridge *cart) {
     cart->m40_irq_counter = 0;
     cart->irq_pending = false;
 
-    /* $6000-$7FFF: switchable, default to bank 6 (offset 0xC000) */
-    cart->m40_prg_6000 = cart->prg_rom + 6u * 0x2000u;
+    cart->m40_prg_6000 = cart->prg_rom;
 
-    /* $8000-$FFFF: fixed. Banks 4,5,0,7 mapped to $8000-$FFFF. */
     cart->prg_banks_8k[0] = cart->prg_rom + 4u * 0x2000u;
     cart->prg_banks_8k[1] = cart->prg_rom + 5u * 0x2000u;
-    cart->prg_banks_8k[2] = cart->prg_rom + 0u * 0x2000u;
-    size_t last_8k = cart->prg_rom_size - 0x2000u;
-    cart->prg_banks_8k[3] = cart->prg_rom + last_8k;
+    cart->prg_banks_8k[2] = cart->prg_rom + 6u * 0x2000u;
+    cart->prg_banks_8k[3] = cart->prg_rom + 7u * 0x2000u;
 
     cart->prg_bank_lo = cart->prg_banks_8k[0];
     cart->prg_bank_hi = cart->prg_banks_8k[2];
