@@ -18,6 +18,7 @@ typedef enum {
     ROM_MENU_RESULT_NONE = 0,
     ROM_MENU_RESULT_LAUNCH,         /* user picked a supported entry */
     ROM_MENU_RESULT_LAUNCH_BLOCKED, /* user picked an unsupported entry */
+    ROM_MENU_RESULT_IMPORT,         /* user triggered SD-to-flash import */
 } RomMenuResult;
 
 void rom_menu_init(RomMenu *menu);
@@ -38,6 +39,18 @@ void rom_menu_render(const RomMenu *menu,
                      RomSource *source,
                      NesFrameBuffer *fb,
                      const char *status);
+
+/* Render the import-mode menu: a "Copy SD Card to Flash" action followed by
+ * greyed-out entries from import_source.  Pressing Start/A returns
+ * ROM_MENU_RESULT_IMPORT from rom_menu_step_import. */
+RomMenuResult rom_menu_step_import(RomMenu *menu,
+                                   RomSource *import_source,
+                                   uint8_t prev_buttons,
+                                   uint8_t curr_buttons);
+void rom_menu_render_import(const RomMenu *menu,
+                            RomSource *import_source,
+                            NesFrameBuffer *fb,
+                            const char *status);
 
 /* Draw a modal loading-bar overlay on top of the current framebuffer.
  * pct is 0-100.  name (may be NULL) is displayed above the bar. */

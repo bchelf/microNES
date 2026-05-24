@@ -106,6 +106,26 @@ static bool shell_launch(AppShell *shell, int index) {
     return true;
 }
 
+static void shell_decide_state(AppShell *shell) {
+    if (shell->source != NULL && shell->source->count(shell->source) > 0) {
+        shell->state = APP_SHELL_STATE_MENU;
+    } else if (shell->import_source != NULL && shell->import_fn != NULL) {
+        shell->state = APP_SHELL_STATE_IMPORT;
+    } else {
+        shell->state = APP_SHELL_STATE_MENU;
+    }
+}
+
+static void shell_render_current(AppShell *shell) {
+    if (shell->state == APP_SHELL_STATE_IMPORT) {
+        rom_menu_render_import(&shell->menu, shell->import_source,
+                               &shell->menu_fb, shell->status);
+    } else {
+        rom_menu_render(&shell->menu, shell->source,
+                        &shell->menu_fb, shell->status);
+    }
+}
+
 void app_shell_init(AppShell *shell, RomSource *source, Nes *nes) {
     if (shell == NULL) {
         return;
@@ -114,20 +134,25 @@ void app_shell_init(AppShell *shell, RomSource *source, Nes *nes) {
     shell->source = source;
     shell->nes = nes;
     shell->running_index = -1;
-    shell->state = APP_SHELL_STATE_MENU;
-    /* Treat the very first controller read as already-pressed for every
-     * button, so no spurious "press event" fires before the user has
-     * touched anything.  Without this, a flaky controller bus that
-     * reads 0xFF (all-pressed) on first poll — which is exactly what
-     * we see at boot when the 4021 hasn't fully stabilised — would
-     * edge-trigger Start and instant-launch the first ROM. */
     shell->prev_buttons = 0xFFu;
     rom_menu_init(&shell->menu);
     if (source != NULL && source->refresh != NULL) {
         source->refresh(source);
     }
-    /* Pre-render so the first present has content. */
-    rom_menu_render(&shell->menu, shell->source, &shell->menu_fb, shell->status);
+    shell_decide_state(shell);
+    shell_render_current(shell);
+}
+
+void app_shell_set_import(AppShell *shell,
+                          RomSource *import_source,
+                          AppShellImportFn import_fn,
+                          void *import_fn_user) {
+    if (shell == NULL) return;
+    shell->import_source  = import_source;
+    shell->import_fn      = import_fn;
+    shell->import_fn_user = import_fn_user;
+    shell_decide_state(shell);
+    shell_render_current(shell);
 }
 
 void app_shell_destroy(AppShell *shell) {
@@ -140,7 +165,8 @@ void app_shell_destroy(AppShell *shell) {
 }
 
 bool app_shell_in_menu(const AppShell *shell) {
-    return shell != NULL && shell->state == APP_SHELL_STATE_MENU;
+    return shell != NULL && (shell->state == APP_SHELL_STATE_MENU ||
+                             shell->state == APP_SHELL_STATE_IMPORT);
 }
 
 const NesFrameBuffer *app_shell_menu_framebuffer(const AppShell *shell) {
@@ -152,13 +178,14 @@ const char *app_shell_status(const AppShell *shell) {
 }
 
 void app_shell_request_menu(AppShell *shell) {
-    if (shell == NULL || shell->state == APP_SHELL_STATE_MENU) {
+    if (shell == NULL || shell->state == APP_SHELL_STATE_MENU ||
+        shell->state == APP_SHELL_STATE_IMPORT) {
         return;
     }
     shell_unload_running(shell);
-    shell->state = APP_SHELL_STATE_MENU;
     shell->exit_combo_latched = false;
-    rom_menu_render(&shell->menu, shell->source, &shell->menu_fb, shell->status);
+    shell_decide_state(shell);
+    shell_render_current(shell);
 }
 
 void app_shell_request_reset(AppShell *shell) {
@@ -173,7 +200,7 @@ void app_shell_render_menu(AppShell *shell) {
     if (shell == NULL) {
         return;
     }
-    rom_menu_render(&shell->menu, shell->source, &shell->menu_fb, shell->status);
+    shell_render_current(shell);
 }
 
 AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
@@ -189,6 +216,28 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
 
     uint8_t prev = shell->prev_buttons;
     uint8_t curr = input.buttons;
+
+    if (shell->state == APP_SHELL_STATE_IMPORT) {
+        RomMenuResult r = rom_menu_step_import(&shell->menu,
+                                               shell->import_source,
+                                               prev, curr);
+        if (r == ROM_MENU_RESULT_IMPORT && shell->import_fn != NULL) {
+            bool ok = shell->import_fn(shell->source, shell->import_source,
+                                       shell->import_fn_user);
+            if (ok) {
+                if (shell->source != NULL && shell->source->refresh != NULL)
+                    shell->source->refresh(shell->source);
+                shell_set_status(shell, "");
+                rom_menu_init(&shell->menu);
+                shell_decide_state(shell);
+            } else {
+                shell_set_status(shell, "Copy failed");
+            }
+        }
+        shell_render_current(shell);
+        shell->prev_buttons = curr;
+        return out;
+    }
 
     if (shell->state == APP_SHELL_STATE_MENU) {
         int chosen = -1;
@@ -238,9 +287,9 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
     } else if (combo_now && !combo_prev) {
         /* Edge-trigger the exit. */
         shell_unload_running(shell);
-        shell->state = APP_SHELL_STATE_MENU;
         shell_set_status(shell, "");
-        rom_menu_render(&shell->menu, shell->source, &shell->menu_fb, shell->status);
+        shell_decide_state(shell);
+        shell_render_current(shell);
         out.just_entered_menu = true;
         out.stepping_nes = false;
         NesControllerState forwarded = { 0 };

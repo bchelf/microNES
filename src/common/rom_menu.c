@@ -359,6 +359,88 @@ void rom_menu_render(const RomMenu *menu,
     draw_centered_text(fb, MENU_FOOTER_Y, footer, MENU_TEXT_FAINT);
 }
 
+RomMenuResult rom_menu_step_import(RomMenu *menu,
+                                   RomSource *import_source,
+                                   uint8_t prev_buttons,
+                                   uint8_t curr_buttons) {
+    if (menu == NULL) return ROM_MENU_RESULT_NONE;
+
+    uint8_t pressed = (uint8_t)(~prev_buttons & curr_buttons);
+
+    int n = import_source != NULL ? (int)import_source->count(import_source) : 0;
+    if (n <= 0) {
+        menu->selected = 0;
+        menu->top = 0;
+        return ROM_MENU_RESULT_NONE;
+    }
+
+    if ((pressed & (NES_BUTTON_START | NES_BUTTON_A)) != 0u) {
+        return ROM_MENU_RESULT_IMPORT;
+    }
+
+    return ROM_MENU_RESULT_NONE;
+}
+
+void rom_menu_render_import(const RomMenu *menu,
+                            RomSource *import_source,
+                            NesFrameBuffer *fb,
+                            const char *status) {
+    if (fb == NULL) return;
+    (void)menu;
+
+    clear_fb(fb, MENU_BG);
+
+    fill_rect(fb, MENU_SAFE_LEFT, MENU_HEADER_TOP_Y,
+              MENU_SAFE_WIDTH, MENU_HEADER_H, MENU_BAR);
+    font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, MENU_HEADER_TOP_Y + 4,
+                      "microNES", MENU_TEXT);
+
+    int n = import_source != NULL ? (int)import_source->count(import_source) : 0;
+
+    if (n <= 0) {
+        int empty_y = MENU_LIST_TOP_Y + 70;
+        draw_centered_text(fb, empty_y, "No SD card or no ROMs found.", MENU_TEXT);
+        draw_centered_text(fb, empty_y + 12,
+                           "Insert an SD card with .nes files.",
+                           MENU_TEXT_FAINT);
+        return;
+    }
+
+    {
+        const char *action = "> Copy SD Card to Flash";
+        int aw = font5x7_text_width(action);
+        int ax = MENU_SAFE_LEFT + (MENU_SAFE_WIDTH - aw) / 2;
+        if (ax < MENU_SAFE_LEFT) ax = MENU_SAFE_LEFT;
+        fill_rect(fb, MENU_SAFE_LEFT, MENU_COL_HDR_Y,
+                  MENU_SAFE_WIDTH, 10, MENU_BAR);
+        font5x7_draw_text(fb, ax, MENU_COL_HDR_Y + 1, action, MENU_TEXT);
+    }
+
+    int list_y = MENU_LIST_TOP_Y;
+    int rows_to_draw = n;
+    if (rows_to_draw > MENU_VISIBLE_ROWS) rows_to_draw = MENU_VISIBLE_ROWS;
+
+    for (int row = 0; row < rows_to_draw; ++row) {
+        const RomSourceEntry *e = import_source->entry(import_source, (size_t)row);
+        int y = list_y + row * MENU_ITEM_H;
+        const char *name = e != NULL ? e->name : "";
+        char trim[ROM_SOURCE_NAME_MAX];
+        snprintf(trim, sizeof(trim), "%s", name);
+        int max_chars = (MENU_SAFE_WIDTH - 8) / FONT5X7_CELL_W;
+        if (max_chars < 1) max_chars = 1;
+        if ((int)strlen(trim) > max_chars) trim[max_chars] = '\0';
+        font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, y + 1, trim, MENU_TEXT_DIM);
+    }
+
+    if (status != NULL && status[0] != '\0') {
+        draw_centered_text(fb, MENU_STATUS_Y, status, MENU_TEXT_ERROR);
+    }
+
+    draw_centered_text(fb, MENU_FOOTER_Y,
+                       "Press Start/A to copy ROMs to flash",
+                       MENU_TEXT_FAINT);
+}
+
 void rom_menu_render_loading(NesFrameBuffer *fb, const char *name, int pct) {
     if (fb == NULL) {
         return;

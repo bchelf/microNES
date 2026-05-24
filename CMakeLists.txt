@@ -138,6 +138,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         src/pico/pico_status.c
         src/pico/pico_time.c
         src/pico/rom_source_flash_cache.c
+        src/pico/rom_source_flash_fs.c
         src/pico/rom_source_sd.c
         src/pico/sd_spi.c
     )
