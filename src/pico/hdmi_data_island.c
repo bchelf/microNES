@@ -180,13 +180,15 @@ void hdmi_pkt_make_general_control(HdmiPacket *pkt,
                                    int avmute_set, int avmute_clear) {
     memset(pkt, 0, sizeof(*pkt));
     pkt->header[0] = HDMI_PKT_TYPE_GENERAL_CONTROL;
-    /* HB1, HB2 = 0. */
-    /* SB0: bit 0 = SET_AVMUTE, bit 4 = CLEAR_AVMUTE. */
-    pkt->subpackets[0][0] = (uint8_t)((avmute_set ? 0x01u : 0u) |
-                                      (avmute_clear ? 0x10u : 0u));
-    /* SB1: packing phase = 0 (default 8-bit color depth). */
-    pkt->subpackets[0][1] = 0x00u;
-    /* Remaining subpacket bytes are zero. */
+
+    uint8_t sb0 = (uint8_t)((avmute_set ? 0x01u : 0u) |
+                             (avmute_clear ? 0x10u : 0u));
+    uint8_t sb1 = 0x04u; /* CD=4 → 24 bits per pixel (8 bpc) */
+
+    for (uint32_t s = 0u; s < 4u; ++s) {
+        pkt->subpackets[s][0] = sb0;
+        pkt->subpackets[s][1] = sb1;
+    }
 }
 
 void hdmi_pkt_make_acr(HdmiPacket *pkt, uint32_t n_value, uint32_t cts_value) {
