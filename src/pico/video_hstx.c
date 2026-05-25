@@ -214,6 +214,10 @@ static uint32_t s_v_scanline = 2u;
 static bool s_vactive_cmdlist_posted;
 static bool s_started;
 static bool s_irq_configured;
+
+static uint32_t s_diag_sys_hz;
+static uint32_t s_diag_hstx_hz;
+static uint32_t s_diag_pixel_hz;
 static bool s_borders_dirty;
 static VideoHstxStats s_stats;
 static char s_last_error[64];
@@ -544,11 +548,10 @@ bool video_hstx_init(void) {
 
     hstx_configure_peripheral();
 
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u\n",
-           (unsigned long)clock_get_hz(clk_sys),
-           (unsigned long)clock_get_hz(clk_hstx),
-           (unsigned long)(clock_get_hz(clk_hstx) / 5u),
-           (unsigned)HDMI_AUDIO_CTS_VALUE);
+    /* Save clock info for periodic diagnostic (USB may not be ready at boot). */
+    s_diag_sys_hz = clock_get_hz(clk_sys);
+    s_diag_hstx_hz = clock_get_hz(clk_hstx);
+    s_diag_pixel_hz = s_diag_hstx_hz / 5u;
 
     for (uint32_t gpio = 12u; gpio <= 19u; ++gpio) {
         gpio_set_function(gpio, GPIO_FUNC_HSTX);
@@ -678,6 +681,23 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
     *stats_out = s_stats;
     stats_out->scanline = s_v_scanline;
     stats_out->started = s_started;
+}
+
+void video_hstx_print_diag(void) {
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u pcm_level=%lu underruns=%lu overruns=%lu\n",
+           (unsigned long)s_diag_sys_hz,
+           (unsigned long)s_diag_hstx_hz,
+           (unsigned long)s_diag_pixel_hz,
+           (unsigned)HDMI_AUDIO_CTS_VALUE,
+           (unsigned)HDMI_AUDIO_N_VALUE,
+#if MICRONES_HDMI_DATA_ISLANDS
+           (unsigned long)video_hstx_hdmi_audio_buffer_level(),
+           (unsigned long)video_hstx_hdmi_audio_underruns(),
+           (unsigned long)video_hstx_hdmi_audio_overruns()
+#else
+           0UL, 0UL, 0UL
+#endif
+    );
 }
 
 /* --- HDMI audio backend entry points ----------------------------------- */

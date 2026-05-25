@@ -7,6 +7,7 @@
 #include "pico_audio_backend.h"
 #include "pico_time.h"
 #include "pico_video_backend.h"
+#include "video_hstx.h"
 #include "pico_input.h"
 #include "pico_status.h"
 #include "rom_source_flash_fs.h"
@@ -197,8 +198,15 @@ int main(void) {
 #endif
 
         bool reset_button_was_down = pico_status_reset_button_down();
+        uint64_t next_diag_us = time_us_64() + 5000000ull;
 
         while (true) {
+#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
+            if (time_us_64() >= next_diag_us) {
+                video_hstx_print_diag();
+                next_diag_us = time_us_64() + 5000000ull;
+            }
+#endif
             /* Pace emulation to the NTSC NES frame cadence (~16.639 ms,
              * 60.10 Hz) so wall-clock audio production stays aligned with the
              * 48 kHz backend. On the TFT path, capture the next frame
