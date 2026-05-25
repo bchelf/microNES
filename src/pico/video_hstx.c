@@ -162,6 +162,9 @@ static uint32_t s_vblank_line_vsync_on[] = {
 #ifndef MICRONES_HDMI_AUDIO_PACKETS
 #define MICRONES_HDMI_AUDIO_PACKETS 1
 #endif
+#ifndef MICRONES_HDMI_TEST_TONE
+#define MICRONES_HDMI_TEST_TONE 0
+#endif
 
 #if MICRONES_HDMI_VIDEO_PREAMBLE
 static uint32_t s_vactive_line[] = {
@@ -217,6 +220,7 @@ static int16_t s_hdmi_pcm_ring[HDMI_PCM_RING_FRAMES * 2u];
 static volatile uint32_t s_hdmi_pcm_head;  /* producer index, in stereo frames */
 static volatile uint32_t s_hdmi_pcm_tail;  /* consumer index */
 static uint32_t s_hdmi_audio_frame_no;     /* IEC-60958 frame counter */
+static uint32_t s_hdmi_test_tone_phase;
 static volatile uint32_t s_hdmi_audio_underruns;
 static volatile uint32_t s_hdmi_audio_overruns;
 
@@ -344,7 +348,18 @@ static void hdmi_refill_audio_islands(uint32_t buf_idx) {
         for (uint32_t p = 0u; p < HDMI_AUDIO_PACKETS_PER_LINE; ++p) {
             int16_t samples[8];
             uint32_t got;
+#if MICRONES_HDMI_TEST_TONE
+            const uint32_t tone_step = (uint32_t)((440ull << 32) / HDMI_AUDIO_SAMPLE_RATE_HZ);
+            for (uint32_t i = 0u; i < 4u; ++i) {
+                int16_t s = (s_hdmi_test_tone_phase & 0x80000000u) ? 12000 : -12000;
+                samples[i * 2u + 0u] = s;
+                samples[i * 2u + 1u] = s;
+                s_hdmi_test_tone_phase += tone_step;
+            }
+            got = 4u;
+#else
             hdmi_pull_stereo_samples(samples, 4u, &got);
+#endif
             hdmi_pkt_make_audio_sample(&packets[p], samples,
                                        4u, &s_hdmi_audio_frame_no);
         }
@@ -548,6 +563,7 @@ bool video_hstx_init(void) {
     s_hdmi_audio_refills = 0u;
     s_hdmi_audio_missed_swaps = 0u;
     s_hdmi_audio_frame_no = 0u;
+    s_hdmi_test_tone_phase = 0u;
     s_hdmi_pcm_head = 0u;
     s_hdmi_pcm_tail = 0u;
     s_hdmi_audio_underruns = 0u;
@@ -703,12 +719,13 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
 }
 
 void video_hstx_print_diag(void) {
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u pcm_level=%lu underruns=%lu overruns=%lu refills=%lu missed=%lu\n",
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u pcm_level=%lu underruns=%lu overruns=%lu refills=%lu missed=%lu\n",
            (unsigned long)s_diag_sys_hz,
            (unsigned long)s_diag_hstx_hz,
            (unsigned long)s_diag_pixel_hz,
            (unsigned)HDMI_AUDIO_CTS_VALUE,
            (unsigned)HDMI_AUDIO_N_VALUE,
+           (unsigned)MICRONES_HDMI_TEST_TONE,
 #if MICRONES_HDMI_DATA_ISLANDS
            (unsigned long)video_hstx_hdmi_audio_buffer_level(),
            (unsigned long)video_hstx_hdmi_audio_underruns(),
@@ -757,6 +774,7 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     s_hdmi_audio_refills = 0u;
     s_hdmi_audio_missed_swaps = 0u;
     s_hdmi_audio_frame_no = 0u;
+    s_hdmi_test_tone_phase = 0u;
     s_hdmi_audio_underruns = 0u;
     s_hdmi_audio_overruns = 0u;
 #endif
