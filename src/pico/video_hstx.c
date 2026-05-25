@@ -58,7 +58,7 @@ static int s_dmach_pong = -1;
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
 
 #define HSTX_INTERNAL_CLKDIV 5u
-#define HDMI_HSTX_CLOCK_HZ   125000000u
+#define HDMI_HSTX_CLOCK_HZ   157500000u
 #define HDMI_PIXEL_CLOCK_HZ  (HDMI_HSTX_CLOCK_HZ / HSTX_INTERNAL_CLKDIV)
 
 /* --- HDMI audio scheduler tunables ------------------------------------- */
@@ -74,7 +74,7 @@ static int s_dmach_pong = -1;
 
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
-#define HDMI_AUDIO_CTS_VALUE         25000u  /* for 25 MHz pixel clock */
+#define HDMI_AUDIO_CTS_VALUE         31500u  /* for 31.5 MHz pixel clock */
 
 #define HDMI_ONE_PACKET_ISLAND_WORDS \
     ((2u * HDMI_DI_GUARDBAND_PIXELS) + HDMI_PACKET_RAW_WORDS)
@@ -534,9 +534,9 @@ static void __scratch_x("") hstx_dma_irq(void) {
 }
 
 static void hstx_configure_peripheral(void) {
-    /* Control build: run the HDMI target at 250 MHz so clk_hstx is a clean
-     * integer clk_sys/2 = 125 MHz. HSTX CSR CLKDIV=5 gives a 25 MHz pixel
-     * clock without borrowing pll_usb. */
+    /* Run HSTX from clk_sys/2 at 315 MHz. That gives a clean 157.5 MHz
+     * clk_hstx and, with HSTX CSR CLKDIV=5, a 31.5 MHz pixel clock without
+     * touching pll_usb. */
     clock_configure(clk_hstx, 0,
                     CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
                     clock_get_hz(clk_sys), HDMI_HSTX_CLOCK_HZ);

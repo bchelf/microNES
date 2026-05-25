@@ -465,14 +465,15 @@ backend so existing diag printouts in `main.c` work unchanged:
 - BCH poly (0xAB vs 0x83): if AVI InfoFrame doesn't take, flip the
   constant. Host test prints the computed ECC so it can be compared
   against an external trace.
-- Control build pixel clock is 25 MHz: clk_sys=250 MHz,
-  clk_hstx=125 MHz (integer /2 divider), HSTX CLKDIV=5. This avoids the
-  fractional clk_hstx jitter that corrupts TERC4 data islands, at the
-  cost of underclocking the emulator below full-speed.
+- Current HDMI test build pixel clock is 31.5 MHz: clk_sys=315 MHz,
+  clk_hstx=157.5 MHz (integer /2 divider), HSTX CLKDIV=5, ACR CTS=31500.
+  This avoids fractional clk_hstx jitter while preserving full-speed emulator
+  clock and USB CDC debugging.
 - USB stdio stays enabled by default. HSTX no longer reconfigures or
   borrows pll_usb, so pll_usb remains available for CDC ACM debugging.
-- Sample-rate drift: HDMI consumes exactly 48,000 stereo frames/sec
-  (60 × 800). The NES APU production cadence is close but not identical;
+- Sample-rate drift: HDMI packet cadence is derived from the actual pixel
+  clock, so 31.5 MHz / 800 / 525 (~75 Hz) still consumes 48,000 stereo
+  frames/sec. The NES APU production cadence is close but not identical;
   small drift is handled by the circular-overwrite ring policy.
 
 ## ESP32-S3 Implementation Notes
