@@ -4,11 +4,7 @@
 /*
  * clock_config.h — single toggle for system clock speed.
  *
- * Set MICRONES_SYS_CLK_MHZ to 375, 315, 250, or 157.
- *
- *   375 MHz  — HDMI target.  VREG 1.20 V.  VCO=1500 MHz.
- *              HSTX: 375 / 3 = 125 MHz (clean integer divider, no jitter).
- *              Not usable for NTSC analog (375 doesn't divide to 14.318 MHz).
+ * Set MICRONES_SYS_CLK_MHZ to 315, 250, or 157.
  *
  *   315 MHz  — full speed analog target.  Requires VREG 1.20 V.
  *              NTSC: 315 MHz / 22 = 14.318182 MHz  ✓
@@ -89,33 +85,6 @@
 #  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  4u
 #  define MICRONES_AUDIO_PWM_WRAP         2624u
 
-#elif MICRONES_SYS_CLK_MHZ == 375
-
-/*
- * 375 MHz  —  PLL: VCO=1500 MHz, post_div1=4, post_div2=1
- *   sys_clk = 1500 / (4×1) = 375 MHz
- *   HSTX: CLKSRC_PLL_SYS / 3 = 125 MHz (clean integer divider).
- *   This eliminates the fractional-divider jitter that corrupts TERC4
- *   data island decoding when sourcing clk_hstx from 315/2.52.
- *   NOTE: 375 does not divide evenly into 14.318182 MHz; do NOT use
- *   for the analog (NTSC composite) target.
- */
-#  define MICRONES_PLL_VCO_HZ       1500000000u
-#  define MICRONES_PLL_DIV1         4u
-#  define MICRONES_PLL_DIV2         1u
-#  define MICRONES_VREG             VREG_VOLTAGE_1_20
-#  define MICRONES_VREG_SETTLE_MS   20u
-
-#  define MICRONES_PIO_CLKDIV       2.0f
-
-/*
- * Audio PWM sample-rate timer: clkdiv=1.25, wrap=6249
- * → f_sample = 375,000,000 / (1.25 × 6250) = 48,000 Hz
- */
-#  define MICRONES_AUDIO_PWM_CLKDIV_INT   1u
-#  define MICRONES_AUDIO_PWM_CLKDIV_FRAC  4u
-#  define MICRONES_AUDIO_PWM_WRAP         6249u
-
 #elif MICRONES_SYS_CLK_MHZ == 250
 
 /*
@@ -146,7 +115,7 @@
 #  define MICRONES_AUDIO_PWM_WRAP         5207u
 
 #else
-#  error "MICRONES_SYS_CLK_MHZ must be 375, 315, 250, or 157"
+#  error "MICRONES_SYS_CLK_MHZ must be 315, 250, or 157"
 #endif
 
 /*

@@ -25,14 +25,18 @@
 #define SYNC_V1_H0 (TMDS_CTRL_10 | (TMDS_CTRL_00 << 10) | (TMDS_CTRL_00 << 20))
 #define SYNC_V1_H1 (TMDS_CTRL_11 | (TMDS_CTRL_00 << 10) | (TMDS_CTRL_00 << 20))
 
+/* 640×480 @ 75 Hz VESA DMT timing.
+ * Pixel clock 31.5 MHz = clk_hstx(157.5 MHz) / CLKDIV(5).
+ * clk_hstx = clk_sys(315 MHz) / 2  — clean integer divider, no jitter.
+ * H total 840, V total 500 → 31,500,000 / (840 × 500) = 75.0 Hz. */
 #define MODE_H_FRONT_PORCH   16u
-#define MODE_H_SYNC_WIDTH    96u
-#define MODE_H_BACK_PORCH    48u
+#define MODE_H_SYNC_WIDTH    64u
+#define MODE_H_BACK_PORCH    120u
 #define MODE_H_ACTIVE_PIXELS 640u
 
-#define MODE_V_FRONT_PORCH   10u
-#define MODE_V_SYNC_WIDTH    2u
-#define MODE_V_BACK_PORCH    33u
+#define MODE_V_FRONT_PORCH   1u
+#define MODE_V_SYNC_WIDTH    3u
+#define MODE_V_BACK_PORCH    16u
 #define MODE_V_ACTIVE_LINES  480u
 
 #define MODE_V_TOTAL_LINES ( \
@@ -51,21 +55,20 @@ static int s_dmach_pong = -1;
 #define NES_SCALE 2u
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
-#define HSTX_PIXEL_CLOCK_HZ 125000000u
+#define HSTX_CLK_HZ 157500000u  /* 315 MHz / 2 — integer divider */
 
 /* --- HDMI audio scheduler tunables ------------------------------------- */
 
-/* 8 audio sample packets per data island × 25 lines = 200 packets/frame.
- * At 4 stereo samples per ASP, that's 800 frames/video-frame which matches
- * 48 kHz / 60 Hz exactly.
- */
-#define HDMI_AUDIO_PACKETS_PER_LINE 8u
-#define HDMI_AUDIO_LINES            25u
+/* 16 audio sample packets per data island × 10 lines = 160 packets/frame.
+ * At 4 stereo samples per ASP, that's 640 samples/video-frame which matches
+ * 48 kHz / 75 Hz exactly. */
+#define HDMI_AUDIO_PACKETS_PER_LINE 16u
+#define HDMI_AUDIO_LINES            10u
 /* The control island (AVI + Audio InfoFrame + GCP + ACR) goes on the FIRST
  * line of V_BP — most TVs sample InfoFrames within a few lines of VSYNC and
  * give up on the link if they don't see them early. Audio sample packets
- * follow on the next 25 lines. */
-#define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
+ * follow on the next 10 lines. */
+#define HDMI_CONTROL_VBI_LINE        4u   /* first V_BP line: V_FP(1)+V_SW(3) */
 #define HDMI_AUDIO_FIRST_VBI_LINE   (HDMI_CONTROL_VBI_LINE + 1u)
 #define HDMI_AUDIO_LAST_VBI_LINE    (HDMI_AUDIO_FIRST_VBI_LINE + HDMI_AUDIO_LINES - 1u)
 
@@ -73,7 +76,7 @@ static int s_dmach_pong = -1;
 
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
-#define HDMI_AUDIO_CTS_VALUE         25000u  /* for 25 MHz pixel clock */
+#define HDMI_AUDIO_CTS_VALUE         31500u  /* for 31.5 MHz pixel clock */
 
 /* Full island = preamble(8) + guard(2) + packets + guard(2), all in one RAW. */
 #define HDMI_AUDIO_ISLAND_WORDS \
@@ -206,6 +209,11 @@ static volatile uint32_t s_hdmi_pcm_tail;  /* consumer index */
 static uint32_t s_hdmi_audio_frame_no;     /* IEC-60958 frame counter */
 static volatile uint32_t s_hdmi_audio_underruns;
 static volatile uint32_t s_hdmi_audio_overruns;
+
+/* ISR sets this when a new display frame starts so the main loop can refill
+ * audio islands at the display refresh rate (75 Hz), independent of the NES
+ * emulator's ~60 fps present_frame cadence. */
+static volatile bool s_hdmi_audio_refill_needed;
 
 #endif /* MICRONES_HDMI_DATA_ISLANDS */
 
@@ -395,25 +403,21 @@ static void __scratch_x("") hstx_dma_irq(void) {
         s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
         if (s_v_scanline == 0u) {
             ++s_stats.frames_presented;
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+            s_hdmi_audio_refill_needed = true;
+#endif
         }
     }
 }
 
 static void hstx_configure_peripheral(void) {
     /* Source clk_hstx from pll_sys with an integer divider.
-     *
-     * At 375 MHz sys: 375 / 3 = 125 MHz exactly — zero fractional jitter.
-     * At 250 MHz sys: 250 / 2 = 125 MHz exactly.
-     *
-     * The previous 315 MHz approach needed 315/2.52 (fractional), which
-     * introduced bit-level jitter that corrupted TERC4 data island decoding.
-     * Alternatively, pll_usb was reconfigured to 125 MHz, which broke USB.
-     *
-     * Using CLKSRC_PLL_SYS keeps pll_usb at 48 MHz (USB works) and avoids
-     * any fractional division (audio works). */
+     * 315 / 2 = 157.5 MHz exactly — zero fractional jitter.
+     * Pixel clock = 157.5 / CLKDIV(5) = 31.5 MHz → 640×480@75Hz.
+     * pll_usb stays at 48 MHz (USB works). */
     clock_configure(clk_hstx, 0,
                     CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
-                    clock_get_hz(clk_sys), HSTX_PIXEL_CLOCK_HZ);
+                    clock_get_hz(clk_sys), HSTX_CLK_HZ);
 
     hstx_ctrl_hw->expand_tmds =
         2  << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB |
@@ -638,15 +642,6 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
         }
     }
 
-#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-    /* Refill the inactive audio data-island buffer and atomically swap.
-     * This happens once per NES frame, which is close to once per display
-     * frame; the receiver tolerates the small jitter via its audio FIFO. */
-    uint8_t back = s_hdmi_audio_active_buf ^ 1u;
-    hdmi_refill_audio_islands(back);
-    s_hdmi_audio_active_buf = back;
-#endif
-
     uint64_t elapsed = time_us_64() - start_us;
     s_stats.present_us_total += elapsed;
     if (elapsed > s_stats.present_us_max) {
@@ -711,13 +706,27 @@ void video_hstx_print_diag(void) {
 void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     (void)sample_rate;
 #if MICRONES_HDMI_DATA_ISLANDS
-    /* The data-island scheduler is fixed for 48 kHz; we ignore the requested
-     * rate and rely on the audio backend wrapper to declare 48 kHz. */
     s_hdmi_pcm_head = 0u;
     s_hdmi_pcm_tail = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_audio_underruns = 0u;
     s_hdmi_audio_overruns = 0u;
+    s_hdmi_audio_refill_needed = false;
+#endif
+}
+
+bool video_hstx_hdmi_audio_refill_if_needed(void) {
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+    if (!s_hdmi_audio_refill_needed) {
+        return false;
+    }
+    s_hdmi_audio_refill_needed = false;
+    uint8_t back = s_hdmi_audio_active_buf ^ 1u;
+    hdmi_refill_audio_islands(back);
+    s_hdmi_audio_active_buf = back;
+    return true;
+#else
+    return false;
 #endif
 }
 
