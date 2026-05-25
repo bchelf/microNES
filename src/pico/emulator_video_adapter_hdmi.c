@@ -79,18 +79,14 @@ bool emulator_video_adapter_step_frame(PicoEmulatorVideoAdapter *adapter) {
     }
 
     t0 = time_us_64();
-    for (int line = 0; line < NES_FRAME_HEIGHT; ++line) {
-        const NesScanline *scanline;
-        if (!nes_step_scanline(&adapter->nes)) {
-            emulator_video_adapter_set_error(adapter, nes_last_error(&adapter->nes));
-            return false;
-        }
-        scanline = nes_scanline_buffer(&adapter->nes);
-        video_hstx_submit_scanline(scanline->pixels, scanline->y);
-        ++adapter->rendered_scanlines;
+    if (!nes_step_frame(&adapter->nes)) {
+        emulator_video_adapter_set_error(adapter, nes_last_error(&adapter->nes));
+        return false;
     }
+    video_hstx_submit_frame_async(nes_framebuffer(&adapter->nes));
     adapter->profile_step_scanline_us_total += time_us_64() - t0;
     ++adapter->rendered_frames;
+    adapter->rendered_scanlines += NES_FRAME_HEIGHT;
     return true;
 }
 

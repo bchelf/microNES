@@ -22,6 +22,7 @@ void video_hstx_stop(void);
 void video_hstx_draw_test_pattern(void);
 void video_hstx_present_frame(const NesFrameBuffer *frame);
 void video_hstx_submit_scanline(const uint8_t *pixels, uint16_t y);
+void video_hstx_submit_frame_async(const NesFrameBuffer *frame);
 void video_hstx_get_stats(VideoHstxStats *stats_out);
 
 /*
