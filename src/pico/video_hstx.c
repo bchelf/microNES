@@ -67,7 +67,7 @@ static int s_dmach_pong = -1;
  * placed inside the 96-pixel HSYNC pulse. The packet scheduler is driven by
  * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
-#define HDMI_AUDIO_QUEUE_SIZE        512u
+#define HDMI_AUDIO_QUEUE_SIZE        320u
 #define HDMI_SILENCE_PACKET_SLOTS   48u  /* 48 packets × 4 samples = 192 frames */
 #define HDMI_TEST_TONE_PACKET_SLOTS  300u /* 1200 samples = 11 cycles at 440 Hz */
 #define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
@@ -352,7 +352,12 @@ static inline uint32_t hdmi_pcm_available_frames(void) {
 static inline uint32_t hdmi_audio_queue_level(void) {
     uint32_t head = s_hdmi_audio_queue_head;
     uint32_t tail = s_hdmi_audio_queue_tail;
-    return (head - tail) & (HDMI_AUDIO_QUEUE_SIZE - 1u);
+    return (head >= tail) ? (head - tail) : (HDMI_AUDIO_QUEUE_SIZE + head - tail);
+}
+
+static inline uint32_t hdmi_audio_queue_next(uint32_t index) {
+    ++index;
+    return (index >= HDMI_AUDIO_QUEUE_SIZE) ? 0u : index;
 }
 
 static void hdmi_pull_stereo_samples(int16_t out[8], uint32_t want_frames,
@@ -438,7 +443,7 @@ static const uint32_t *hdmi_next_audio_island(void) {
     uint32_t tail = s_hdmi_audio_queue_tail;
     if (tail != s_hdmi_audio_queue_head) {
         const uint32_t *island = s_hdmi_audio_queue[tail];
-        s_hdmi_audio_queue_tail = (tail + 1u) & (HDMI_AUDIO_QUEUE_SIZE - 1u);
+        s_hdmi_audio_queue_tail = hdmi_audio_queue_next(tail);
         return island;
     }
     ++s_hdmi_audio_missed_swaps;
@@ -816,7 +821,7 @@ void video_hstx_hdmi_audio_service(void) {
     while (hdmi_audio_queue_level() < (HDMI_AUDIO_QUEUE_SIZE - 16u) &&
            hdmi_pcm_available_frames() >= 4u) {
         uint32_t head = s_hdmi_audio_queue_head;
-        uint32_t next = (head + 1u) & (HDMI_AUDIO_QUEUE_SIZE - 1u);
+        uint32_t next = hdmi_audio_queue_next(head);
         if (next == s_hdmi_audio_queue_tail) {
             break;
         }
