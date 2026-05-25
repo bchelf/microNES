@@ -36,12 +36,25 @@
 #if MICRONES_SYS_CLK_MHZ == 315
 
 /*
- * 315 MHz  —  PLL: VCO=1260 MHz, post_div1=2, post_div2=2
+ * 315 MHz  —  default PLL: VCO=1260 MHz, post_div1=2, post_div2=2
  *   sys_clk = 1260 / (2×2) = 315 MHz
+ *
+ * HDMI may define MICRONES_HDMI_PLL_SYS_375 to run PLL_SYS's post-divided
+ * output at 375 MHz. clk_sys is then divided back down to 315 MHz while HSTX
+ * gets a clean 125 MHz from PLL_SYS / 3.
  */
-#  define MICRONES_PLL_VCO_HZ       1260000000u
-#  define MICRONES_PLL_DIV1         2u
-#  define MICRONES_PLL_DIV2         2u
+#  ifdef MICRONES_HDMI_PLL_SYS_375
+#    define MICRONES_PLL_VCO_HZ       1500000000u
+#    define MICRONES_PLL_DIV1         2u
+#    define MICRONES_PLL_DIV2         2u
+#  else
+#    define MICRONES_PLL_VCO_HZ       1260000000u
+#    define MICRONES_PLL_DIV1         2u
+#    define MICRONES_PLL_DIV2         2u
+#  endif
+#  define MICRONES_SYS_CLOCK_HZ     315000000u
+#  define MICRONES_PLL_OUTPUT_HZ \
+    (MICRONES_PLL_VCO_HZ / (MICRONES_PLL_DIV1 * MICRONES_PLL_DIV2))
 #  define MICRONES_VREG             VREG_VOLTAGE_1_20
 #  define MICRONES_VREG_SETTLE_MS   20u
 
@@ -68,6 +81,9 @@
 #  define MICRONES_PLL_VCO_HZ       1260000000u
 #  define MICRONES_PLL_DIV1         4u
 #  define MICRONES_PLL_DIV2         2u
+#  define MICRONES_SYS_CLOCK_HZ     157500000u
+#  define MICRONES_PLL_OUTPUT_HZ \
+    (MICRONES_PLL_VCO_HZ / (MICRONES_PLL_DIV1 * MICRONES_PLL_DIV2))
 #  define MICRONES_VREG             VREG_VOLTAGE_1_10
 #  define MICRONES_VREG_SETTLE_MS   10u
 
@@ -96,6 +112,9 @@
 #  define MICRONES_PLL_VCO_HZ       1000000000u
 #  define MICRONES_PLL_DIV1         4u
 #  define MICRONES_PLL_DIV2         1u
+#  define MICRONES_SYS_CLOCK_HZ     250000000u
+#  define MICRONES_PLL_OUTPUT_HZ \
+    (MICRONES_PLL_VCO_HZ / (MICRONES_PLL_DIV1 * MICRONES_PLL_DIV2))
 #  define MICRONES_VREG             VREG_VOLTAGE_1_20
 #  define MICRONES_VREG_SETTLE_MS   20u
 

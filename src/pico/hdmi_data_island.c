@@ -283,8 +283,8 @@ void hdmi_pkt_make_avi_infoframe(HdmiPacket *pkt) {
     /* Byte 3: ITC[7]=0, EC[6:4]=0, Q[3:2]=2 (RGB full range), SC[1:0]=0. */
     body[2] = (uint8_t)(2u << 2);
     /* Byte 4: VIC = 0 — let the sink auto-detect from timing. The HDMI
-     * backend currently runs 640x480-like active video at 31.5 MHz / 75 Hz,
-     * so it should not claim the 25.175 MHz 640x480p59.94 VIC. */
+     * backend currently runs 640x480-like active video at 25.0 MHz, so it
+     * should not claim the 25.175 MHz 640x480p59.94 VIC. */
     body[3] = 0u;
     /* Byte 5..13: pixel repetition and bar info zero. */
     pack_infoframe(pkt, HDMI_PKT_TYPE_INFOFRAME_AVI, 2u, 13u, body);
