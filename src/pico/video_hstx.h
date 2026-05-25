@@ -29,6 +29,7 @@ void video_hstx_get_stats(VideoHstxStats *stats_out);
  * stereo samples via these entry points.
  */
 void video_hstx_print_diag(void);
+void video_hstx_hdmi_audio_service(void);
 
 void video_hstx_hdmi_audio_init(uint32_t sample_rate);
 size_t video_hstx_hdmi_audio_push(const int16_t *mono_samples,

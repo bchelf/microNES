@@ -400,9 +400,12 @@ vertical blanking.
 
 ### VBI scheduling
 
-Each NES frame's audio islands are double-buffered. `present_frame()`
-refills the inactive buffer from the PCM ring then flips a single byte
-to swap. The DMA ISR snapshots the active index once per scanline.
+Audio islands are double-buffered at the HDMI frame cadence, not the NES
+frame cadence. The DMA ISR swaps in a ready buffer only at the 75 Hz
+frame boundary; foreground code calls `video_hstx_hdmi_audio_service()`
+during HDMI idle time and after PCM pushes to refill the inactive buffer
+from the PCM ring. The DMA ISR snapshots the active index once per
+scanline.
 
 - Control island: scanline 12, carries AVI InfoFrame + Audio InfoFrame +
   General Control Packet (clears AVMUTE) + ACR (N=6144, CTS=31500).
@@ -451,6 +454,11 @@ backend so existing diag printouts in `main.c` work unchanged:
   (samples are padded with the last good value).
 - `overrun_count` increments when `push_samples` evicts an old frame.
 - `buffer_level` returns the current stereo-frame count in the ring.
+- `refills` in the HSTX log should advance near 75/sec while HDMI is
+  running.
+- `missed` increments when a 75 Hz frame boundary arrives before the
+  inactive audio island buffer has been refilled; it should remain near
+  zero after startup.
 
 ### Known risks for bring-up
 

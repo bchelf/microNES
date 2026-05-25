@@ -204,6 +204,12 @@ static uint32_t __attribute__((aligned(4)))
     s_hdmi_control_line_buf[HDMI_CONTROL_LINE_WORDS];
 
 static volatile uint8_t s_hdmi_audio_active_buf;
+static volatile uint8_t s_hdmi_audio_refill_buf;
+static volatile uint8_t s_hdmi_audio_ready_buf;
+static volatile bool s_hdmi_audio_refill_pending;
+static volatile bool s_hdmi_audio_ready;
+static volatile uint32_t s_hdmi_audio_refills;
+static volatile uint32_t s_hdmi_audio_missed_swaps;
 
 /* PCM ring drained when assembling audio sample packets. Stereo frames. */
 #define HDMI_PCM_RING_FRAMES 2048u  /* must be a power of two */
@@ -340,7 +346,7 @@ static void hdmi_refill_audio_islands(uint32_t buf_idx) {
             uint32_t got;
             hdmi_pull_stereo_samples(samples, 4u, &got);
             hdmi_pkt_make_audio_sample(&packets[p], samples,
-                                       got ? got : 4u, &s_hdmi_audio_frame_no);
+                                       4u, &s_hdmi_audio_frame_no);
         }
         hdmi_di_emit_block(packets, HDMI_AUDIO_PACKETS_PER_LINE,
                                 0u, 0u,
@@ -402,6 +408,17 @@ static void __scratch_x("") hstx_dma_irq(void) {
         s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
         if (s_v_scanline == 0u) {
             ++s_stats.frames_presented;
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+            if (s_hdmi_audio_ready) {
+                uint8_t old_buf = s_hdmi_audio_active_buf;
+                s_hdmi_audio_active_buf = s_hdmi_audio_ready_buf;
+                s_hdmi_audio_ready = false;
+                s_hdmi_audio_refill_buf = old_buf;
+                s_hdmi_audio_refill_pending = true;
+            } else {
+                ++s_hdmi_audio_missed_swaps;
+            }
+#endif
         }
     }
 }
@@ -526,6 +543,12 @@ bool video_hstx_init(void) {
                              HDMI_CONTROL_ISLAND_WORDS,
                              HDMI_CONTROL_POST_FILLER_PIXELS);
     s_hdmi_audio_active_buf = 0u;
+    s_hdmi_audio_refill_buf = 1u;
+    s_hdmi_audio_ready_buf = 0u;
+    s_hdmi_audio_refill_pending = true;
+    s_hdmi_audio_ready = false;
+    s_hdmi_audio_refills = 0u;
+    s_hdmi_audio_missed_swaps = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_pcm_head = 0u;
     s_hdmi_pcm_tail = 0u;
@@ -639,15 +662,6 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
         }
     }
 
-#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-    /* Refill the inactive audio data-island buffer and atomically swap.
-     * This happens once per NES frame, which is close to once per display
-     * frame; the receiver tolerates the small jitter via its audio FIFO. */
-    uint8_t back = s_hdmi_audio_active_buf ^ 1u;
-    hdmi_refill_audio_islands(back);
-    s_hdmi_audio_active_buf = back;
-#endif
-
     uint64_t elapsed = time_us_64() - start_us;
     s_stats.present_us_total += elapsed;
     if (elapsed > s_stats.present_us_max) {
@@ -691,7 +705,7 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
 }
 
 void video_hstx_print_diag(void) {
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u pcm_level=%lu underruns=%lu overruns=%lu\n",
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u pcm_level=%lu underruns=%lu overruns=%lu refills=%lu missed=%lu\n",
            (unsigned long)s_diag_sys_hz,
            (unsigned long)s_diag_hstx_hz,
            (unsigned long)s_diag_pixel_hz,
@@ -700,14 +714,36 @@ void video_hstx_print_diag(void) {
 #if MICRONES_HDMI_DATA_ISLANDS
            (unsigned long)video_hstx_hdmi_audio_buffer_level(),
            (unsigned long)video_hstx_hdmi_audio_underruns(),
-           (unsigned long)video_hstx_hdmi_audio_overruns()
+           (unsigned long)video_hstx_hdmi_audio_overruns(),
+           (unsigned long)s_hdmi_audio_refills,
+           (unsigned long)s_hdmi_audio_missed_swaps
 #else
-           0UL, 0UL, 0UL
+           0UL, 0UL, 0UL, 0UL, 0UL
 #endif
     );
 }
 
 /* --- HDMI audio backend entry points ----------------------------------- */
+
+void video_hstx_hdmi_audio_service(void) {
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+    if (!s_hdmi_audio_refill_pending || s_hdmi_audio_ready) {
+        return;
+    }
+
+    uint8_t refill_buf = s_hdmi_audio_refill_buf;
+    hdmi_refill_audio_islands(refill_buf);
+
+    uint32_t save = save_and_disable_interrupts();
+    if (s_hdmi_audio_refill_pending && !s_hdmi_audio_ready) {
+        s_hdmi_audio_ready_buf = refill_buf;
+        s_hdmi_audio_ready = true;
+        s_hdmi_audio_refill_pending = false;
+        ++s_hdmi_audio_refills;
+    }
+    restore_interrupts(save);
+#endif
+}
 
 void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     (void)sample_rate;
@@ -716,6 +752,12 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
      * rate and rely on the audio backend wrapper to declare 48 kHz. */
     s_hdmi_pcm_head = 0u;
     s_hdmi_pcm_tail = 0u;
+    s_hdmi_audio_refill_buf = s_hdmi_audio_active_buf ^ 1u;
+    s_hdmi_audio_ready_buf = 0u;
+    s_hdmi_audio_refill_pending = true;
+    s_hdmi_audio_ready = false;
+    s_hdmi_audio_refills = 0u;
+    s_hdmi_audio_missed_swaps = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_audio_underruns = 0u;
     s_hdmi_audio_overruns = 0u;

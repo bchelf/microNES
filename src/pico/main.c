@@ -227,7 +227,21 @@ int main(void) {
                 uint64_t now_ns = micrones_pico_clock_now_ns();
 
                 if (micrones_frame_pacer_should_wait(&frame_pacer, now_ns, &wait_until_ns)) {
+#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
+                    while ((now_ns = micrones_pico_clock_now_ns()) < wait_until_ns) {
+                        video_hstx_hdmi_audio_service();
+                        uint64_t remaining_us = (wait_until_ns - now_ns) / 1000ull;
+                        if (remaining_us > 500ull) {
+                            sleep_us(500);
+                        } else if (remaining_us > 0ull) {
+                            sleep_us((uint32_t)remaining_us);
+                        } else {
+                            tight_loop_contents();
+                        }
+                    }
+#else
                     micrones_pico_sleep_until_ns(wait_until_ns);
+#endif
                     micrones_frame_pacer_note_wait_complete(
                         &frame_pacer,
                         micrones_pico_clock_now_ns());
@@ -360,6 +374,7 @@ int main(void) {
                         pico_audio_backend_push_samples(pcm_tmp, n);
                         diag_samples_pushed += n;
 #endif
+                        video_hstx_hdmi_audio_service();
                     }
 #if MICRONES_ENABLE_PERF_LOG
                     report_apu_internal_dropped += emulator_video.nes.apu.dropped_samples;
@@ -367,6 +382,7 @@ int main(void) {
                 }
 
                 emulator_video_adapter_present_frame(&emulator_video);
+                video_hstx_hdmi_audio_service();
             }
 #else
             /* Analog path: render_frame handles step + present together,
