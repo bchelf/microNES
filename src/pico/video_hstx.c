@@ -6,7 +6,6 @@
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
-#include "hardware/pll.h"
 #include "hardware/sync.h"
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
@@ -143,10 +142,6 @@ static uint32_t s_vblank_line_vsync_on[] = {
  *   MICRONES_HDMI_DATA_ISLANDS    (default 1)
  *   MICRONES_HDMI_AUDIO_PACKETS   (default 1)
  */
-#ifndef MICRONES_HDMI_STDIO_USB_ENABLED
-#define MICRONES_HDMI_STDIO_USB_ENABLED 0
-#endif
-
 #ifndef MICRONES_HDMI_VIDEO_PREAMBLE
 #define MICRONES_HDMI_VIDEO_PREAMBLE 1
 #endif
@@ -405,27 +400,20 @@ static void __scratch_x("") hstx_dma_irq(void) {
 }
 
 static void hstx_configure_peripheral(void) {
-    /* Source clk_hstx from pll_usb reconfigured to exactly 125 MHz.
-     * The fractional divider from clk_sys (315/2.52) produces jitter that
-     * corrupts TERC4 data island decoding — video survives but audio doesn't.
+    /* Source clk_hstx from pll_sys with an integer divider.
      *
-     * pll_usb is free when USB stdio is disabled (the default for HDMI).
-     * When USB stdio IS enabled, fall back to clk_sys fractional divider
-     * (audio won't work but video + diagnostics will).
+     * At 375 MHz sys: 375 / 3 = 125 MHz exactly — zero fractional jitter.
+     * At 250 MHz sys: 250 / 2 = 125 MHz exactly.
      *
-     * PLL config: XTAL 12 MHz × fbdiv 125 = VCO 1500 MHz / (6×2) = 125 MHz.
-     * Must deinit first since the SDK initializes pll_usb to 48 MHz at boot. */
-#if !MICRONES_HDMI_STDIO_USB_ENABLED
-    pll_deinit(pll_usb);
-    pll_init(pll_usb, 1u, 1500u * MHZ, 6u, 2u);
+     * The previous 315 MHz approach needed 315/2.52 (fractional), which
+     * introduced bit-level jitter that corrupted TERC4 data island decoding.
+     * Alternatively, pll_usb was reconfigured to 125 MHz, which broke USB.
+     *
+     * Using CLKSRC_PLL_SYS keeps pll_usb at 48 MHz (USB works) and avoids
+     * any fractional division (audio works). */
     clock_configure(clk_hstx, 0,
-                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,
-                    125u * MHZ, HSTX_PIXEL_CLOCK_HZ);
-#else
-    clock_configure(clk_hstx, 0,
-                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
+                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
                     clock_get_hz(clk_sys), HSTX_PIXEL_CLOCK_HZ);
-#endif
 
     hstx_ctrl_hw->expand_tmds =
         2  << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB |
