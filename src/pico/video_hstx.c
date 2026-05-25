@@ -71,6 +71,11 @@ static int s_dmach_pong = -1;
 
 #define HDMI_CONTROL_PACKETS         4u   /* AVI + Audio IF + GCP + ACR */
 
+/* Number of frames of pure DVI output before we start injecting data
+ * islands. Gives the sink's TMDS PLL time to lock to sync before it sees
+ * non-control TERC4 codewords. 60 frames ≈ 1 second. */
+#define HDMI_DI_STARTUP_DELAY_FRAMES 60u
+
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
 /* CTS = TMDS_clock_Hz * N / (128 * fs). For 25 MHz pixel: 25e6 * 6144 /
@@ -350,8 +355,12 @@ static void __scratch_x("") hstx_dma_irq(void) {
     dma_hw->intr = 1u << ch_num;
     s_dma_pong = !s_dma_pong;
 
+    /* Let the TV's TMDS PLL lock to pure DVI for several frames before we
+     * start injecting data islands. Without this grace period some sinks
+     * see TERC4 before they've locked and treat the islands as pixel data. */
 #if MICRONES_HDMI_DATA_ISLANDS
     uint8_t audio_buf = s_hdmi_audio_active_buf;
+    bool islands_active = (s_stats.frames_presented >= HDMI_DI_STARTUP_DELAY_FRAMES);
 #endif
 
     if (s_v_scanline >= MODE_V_FRONT_PORCH &&
@@ -360,12 +369,13 @@ static void __scratch_x("") hstx_dma_irq(void) {
         ch->transfer_count = count_of(s_vblank_line_vsync_on);
     } else if (s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH) {
 #if MICRONES_HDMI_DATA_ISLANDS
-        if (s_v_scanline == HDMI_CONTROL_VBI_LINE) {
+        if (islands_active && s_v_scanline == HDMI_CONTROL_VBI_LINE) {
             ch->read_addr = (uintptr_t)s_hdmi_control_line_buf;
             ch->transfer_count = HDMI_CONTROL_LINE_WORDS;
         }
 #if MICRONES_HDMI_AUDIO_PACKETS
-        else if (s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
+        else if (islands_active &&
+                 s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
                  s_v_scanline <= HDMI_AUDIO_LAST_VBI_LINE) {
             uint32_t line_idx = s_v_scanline - HDMI_AUDIO_FIRST_VBI_LINE;
             ch->read_addr = (uintptr_t)&s_hdmi_audio_line_buf[audio_buf][line_idx][0];
@@ -688,35 +698,32 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
 #endif
 }
 
-size_t video_hstx_hdmi_audio_push(const int16_t *interleaved_stereo,
-                                  size_t nframes) {
+size_t video_hstx_hdmi_audio_push(const int16_t *samples,
+                                  size_t count) {
 #if MICRONES_HDMI_DATA_ISLANDS
-    if (interleaved_stereo == NULL || nframes == 0u) {
+    if (samples == NULL || count == 0u) {
         return 0u;
     }
     size_t written = 0u;
-    for (size_t i = 0u; i < nframes; ++i) {
+    for (size_t i = 0u; i < count; ++i) {
         uint32_t head = s_hdmi_pcm_head;
         uint32_t next = (head + 1u) & (HDMI_PCM_RING_FRAMES - 1u);
         if (next == s_hdmi_pcm_tail) {
-            /* Ring full: evict the oldest sample, matching the MAX98357
-             * backend's circular-overwrite policy so audio keeps flowing. */
             uint32_t save = save_and_disable_interrupts();
             s_hdmi_pcm_tail = (s_hdmi_pcm_tail + 1u) & (HDMI_PCM_RING_FRAMES - 1u);
             restore_interrupts(save);
             ++s_hdmi_audio_overruns;
         }
-        s_hdmi_pcm_ring[head * 2u + 0u] = interleaved_stereo[i * 2u + 0u];
-        s_hdmi_pcm_ring[head * 2u + 1u] = interleaved_stereo[i * 2u + 1u];
+        /* Backend contract is mono; duplicate to L and R. */
+        s_hdmi_pcm_ring[head * 2u + 0u] = samples[i];
+        s_hdmi_pcm_ring[head * 2u + 1u] = samples[i];
         s_hdmi_pcm_head = next;
         ++written;
     }
     return written;
 #else
-    /* Audio is not wired to the link in this build; silently drop samples
-     * so the caller doesn't loop forever trying to push them. */
-    (void)interleaved_stereo;
-    return nframes;
+    (void)samples;
+    return count;
 #endif
 }
 

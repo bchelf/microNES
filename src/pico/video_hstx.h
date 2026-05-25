@@ -29,8 +29,8 @@ void video_hstx_get_stats(VideoHstxStats *stats_out);
  * stereo samples via these entry points.
  */
 void video_hstx_hdmi_audio_init(uint32_t sample_rate);
-size_t video_hstx_hdmi_audio_push(const int16_t *interleaved_stereo,
-                                  size_t nframes);
+size_t video_hstx_hdmi_audio_push(const int16_t *mono_samples,
+                                  size_t count);
 uint32_t video_hstx_hdmi_audio_underruns(void);
 uint32_t video_hstx_hdmi_audio_overruns(void);
 uint32_t video_hstx_hdmi_audio_buffer_level(void);

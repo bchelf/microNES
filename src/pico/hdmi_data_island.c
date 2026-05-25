@@ -285,13 +285,29 @@ void hdmi_pkt_make_audio_infoframe(HdmiPacket *pkt) {
 }
 
 /*
- * IEC-60958 sub-frame layout: 24 data bits + V + U + C + P, packed per channel.
- * We carry 16-bit PCM left-justified in the 24-bit data field.
+ * IEC-60958 consumer channel status (192 bits = 24 bytes).
+ * We only set the fields required for LPCM 48 kHz 16-bit stereo;
+ * the rest are zero (per IEC-60958-3 §2.2).
  *
- * For a stereo packet, each of the 4 subpackets carries one stereo frame
- * (left in bytes 0..2, right in bytes 3..5; bytes 6 carries the V/U/C/P bits
- * for both channels and the frame's "B"/"M" preamble code via HB1).
+ *   Byte 0: bit 0 = 0 (consumer), bit 1 = 0 (LPCM), bits 2..7 = 0.
+ *   Byte 1: category code = 0 (general).
+ *   Byte 2: source/channel number = 0.
+ *   Byte 3: bits 0..3 = sampling frequency. 0010 = 48 kHz.
+ *           bits 4..5 = clock accuracy = 00 (level II).
+ *   Byte 4: bits 0..3 = word length. 0010 = 16 bits (max 20 bit).
+ *           bits 4..7 = original sampling frequency = 0000.
  */
+static const uint8_t k_iec60958_channel_status[24] = {
+    0x00u, 0x00u, 0x00u, 0x02u, 0x02u,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+};
+
+static inline uint8_t iec60958_channel_status_bit(uint32_t frame_no) {
+    uint32_t byte_idx = (frame_no % 192u) / 8u;
+    uint32_t bit_idx  = (frame_no % 192u) % 8u;
+    return (uint8_t)((k_iec60958_channel_status[byte_idx] >> bit_idx) & 1u);
+}
+
 void hdmi_pkt_make_audio_sample(HdmiPacket *pkt,
                                 const int16_t samples_lr[8],
                                 uint32_t nsamples,
@@ -299,21 +315,17 @@ void hdmi_pkt_make_audio_sample(HdmiPacket *pkt,
     memset(pkt, 0, sizeof(*pkt));
     pkt->header[0] = HDMI_PKT_TYPE_AUDIO_SAMPLE;
 
-    /* HB1: layout=0, sample_present bits indicate which subpackets are valid. */
     uint8_t hb1 = 0u;
     for (uint32_t s = 0u; s < nsamples && s < 4u; ++s) {
         hb1 |= (uint8_t)(1u << s);
     }
     pkt->header[1] = hb1;
 
-    /* HB2: sample_flat bits [3:0], B (block-start) bits [7:4]. */
     uint8_t hb2 = 0u;
     for (uint32_t s = 0u; s < nsamples && s < 4u; ++s) {
-        /* Set the "B" bit on the first frame of every 192-frame IEC block. */
-        if (((*frame_no) % 192u) == 0u) {
+        if (((*frame_no + s) % 192u) == 0u) {
             hb2 |= (uint8_t)(1u << (4u + s));
         }
-        *frame_no = *frame_no + 1u;
     }
     pkt->header[2] = hb2;
 
@@ -321,23 +333,24 @@ void hdmi_pkt_make_audio_sample(HdmiPacket *pkt,
         int16_t l = samples_lr[s * 2u + 0u];
         int16_t r = samples_lr[s * 2u + 1u];
         uint8_t *sb = pkt->subpackets[s];
-        /* Left channel: 24-bit field, 16-bit sample placed in upper 16 bits. */
+
         sb[0] = 0u;
         sb[1] = (uint8_t)(l & 0xFFu);
         sb[2] = (uint8_t)((l >> 8) & 0xFFu);
-        /* Right channel. */
+
         sb[3] = 0u;
         sb[4] = (uint8_t)(r & 0xFFu);
         sb[5] = (uint8_t)((r >> 8) & 0xFFu);
-        /*
-         * Byte 6: bits per IEC-60958.
-         *   bit 0..1: channel-0 V, U
-         *   bit 2..3: channel-0 C, P (parity over both channels)
-         *   bit 4..5: channel-1 V, U
-         *   bit 6..7: channel-1 C, P
-         * Leave V/U/C zero; compute parity bits as XOR of all data + V/U/C bits.
-         */
-        uint8_t parity_l = 0u, parity_r = 0u;
+
+        /* Byte 6: V, U, C, P per channel (IEC-60958).
+         *   bit 0: ch0 V (validity; 0 = valid LPCM)
+         *   bit 1: ch0 U (user data; 0)
+         *   bit 2: ch0 C (channel status bit for this frame)
+         *   bit 3: ch0 P (even parity over data + V + U + C)
+         *   bits 4..7: same for ch1 */
+        uint8_t c_bit = iec60958_channel_status_bit(*frame_no + s);
+
+        uint8_t parity_l = c_bit, parity_r = c_bit;
         for (uint32_t i = 0u; i < 3u; ++i) {
             uint8_t bl = sb[i];
             uint8_t br = sb[3u + i];
@@ -346,6 +359,8 @@ void hdmi_pkt_make_audio_sample(HdmiPacket *pkt,
                 parity_r ^= (uint8_t)((br >> b) & 1u);
             }
         }
-        sb[6] = (uint8_t)((parity_l << 3) | (parity_r << 7));
+        sb[6] = (uint8_t)((c_bit << 2) | (parity_l << 3) |
+                           (c_bit << 6) | (parity_r << 7));
     }
+    *frame_no = *frame_no + nsamples;
 }
