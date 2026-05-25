@@ -74,10 +74,7 @@ static int s_dmach_pong = -1;
 
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
-
-/* CTS is computed at init from the actual measured HSTX clock so it
- * matches regardless of sys_clk or PLL configuration. */
-static uint32_t s_hdmi_audio_cts_value;
+#define HDMI_AUDIO_CTS_VALUE         25000u  /* for 25 MHz pixel clock */
 
 /* Full island = preamble(8) + guard(2) + packets + guard(2), all in one RAW. */
 #define HDMI_AUDIO_ISLAND_WORDS \
@@ -285,7 +282,7 @@ static void hdmi_refill_control_island(void) {
     hdmi_pkt_make_avi_infoframe(&packets[0]);
     hdmi_pkt_make_audio_infoframe(&packets[1]);
     hdmi_pkt_make_general_control(&packets[2], 0, 1);
-    hdmi_pkt_make_acr(&packets[3], HDMI_AUDIO_N_VALUE, s_hdmi_audio_cts_value);
+    hdmi_pkt_make_acr(&packets[3], HDMI_AUDIO_N_VALUE, HDMI_AUDIO_CTS_VALUE);
 
     hdmi_di_emit_block(packets, HDMI_CONTROL_PACKETS,
                              0u, 0u,
@@ -413,18 +410,6 @@ static void hstx_configure_peripheral(void) {
     clock_configure(clk_hstx, 0,
                     CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,
                     125u * MHZ, HSTX_PIXEL_CLOCK_HZ);
-
-    /* Compute CTS from the actual HSTX clock so ACR matches reality.
-     * pixel_clock = clk_hstx / CLKDIV. TMDS clock = pixel clock (for
-     * the receiver). CTS = TMDS_clock * N / (128 * fs). */
-    {
-        uint32_t hstx_hz = clock_get_hz(clk_hstx);
-        uint32_t pixel_hz = hstx_hz / 5u;  /* CLKDIV = 5 */
-        /* CTS = pixel_hz * N / (128 * 48000) = pixel_hz * 6144 / 6144000
-         *     = pixel_hz / 1000. Avoid overflow. */
-        s_hdmi_audio_cts_value = (uint32_t)(((uint64_t)pixel_hz * HDMI_AUDIO_N_VALUE) /
-                                            (128ull * HDMI_AUDIO_SAMPLE_RATE_HZ));
-    }
 
     hstx_ctrl_hw->expand_tmds =
         2  << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB |
@@ -564,6 +549,13 @@ bool video_hstx_init(void) {
 #endif /* MICRONES_HDMI_DATA_ISLANDS */
 
     hstx_configure_peripheral();
+
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u\n",
+           (unsigned long)clock_get_hz(clk_sys),
+           (unsigned long)clock_get_hz(clk_hstx),
+           (unsigned long)(clock_get_hz(clk_hstx) / 5u),
+           (unsigned)HDMI_AUDIO_CTS_VALUE);
+
     for (uint32_t gpio = 12u; gpio <= 19u; ++gpio) {
         gpio_set_function(gpio, GPIO_FUNC_HSTX);
     }
