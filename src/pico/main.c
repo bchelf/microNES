@@ -209,7 +209,7 @@ int main(void) {
                        (unsigned)nes_audio_available_samples(&emulator_video.nes),
                        (unsigned)diag_samples_pushed,
                        (unsigned long long)nes_frame_count(&emulator_video.nes),
-                       (int)frame.stepping_nes);
+                       (int)(shell.state == APP_SHELL_STATE_RUNNING));
                 diag_samples_pushed = 0;
                 next_diag_us = time_us_64() + 1000000ull;
             }
