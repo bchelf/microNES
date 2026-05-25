@@ -33,10 +33,6 @@ void video_hstx_print_diag(void);
 void video_hstx_hdmi_audio_init(uint32_t sample_rate);
 size_t video_hstx_hdmi_audio_push(const int16_t *mono_samples,
                                   size_t count);
-
-/* Poll from the main loop to refill audio islands at the display refresh
- * rate (75 Hz).  Returns true if a refill was performed. */
-bool video_hstx_hdmi_audio_refill_if_needed(void);
 uint32_t video_hstx_hdmi_audio_underruns(void);
 uint32_t video_hstx_hdmi_audio_overruns(void);
 uint32_t video_hstx_hdmi_audio_buffer_level(void);

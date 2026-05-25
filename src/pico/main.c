@@ -227,15 +227,7 @@ int main(void) {
                 uint64_t now_ns = micrones_pico_clock_now_ns();
 
                 if (micrones_frame_pacer_should_wait(&frame_pacer, now_ns, &wait_until_ns)) {
-#if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
-                    /* Busy-wait so we can service audio island refills at the
-                     * display refresh rate (75 Hz) during the idle period. */
-                    while (micrones_pico_clock_now_ns() < wait_until_ns) {
-                        video_hstx_hdmi_audio_refill_if_needed();
-                    }
-#else
                     micrones_pico_sleep_until_ns(wait_until_ns);
-#endif
                     micrones_frame_pacer_note_wait_complete(
                         &frame_pacer,
                         micrones_pico_clock_now_ns());
@@ -340,8 +332,6 @@ int main(void) {
             }
 #elif defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
             {
-                video_hstx_hdmi_audio_refill_if_needed();
-
                 if (!emulator_video_adapter_step_frame(&emulator_video)) {
                     printf("emulator video failed: %s\n", emulator_video_adapter_last_error(&emulator_video));
                     break;
