@@ -53,17 +53,17 @@ static int s_dmach_pong = -1;
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
 
 #define HSTX_INTERNAL_CLKDIV 5u
-#define HDMI_HSTX_CLOCK_HZ   157500000u
+#define HDMI_HSTX_CLOCK_HZ   125000000u
 #define HDMI_PIXEL_CLOCK_HZ  (HDMI_HSTX_CLOCK_HZ / HSTX_INTERNAL_CLKDIV)
 
 /* --- HDMI audio scheduler tunables ------------------------------------- */
 
-/* 8 audio sample packets per data island × 20 lines = 160 packets/frame.
- * At 4 stereo samples per ASP, that's 640 frames/video-frame. With the
- * 31.5 MHz / 800 / 525 HDMI mode this is 640 × 75 Hz = 48 kHz exactly.
+/* 8 audio sample packets per data island × 25 lines = 200 packets/frame.
+ * At 4 stereo samples per ASP, that's 800 frames/video-frame. With the
+ * 25 MHz / 800 / 525 HDMI mode this is 800 × 60 Hz = 48 kHz exactly.
  */
 #define HDMI_AUDIO_PACKETS_PER_LINE 8u
-#define HDMI_AUDIO_LINES            20u
+#define HDMI_AUDIO_LINES            25u
 /* The control island (AVI + Audio InfoFrame + GCP + ACR) goes on the FIRST
  * line of V_BP — most TVs sample InfoFrames within a few lines of VSYNC and
  * give up on the link if they don't see them early. Audio sample packets
@@ -76,7 +76,7 @@ static int s_dmach_pong = -1;
 
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
-#define HDMI_AUDIO_CTS_VALUE         31500u  /* for 31.5 MHz pixel clock */
+#define HDMI_AUDIO_CTS_VALUE         25000u  /* for 25 MHz pixel clock */
 
 /* Full island = preamble(8) + guard(2) + packets + guard(2), all in one RAW. */
 #define HDMI_AUDIO_ISLAND_WORDS \
@@ -424,11 +424,9 @@ static void __scratch_x("") hstx_dma_irq(void) {
 }
 
 static void hstx_configure_peripheral(void) {
-    /* Keep pll_usb at the SDK's USB-safe 48 MHz and derive HSTX from the
-     * 315 MHz system clock with an integer divider. The old 315/2.52 divider
-     * produced bit-level jitter that video tolerated but HDMI data islands
-     * did not. clk_hstx=157.5 MHz and HSTX CSR CLKDIV=5 gives a clean
-     * 31.5 MHz pixel clock, i.e. 800x525 at 75 Hz. */
+    /* Control build: run the HDMI target at 250 MHz so clk_hstx is a clean
+     * integer clk_sys/2 = 125 MHz. HSTX CSR CLKDIV=5 gives a 25 MHz pixel
+     * clock without borrowing pll_usb. */
     clock_configure(clk_hstx, 0,
                     CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
                     clock_get_hz(clk_sys), HDMI_HSTX_CLOCK_HZ);
