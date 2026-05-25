@@ -68,6 +68,7 @@ static int s_dmach_pong = -1;
  * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
 #define HDMI_AUDIO_QUEUE_SIZE        256u
+#define HDMI_SILENCE_PACKET_SLOTS   48u  /* 48 packets × 4 samples = 192 frames */
 #define HDMI_TEST_TONE_PACKET_SLOTS  300u /* 1200 samples = 11 cycles at 440 Hz */
 #define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
 #define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
@@ -180,7 +181,7 @@ static uint32_t __attribute__((aligned(4)))
     s_hdmi_null_island[HDMI_ONE_PACKET_ISLAND_WORDS];
 
 static uint32_t __attribute__((aligned(4)))
-    s_hdmi_silence_island[HDMI_ONE_PACKET_ISLAND_WORDS];
+    s_hdmi_silence_islands[HDMI_SILENCE_PACKET_SLOTS][HDMI_ONE_PACKET_ISLAND_WORDS];
 
 static uint32_t __attribute__((aligned(4)))
     s_hdmi_test_tone_islands[HDMI_TEST_TONE_PACKET_SLOTS][HDMI_ONE_PACKET_ISLAND_WORDS];
@@ -199,6 +200,7 @@ static volatile uint32_t s_hdmi_audio_missed_swaps;
 static volatile uint32_t s_hdmi_audio_queue_head;
 static volatile uint32_t s_hdmi_audio_queue_tail;
 static uint32_t s_hdmi_audio_packet_cursor;
+static uint32_t s_hdmi_silence_packet_cursor;
 static uint32_t s_hdmi_test_tone_packet_cursor;
 static uint32_t s_hdmi_audio_sample_accum_fp;
 
@@ -400,13 +402,17 @@ static void hdmi_refill_test_tone_islands(void) {
     s_hdmi_audio_frame_no = saved_frame_no;
 }
 
-static void hdmi_build_silence_island(void) {
-    HdmiPacket packet;
+static void hdmi_build_silence_islands(void) {
     int16_t samples[8] = {0};
     uint32_t saved_frame_no = s_hdmi_audio_frame_no;
 
-    hdmi_pkt_make_audio_sample(&packet, samples, 4u, &saved_frame_no);
-    hdmi_di_emit_island(&packet, 1u, 1u, 0u, s_hdmi_silence_island);
+    s_hdmi_audio_frame_no = 0u;
+    for (uint32_t slot = 0u; slot < HDMI_SILENCE_PACKET_SLOTS; ++slot) {
+        HdmiPacket packet;
+        hdmi_pkt_make_audio_sample(&packet, samples, 4u, &s_hdmi_audio_frame_no);
+        hdmi_di_emit_island(&packet, 1u, 1u, 0u, s_hdmi_silence_islands[slot]);
+    }
+    s_hdmi_audio_frame_no = saved_frame_no;
 }
 
 static inline void hdmi_audio_scheduler_tick(void) {
@@ -436,7 +442,11 @@ static const uint32_t *hdmi_next_audio_island(void) {
         return island;
     }
     ++s_hdmi_audio_missed_swaps;
-    return s_hdmi_silence_island;
+    uint32_t silence_cursor = s_hdmi_silence_packet_cursor++;
+    if (s_hdmi_silence_packet_cursor >= HDMI_SILENCE_PACKET_SLOTS) {
+        s_hdmi_silence_packet_cursor = 0u;
+    }
+    return s_hdmi_silence_islands[silence_cursor];
 #endif
 }
 
@@ -623,6 +633,7 @@ bool video_hstx_init(void) {
     s_hdmi_audio_queue_head = 0u;
     s_hdmi_audio_queue_tail = 0u;
     s_hdmi_audio_packet_cursor = 0u;
+    s_hdmi_silence_packet_cursor = 0u;
     s_hdmi_test_tone_packet_cursor = 0u;
     s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
@@ -640,7 +651,7 @@ bool video_hstx_init(void) {
         HdmiPacket null_pkt;
         hdmi_pkt_make_null(&null_pkt);
         hdmi_di_emit_island(&null_pkt, 1u, 1u, 0u, s_hdmi_null_island);
-        hdmi_build_silence_island();
+        hdmi_build_silence_islands();
         hdmi_refill_test_tone_islands();
     }
 #endif /* MICRONES_HDMI_DATA_ISLANDS */
@@ -837,6 +848,7 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     s_hdmi_audio_queue_head = 0u;
     s_hdmi_audio_queue_tail = 0u;
     s_hdmi_audio_packet_cursor = 0u;
+    s_hdmi_silence_packet_cursor = 0u;
     s_hdmi_test_tone_packet_cursor = 0u;
     s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
