@@ -174,8 +174,6 @@ static uint32_t s_vactive_line[] = {
 static uint8_t __attribute__((aligned(4)))
     s_framebuf[MODE_H_ACTIVE_PIXELS * FRAMEBUF_STORED_LINES];
 
-static volatile const NesFrameBuffer *s_hdmi_pending_frame;
-static volatile uint32_t s_hdmi_pending_frame_row;
 static volatile uint32_t s_hdmi_scanline_stalls;
 static volatile uint32_t s_hdmi_scanline_submitted;
 static volatile uint32_t s_hdmi_scanline_expanded;
@@ -277,12 +275,15 @@ static inline uint8_t rgb332(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 static uint8_t k_palette_rgb332[64];
+static uint16_t k_palette_dup_rgb332[64];
 
 static void init_palette_rgb332(void) {
     for (uint32_t i = 0u; i < 64u; ++i) {
         k_palette_rgb332[i] = rgb332(k_nes_palette_rgb[i][0],
                                      k_nes_palette_rgb[i][1],
                                      k_nes_palette_rgb[i][2]);
+        k_palette_dup_rgb332[i] = (uint16_t)k_palette_rgb332[i] |
+                                  ((uint16_t)k_palette_rgb332[i] << 8u);
     }
 }
 
@@ -302,9 +303,10 @@ static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
     }
 
     uint8_t *out = dst + NES_VIEW_X;
-    for (uint32_t x = 0u; x < NES_FRAME_WIDTH; ++x) {
-        uint8_t c = k_palette_rgb332[src[x] & 0x3fu];
-        ((uint16_t *)out)[x] = (uint16_t)c | ((uint16_t)c << 8);
+    uint32_t *out32 = (uint32_t *)(void *)out;
+    for (uint32_t x = 0u; x < NES_FRAME_WIDTH; x += 2u) {
+        *out32++ = (uint32_t)k_palette_dup_rgb332[src[x] & 0x3fu] |
+                   ((uint32_t)k_palette_dup_rgb332[src[x + 1u] & 0x3fu] << 16u);
     }
 
     if (y == NES_FRAME_HEIGHT - 1u) {
@@ -314,27 +316,7 @@ static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
 }
 
 static inline uint32_t hdmi_scanline_queue_level(void) {
-    return s_hdmi_pending_frame ? (NES_FRAME_HEIGHT - s_hdmi_pending_frame_row) : 0u;
-}
-
-static bool hdmi_expand_one_pending_frame_row(void) {
-    const NesFrameBuffer *frame = (const NesFrameBuffer *)s_hdmi_pending_frame;
-    if (frame == NULL) {
-        return false;
-    }
-
-    MICRONES_DMB();
-    uint32_t row = s_hdmi_pending_frame_row;
-    const uint8_t *src = nes_framebuffer_scanline_const(frame, (uint16_t)row);
-    hdmi_expand_scanline_to_framebuf(src, (uint16_t)row);
-    ++row;
-    s_hdmi_pending_frame_row = row;
-    if (row >= NES_FRAME_HEIGHT) {
-        s_hdmi_pending_frame = NULL;
-        ++s_hdmi_frame_expanded;
-    }
-    MICRONES_DMB();
-    return true;
+    return 0u;
 }
 
 /* --- HDMI data island helpers ------------------------------------------ */
@@ -563,15 +545,10 @@ static bool hdmi_audio_encode_one_packet(void) {
 static void __not_in_flash_func(video_hstx_audio_core1_entry)(void) {
     multicore_lockout_victim_init();
     while (s_hdmi_audio_worker_running) {
-        if (hdmi_expand_one_pending_frame_row()) {
-            continue;
-        }
         if (hdmi_audio_encode_one_packet()) {
             continue;
         }
-        if (!hdmi_expand_one_pending_frame_row()) {
-            tight_loop_contents();
-        }
+        tight_loop_contents();
     }
 }
 
@@ -729,8 +706,6 @@ bool video_hstx_init(void) {
     snprintf(s_last_error, sizeof(s_last_error), "%s", "");
     memset(&s_stats, 0, sizeof(s_stats));
     memset(s_framebuf, 0, sizeof(s_framebuf));
-    s_hdmi_pending_frame = NULL;
-    s_hdmi_pending_frame_row = 0u;
     s_hdmi_scanline_stalls = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
@@ -824,8 +799,6 @@ void video_hstx_start(void) {
     s_dma_pong = false;
     s_v_scanline = 2u;
     s_vactive_cmdlist_posted = false;
-    s_hdmi_pending_frame = NULL;
-    s_hdmi_pending_frame_row = 0u;
     s_hdmi_scanline_max_level = 0u;
     hstx_configure_peripheral();
     hstx_configure_dma();
@@ -899,36 +872,6 @@ void video_hstx_submit_scanline(const uint8_t *pixels, uint16_t y) {
 
     ++s_hdmi_scanline_submitted;
     hdmi_expand_scanline_to_framebuf(pixels, y);
-}
-
-void video_hstx_submit_frame_async(const NesFrameBuffer *frame) {
-    if (frame == NULL) {
-        return;
-    }
-
-#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS && \
-    MICRONES_HDMI_AUDIO_CORE1 && !MICRONES_HDMI_TEST_TONE
-    if (s_hdmi_audio_worker_running) {
-        bool stalled = false;
-        while (s_hdmi_pending_frame != NULL) {
-            stalled = true;
-            tight_loop_contents();
-        }
-        if (stalled) {
-            ++s_hdmi_scanline_stalls;
-        }
-        MICRONES_DMB();
-        s_hdmi_pending_frame_row = 0u;
-        s_hdmi_pending_frame = frame;
-        ++s_hdmi_frame_submitted;
-        s_hdmi_scanline_submitted += NES_FRAME_HEIGHT;
-        s_hdmi_scanline_max_level = NES_FRAME_HEIGHT;
-        MICRONES_SEV();
-        return;
-    }
-#endif
-
-    video_hstx_present_frame(frame);
 }
 
 void video_hstx_draw_test_pattern(void) {

@@ -83,7 +83,6 @@ bool emulator_video_adapter_step_frame(PicoEmulatorVideoAdapter *adapter) {
         emulator_video_adapter_set_error(adapter, nes_last_error(&adapter->nes));
         return false;
     }
-    video_hstx_submit_frame_async(nes_framebuffer(&adapter->nes));
     adapter->profile_step_scanline_us_total += time_us_64() - t0;
     ++adapter->rendered_frames;
     adapter->rendered_scanlines += NES_FRAME_HEIGHT;
