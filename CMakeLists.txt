@@ -21,7 +21,7 @@ set(MICRONES_BOARD "breadboard" CACHE STRING "Pico target board: breadboard or v
 set_property(CACHE MICRONES_BOARD PROPERTY STRINGS breadboard v0_1)
 option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic logging" OFF)
 option(MICRONES_HDMI_STDIO_USB "Enable USB CDC stdio for HDMI builds" ON)
-option(MICRONES_HDMI_TEST_TONE "Generate HDMI audio packets from a built-in 440 Hz diagnostic tone" ON)
+option(MICRONES_HDMI_TEST_TONE "Generate HDMI audio packets from a built-in 440 Hz diagnostic tone" OFF)
 
 if (MICRONES_PLATFORM STREQUAL "pico")
     set(PICO_BOARD pico2 CACHE STRING "Target board")
