@@ -67,6 +67,7 @@ static int s_dmach_pong = -1;
  * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
 #define HDMI_AUDIO_PACKET_SLOTS      210u
+#define HDMI_TEST_TONE_PACKET_SLOTS  256u
 #define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
 #define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
 
@@ -178,7 +179,7 @@ static uint32_t __attribute__((aligned(4)))
     s_hdmi_null_island[HDMI_ONE_PACKET_ISLAND_WORDS];
 
 static uint32_t __attribute__((aligned(4)))
-    s_hdmi_irq_audio_island[2][HDMI_ONE_PACKET_ISLAND_WORDS];
+    s_hdmi_test_tone_islands[HDMI_TEST_TONE_PACKET_SLOTS][HDMI_ONE_PACKET_ISLAND_WORDS];
 
 static uint32_t __attribute__((aligned(4)))
     s_hdmi_control_line_buf[HDMI_CONTROL_PACKET_LINES][HDMI_VBLANK_DI_LINE_WORDS];
@@ -398,11 +399,34 @@ static void hdmi_refill_audio_islands(uint32_t buf_idx) {
     s_hdmi_audio_packets_built = built;
 }
 
+static void hdmi_refill_test_tone_islands(void) {
+    uint32_t saved_frame_no = s_hdmi_audio_frame_no;
+    uint32_t saved_phase = s_hdmi_test_tone_phase;
+
+    s_hdmi_audio_frame_no = 0u;
+    s_hdmi_test_tone_phase = 0u;
+    for (uint32_t slot = 0u; slot < HDMI_TEST_TONE_PACKET_SLOTS; ++slot) {
+        HdmiPacket packet;
+        int16_t samples[8];
+        const uint32_t tone_step = (uint32_t)((440ull << 32) / HDMI_AUDIO_SAMPLE_RATE_HZ);
+        for (uint32_t i = 0u; i < 4u; ++i) {
+            int16_t s = (s_hdmi_test_tone_phase & 0x80000000u) ? 12000 : -12000;
+            samples[i * 2u + 0u] = s;
+            samples[i * 2u + 1u] = s;
+            s_hdmi_test_tone_phase += tone_step;
+        }
+        hdmi_pkt_make_audio_sample(&packet, samples, 4u, &s_hdmi_audio_frame_no);
+        hdmi_di_emit_island(&packet, 1u, 1u, 0u, s_hdmi_test_tone_islands[slot]);
+    }
+    s_hdmi_audio_frame_no = saved_frame_no;
+    s_hdmi_test_tone_phase = saved_phase;
+}
+
 static inline void hdmi_audio_scheduler_tick(void) {
     s_hdmi_audio_sample_accum_fp += HDMI_AUDIO_SAMPLES_PER_LINE_FP;
 }
 
-static const uint32_t *hdmi_next_audio_island(uint32_t scratch_idx) {
+static const uint32_t *hdmi_next_audio_island(void) {
     if (s_hdmi_audio_sample_accum_fp < (4u << 16u)) {
         return s_hdmi_null_island;
     }
@@ -410,20 +434,7 @@ static const uint32_t *hdmi_next_audio_island(uint32_t scratch_idx) {
 
     uint32_t cursor = s_hdmi_audio_packet_cursor++;
 #if MICRONES_HDMI_TEST_TONE
-    (void)cursor;
-    HdmiPacket packet;
-    int16_t samples[8];
-    const uint32_t tone_step = (uint32_t)((440ull << 32) / HDMI_AUDIO_SAMPLE_RATE_HZ);
-    for (uint32_t i = 0u; i < 4u; ++i) {
-        int16_t s = (s_hdmi_test_tone_phase & 0x80000000u) ? 12000 : -12000;
-        samples[i * 2u + 0u] = s;
-        samples[i * 2u + 1u] = s;
-        s_hdmi_test_tone_phase += tone_step;
-    }
-    hdmi_pkt_make_audio_sample(&packet, samples, 4u, &s_hdmi_audio_frame_no);
-    hdmi_di_emit_island(&packet, 1u, 1u, 0u,
-                        s_hdmi_irq_audio_island[scratch_idx & 1u]);
-    return s_hdmi_irq_audio_island[scratch_idx & 1u];
+    return s_hdmi_test_tone_islands[cursor & (HDMI_TEST_TONE_PACKET_SLOTS - 1u)];
 #else
     if (cursor < HDMI_AUDIO_PACKET_SLOTS) {
         return s_hdmi_audio_islands[s_hdmi_audio_active_buf][cursor];
@@ -462,7 +473,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
             ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
         } else {
 #if MICRONES_HDMI_AUDIO_PACKETS
-            const uint32_t *island = hdmi_next_audio_island(cmd_buf_idx);
+            const uint32_t *island = hdmi_next_audio_island();
             hdmi_build_vblank_di_line(s_hdmi_vblank_di_line_buf[cmd_buf_idx], island);
             ch->read_addr = (uintptr_t)s_hdmi_vblank_di_line_buf[cmd_buf_idx];
             ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
@@ -477,7 +488,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
 #endif
     } else if (!s_vactive_cmdlist_posted) {
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-        const uint32_t *island = hdmi_next_audio_island(cmd_buf_idx);
+        const uint32_t *island = hdmi_next_audio_island();
         hdmi_build_active_di_line(s_hdmi_active_di_line_buf[cmd_buf_idx], island);
         ch->read_addr = (uintptr_t)s_hdmi_active_di_line_buf[cmd_buf_idx];
         ch->transfer_count = HDMI_ACTIVE_DI_LINE_WORDS;
@@ -648,6 +659,7 @@ bool video_hstx_init(void) {
         HdmiPacket null_pkt;
         hdmi_pkt_make_null(&null_pkt);
         hdmi_di_emit_island(&null_pkt, 1u, 1u, 0u, s_hdmi_null_island);
+        hdmi_refill_test_tone_islands();
         for (uint32_t b = 0u; b < 2u; ++b) {
             for (uint32_t i = 0u; i < HDMI_AUDIO_PACKET_SLOTS; ++i) {
                 memcpy(s_hdmi_audio_islands[b][i], s_hdmi_null_island,
