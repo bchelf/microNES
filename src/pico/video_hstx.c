@@ -67,7 +67,7 @@ static int s_dmach_pong = -1;
  * placed inside the 96-pixel HSYNC pulse. The packet scheduler is driven by
  * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
-#define HDMI_AUDIO_QUEUE_SIZE        256u
+#define HDMI_AUDIO_QUEUE_SIZE        512u
 #define HDMI_SILENCE_PACKET_SLOTS   48u  /* 48 packets × 4 samples = 192 frames */
 #define HDMI_TEST_TONE_PACKET_SLOTS  300u /* 1200 samples = 11 cycles at 440 Hz */
 #define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
