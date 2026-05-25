@@ -401,18 +401,18 @@ vertical blanking.
 ### VBI scheduling
 
 Audio islands are double-buffered at the HDMI frame cadence, not the NES
-frame cadence. The DMA ISR swaps in a ready buffer only at the 60 Hz
+frame cadence. The DMA ISR swaps in a ready buffer only at the 75 Hz
 frame boundary; foreground code calls `video_hstx_hdmi_audio_service()`
 during HDMI idle time and after PCM pushes to refill the inactive buffer
 from the PCM ring. The DMA ISR snapshots the active index once per
 scanline.
 
 - Control island: scanline 12, carries AVI InfoFrame + Audio InfoFrame +
-  General Control Packet (clears AVMUTE) + ACR (N=6144, CTS=25000).
-- Audio sample packets: scanlines 13–37 (25 lines × 8 packets/line × 4
-  stereo frames/packet = 800 frames/video-frame). At 60 Hz this consumes
+  General Control Packet (clears AVMUTE) + ACR (N=6144, CTS=31500).
+- Audio sample packets: scanlines 13–32 (20 lines × 8 packets/line × 4
+  stereo frames/packet = 640 frames/video-frame). At 75 Hz this consumes
   48 kHz exactly.
-- Lines 38–44 stay plain VBI as a buffer before the next active region.
+- Lines 33–44 stay plain VBI as a buffer before the next active region.
 
 Per-line cmd layout (audio VBI line, 276 words total):
 - HFP repeat 16, HSYNC repeat 96, RAW island (268 words), post-HSYNC
@@ -441,10 +441,10 @@ Pure DVI sinks tolerate these symbols as benign control codewords.
 
 ### Memory budget
 
-- 2 × 25 × 276 × 4 B = ~54 KB for audio VBI buffers (double-buffered)
+- 2 × 20 × 276 × 4 B = ~43 KB for audio VBI buffers (double-buffered)
 - 148 × 4 B ≈ 0.6 KB for the control VBI buffer
 - 2048 stereo frames × 4 B = 8 KB for the PCM ring
-- Total: ~62 KB extra static SRAM on the HDMI target.
+- Total: ~52 KB extra static SRAM on the HDMI target.
 
 ### Diagnostics (`pico_audio_backend_*`)
 
@@ -454,9 +454,9 @@ backend so existing diag printouts in `main.c` work unchanged:
   (samples are padded with the last good value).
 - `overrun_count` increments when `push_samples` evicts an old frame.
 - `buffer_level` returns the current stereo-frame count in the ring.
-- `refills` in the HSTX log should advance near 60/sec while HDMI is
+- `refills` in the HSTX log should advance near 75/sec while HDMI is
   running.
-- `missed` increments when a 60 Hz frame boundary arrives before the
+- `missed` increments when a 75 Hz frame boundary arrives before the
   inactive audio island buffer has been refilled; it should remain near
   zero after startup.
 
@@ -465,15 +465,14 @@ backend so existing diag printouts in `main.c` work unchanged:
 - BCH poly (0xAB vs 0x83): if AVI InfoFrame doesn't take, flip the
   constant. Host test prints the computed ECC so it can be compared
   against an external trace.
-- Pixel clock is 25 MHz: HDMI builds run PLL_SYS output at 375 MHz,
-  divide clk_sys back to 315 MHz for the emulator, and source clk_hstx
-  from PLL_SYS / 3 = 125 MHz. HSTX CLKDIV=5 gives the 25 MHz pixel
-  clock. This avoids the old fractional clk_sys/2.52 HSTX divider that
-  corrupts TERC4 data islands.
+- Pixel clock is 31.5 MHz: clk_sys=315 MHz, clk_hstx=157.5 MHz
+  (integer /2 divider), HSTX CLKDIV=5. This gives an 800×525 total at
+  75 Hz and avoids the fractional clk_hstx jitter that corrupts TERC4
+  data islands.
 - USB stdio stays enabled by default. HSTX no longer reconfigures or
   borrows pll_usb, so pll_usb remains available for CDC ACM debugging.
 - Sample-rate drift: HDMI consumes exactly 48,000 stereo frames/sec
-  (60 × 800). The NES APU production cadence is close but not identical;
+  (75 × 640). The NES APU production cadence is close but not identical;
   small drift is handled by the circular-overwrite ring policy.
 
 ## ESP32-S3 Implementation Notes

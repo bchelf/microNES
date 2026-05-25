@@ -3,7 +3,6 @@
 #include "emulator_video_adapter.h"
 #include "frame_pacer.h"
 #include "hardware/clocks.h"
-#include "hardware/pll.h"
 #include "hardware/vreg.h"
 #include "pico_audio_backend.h"
 #include "pico_time.h"
@@ -108,25 +107,7 @@ int main(void) {
      *   157.5 MHz: PLL 1260/(4×2), VREG 1.10 V, clkdiv=1.0 → 157.5M/11 = 14.318 MHz */
     vreg_set_voltage(MICRONES_VREG);
     sleep_ms(MICRONES_VREG_SETTLE_MS);
-    if (MICRONES_PLL_OUTPUT_HZ != MICRONES_SYS_CLOCK_HZ) {
-        clock_configure_undivided(clk_sys,
-                        CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,
-                        CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,
-                        USB_CLK_HZ);
-        pll_init(pll_sys, PLL_SYS_REFDIV,
-                 MICRONES_PLL_VCO_HZ, MICRONES_PLL_DIV1, MICRONES_PLL_DIV2);
-        clock_configure_undivided(clk_ref,
-                        CLOCKS_CLK_REF_CTRL_SRC_VALUE_XOSC_CLKSRC,
-                        0,
-                        XOSC_HZ);
-        clock_configure(clk_sys,
-                        CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,
-                        CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
-                        MICRONES_PLL_OUTPUT_HZ,
-                        MICRONES_SYS_CLOCK_HZ);
-    } else {
-        set_sys_clock_pll(MICRONES_PLL_VCO_HZ, MICRONES_PLL_DIV1, MICRONES_PLL_DIV2);
-    }
+    set_sys_clock_pll(MICRONES_PLL_VCO_HZ, MICRONES_PLL_DIV1, MICRONES_PLL_DIV2);
 
     /* Explicitly re-configure clk_peri to follow the sys PLL at the new frequency.
      *
@@ -147,9 +128,10 @@ int main(void) {
      * This is safe for the analog target too: analog uses PIO (clk_sys, not clk_peri)
      * and PWM (clk_sys).  No peripheral that the analog path uses is clk_peri-gated. */
     {
+        const uint32_t sys_hz = MICRONES_PLL_VCO_HZ / (MICRONES_PLL_DIV1 * MICRONES_PLL_DIV2);
         clock_configure(clk_peri, 0,
-                        CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS,
-                        MICRONES_SYS_CLOCK_HZ, MICRONES_SYS_CLOCK_HZ);
+                        CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
+                        sys_hz, sys_hz);
     }
 
     stdio_init_all();

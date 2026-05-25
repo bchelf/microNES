@@ -422,7 +422,6 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 MICRONES_PICO_VIDEO_BACKEND_HDMI=1
                 MICRONES_BOARD_V0_1=1
                 MICRONES_SYS_CLK_MHZ=315
-                MICRONES_HDMI_PLL_SYS_375=1
             )
             # HDMI bring-up bisect switches (default to full HDMI mode):
             #   -DMICRONES_HDMI_DATA_ISLANDS=OFF   -> pure DVI in blanking
