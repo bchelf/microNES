@@ -178,6 +178,9 @@ static uint32_t __attribute__((aligned(4)))
     s_hdmi_null_island[HDMI_ONE_PACKET_ISLAND_WORDS];
 
 static uint32_t __attribute__((aligned(4)))
+    s_hdmi_irq_audio_island[2][HDMI_ONE_PACKET_ISLAND_WORDS];
+
+static uint32_t __attribute__((aligned(4)))
     s_hdmi_control_line_buf[HDMI_CONTROL_PACKET_LINES][HDMI_VBLANK_DI_LINE_WORDS];
 
 static uint32_t __attribute__((aligned(4)))
@@ -399,17 +402,34 @@ static inline void hdmi_audio_scheduler_tick(void) {
     s_hdmi_audio_sample_accum_fp += HDMI_AUDIO_SAMPLES_PER_LINE_FP;
 }
 
-static const uint32_t *hdmi_next_audio_island(void) {
+static const uint32_t *hdmi_next_audio_island(uint32_t scratch_idx) {
     if (s_hdmi_audio_sample_accum_fp < (4u << 16u)) {
         return s_hdmi_null_island;
     }
     s_hdmi_audio_sample_accum_fp -= (4u << 16u);
 
     uint32_t cursor = s_hdmi_audio_packet_cursor++;
+#if MICRONES_HDMI_TEST_TONE
+    (void)cursor;
+    HdmiPacket packet;
+    int16_t samples[8];
+    const uint32_t tone_step = (uint32_t)((440ull << 32) / HDMI_AUDIO_SAMPLE_RATE_HZ);
+    for (uint32_t i = 0u; i < 4u; ++i) {
+        int16_t s = (s_hdmi_test_tone_phase & 0x80000000u) ? 12000 : -12000;
+        samples[i * 2u + 0u] = s;
+        samples[i * 2u + 1u] = s;
+        s_hdmi_test_tone_phase += tone_step;
+    }
+    hdmi_pkt_make_audio_sample(&packet, samples, 4u, &s_hdmi_audio_frame_no);
+    hdmi_di_emit_island(&packet, 1u, 1u, 0u,
+                        s_hdmi_irq_audio_island[scratch_idx & 1u]);
+    return s_hdmi_irq_audio_island[scratch_idx & 1u];
+#else
     if (cursor < HDMI_AUDIO_PACKET_SLOTS) {
         return s_hdmi_audio_islands[s_hdmi_audio_active_buf][cursor];
     }
     return s_hdmi_null_island;
+#endif
 }
 
 #endif /* MICRONES_HDMI_DATA_ISLANDS */
@@ -442,7 +462,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
             ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
         } else {
 #if MICRONES_HDMI_AUDIO_PACKETS
-            const uint32_t *island = hdmi_next_audio_island();
+            const uint32_t *island = hdmi_next_audio_island(cmd_buf_idx);
             hdmi_build_vblank_di_line(s_hdmi_vblank_di_line_buf[cmd_buf_idx], island);
             ch->read_addr = (uintptr_t)s_hdmi_vblank_di_line_buf[cmd_buf_idx];
             ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
@@ -457,7 +477,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
 #endif
     } else if (!s_vactive_cmdlist_posted) {
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-        const uint32_t *island = hdmi_next_audio_island();
+        const uint32_t *island = hdmi_next_audio_island(cmd_buf_idx);
         hdmi_build_active_di_line(s_hdmi_active_di_line_buf[cmd_buf_idx], island);
         ch->read_addr = (uintptr_t)s_hdmi_active_di_line_buf[cmd_buf_idx];
         ch->transfer_count = HDMI_ACTIVE_DI_LINE_WORDS;
@@ -479,6 +499,9 @@ static void __scratch_x("") hstx_dma_irq(void) {
         if (s_v_scanline == 0u) {
             ++s_stats.frames_presented;
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+#if MICRONES_HDMI_TEST_TONE
+            s_hdmi_audio_packet_cursor = 0u;
+#else
             if (s_hdmi_audio_ready) {
                 uint8_t old_buf = s_hdmi_audio_active_buf;
                 s_hdmi_audio_active_buf = s_hdmi_audio_ready_buf;
@@ -489,6 +512,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
                 ++s_hdmi_audio_missed_swaps;
             }
             s_hdmi_audio_packet_cursor = 0u;
+#endif
 #endif
         }
     }
@@ -786,6 +810,9 @@ void video_hstx_print_diag(void) {
 
 void video_hstx_hdmi_audio_service(void) {
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+#if MICRONES_HDMI_TEST_TONE
+    return;
+#else
     if (!s_hdmi_audio_refill_pending || s_hdmi_audio_ready) {
         return;
     }
@@ -801,6 +828,7 @@ void video_hstx_hdmi_audio_service(void) {
         ++s_hdmi_audio_refills;
     }
     restore_interrupts(save);
+#endif
 #endif
 }
 
