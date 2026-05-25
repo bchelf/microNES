@@ -71,11 +71,6 @@ static int s_dmach_pong = -1;
 
 #define HDMI_CONTROL_PACKETS         4u   /* AVI + Audio IF + GCP + ACR */
 
-/* Number of frames of pure DVI output before we start injecting data
- * islands. Gives the sink's TMDS PLL time to lock to sync before it sees
- * non-control TERC4 codewords. 60 frames ≈ 1 second. */
-#define HDMI_DI_STARTUP_DELAY_FRAMES 60u
-
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
 /* CTS = TMDS_clock_Hz * N / (128 * fs). For 25 MHz pixel: 25e6 * 6144 /
@@ -355,12 +350,8 @@ static void __scratch_x("") hstx_dma_irq(void) {
     dma_hw->intr = 1u << ch_num;
     s_dma_pong = !s_dma_pong;
 
-    /* Let the TV's TMDS PLL lock to pure DVI for several frames before we
-     * start injecting data islands. Without this grace period some sinks
-     * see TERC4 before they've locked and treat the islands as pixel data. */
 #if MICRONES_HDMI_DATA_ISLANDS
     uint8_t audio_buf = s_hdmi_audio_active_buf;
-    bool islands_active = (s_stats.frames_presented >= HDMI_DI_STARTUP_DELAY_FRAMES);
 #endif
 
     if (s_v_scanline >= MODE_V_FRONT_PORCH &&
@@ -369,13 +360,12 @@ static void __scratch_x("") hstx_dma_irq(void) {
         ch->transfer_count = count_of(s_vblank_line_vsync_on);
     } else if (s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH) {
 #if MICRONES_HDMI_DATA_ISLANDS
-        if (islands_active && s_v_scanline == HDMI_CONTROL_VBI_LINE) {
+        if (s_v_scanline == HDMI_CONTROL_VBI_LINE) {
             ch->read_addr = (uintptr_t)s_hdmi_control_line_buf;
             ch->transfer_count = HDMI_CONTROL_LINE_WORDS;
         }
 #if MICRONES_HDMI_AUDIO_PACKETS
-        else if (islands_active &&
-                 s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
+        else if (s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
                  s_v_scanline <= HDMI_AUDIO_LAST_VBI_LINE) {
             uint32_t line_idx = s_v_scanline - HDMI_AUDIO_FIRST_VBI_LINE;
             ch->read_addr = (uintptr_t)&s_hdmi_audio_line_buf[audio_buf][line_idx][0];
