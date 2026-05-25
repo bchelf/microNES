@@ -6,7 +6,6 @@
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
-#include "hardware/pll.h"
 #include "hardware/sync.h"
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
@@ -52,16 +51,19 @@ static int s_dmach_pong = -1;
 #define NES_SCALE 2u
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
-#define HSTX_PIXEL_CLOCK_HZ 125000000u
+
+#define HSTX_INTERNAL_CLKDIV 5u
+#define HDMI_HSTX_CLOCK_HZ   157500000u
+#define HDMI_PIXEL_CLOCK_HZ  (HDMI_HSTX_CLOCK_HZ / HSTX_INTERNAL_CLKDIV)
 
 /* --- HDMI audio scheduler tunables ------------------------------------- */
 
-/* 8 audio sample packets per data island × 25 lines = 200 packets/frame.
- * At 4 stereo samples per ASP, that's 800 frames/video-frame which matches
- * 48 kHz / 60 Hz exactly.
+/* 8 audio sample packets per data island × 20 lines = 160 packets/frame.
+ * At 4 stereo samples per ASP, that's 640 frames/video-frame. With the
+ * 31.5 MHz / 800 / 525 HDMI mode this is 640 × 75 Hz = 48 kHz exactly.
  */
 #define HDMI_AUDIO_PACKETS_PER_LINE 8u
-#define HDMI_AUDIO_LINES            25u
+#define HDMI_AUDIO_LINES            20u
 /* The control island (AVI + Audio InfoFrame + GCP + ACR) goes on the FIRST
  * line of V_BP — most TVs sample InfoFrames within a few lines of VSYNC and
  * give up on the link if they don't see them early. Audio sample packets
@@ -74,7 +76,7 @@ static int s_dmach_pong = -1;
 
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
-#define HDMI_AUDIO_CTS_VALUE         25000u  /* for 25 MHz pixel clock */
+#define HDMI_AUDIO_CTS_VALUE         31500u  /* for 31.5 MHz pixel clock */
 
 /* Full island = preamble(8) + guard(2) + packets + guard(2), all in one RAW. */
 #define HDMI_AUDIO_ISLAND_WORDS \
@@ -405,27 +407,14 @@ static void __scratch_x("") hstx_dma_irq(void) {
 }
 
 static void hstx_configure_peripheral(void) {
-    /* Source clk_hstx from pll_usb reconfigured to exactly 125 MHz.
-     * The fractional divider from clk_sys (315/2.52) produces jitter that
-     * corrupts TERC4 data island decoding — video survives but audio doesn't.
-     *
-     * pll_usb is free when USB stdio is disabled (the default for HDMI).
-     * When USB stdio IS enabled, fall back to clk_sys fractional divider
-     * (audio won't work but video + diagnostics will).
-     *
-     * PLL config: XTAL 12 MHz × fbdiv 125 = VCO 1500 MHz / (6×2) = 125 MHz.
-     * Must deinit first since the SDK initializes pll_usb to 48 MHz at boot. */
-#if !MICRONES_HDMI_STDIO_USB_ENABLED
-    pll_deinit(pll_usb);
-    pll_init(pll_usb, 1u, 1500u * MHZ, 6u, 2u);
-    clock_configure(clk_hstx, 0,
-                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,
-                    125u * MHZ, HSTX_PIXEL_CLOCK_HZ);
-#else
+    /* Keep pll_usb at the SDK's USB-safe 48 MHz and derive HSTX from the
+     * 315 MHz system clock with an integer divider. The old 315/2.52 divider
+     * produced bit-level jitter that video tolerated but HDMI data islands
+     * did not. clk_hstx=157.5 MHz and HSTX CSR CLKDIV=5 gives a clean
+     * 31.5 MHz pixel clock, i.e. 800x525 at 75 Hz. */
     clock_configure(clk_hstx, 0,
                     CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
-                    clock_get_hz(clk_sys), HSTX_PIXEL_CLOCK_HZ);
-#endif
+                    clock_get_hz(clk_sys), HDMI_HSTX_CLOCK_HZ);
 
     hstx_ctrl_hw->expand_tmds =
         2  << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB |
@@ -444,7 +433,7 @@ static void hstx_configure_peripheral(void) {
     hstx_ctrl_hw->csr = 0u;
     hstx_ctrl_hw->csr =
         HSTX_CTRL_CSR_EXPAND_EN_BITS |
-        5u << HSTX_CTRL_CSR_CLKDIV_LSB |
+        HSTX_INTERNAL_CLKDIV << HSTX_CTRL_CSR_CLKDIV_LSB |
         5u << HSTX_CTRL_CSR_N_SHIFTS_LSB |
         2u << HSTX_CTRL_CSR_SHIFT_LSB |
         HSTX_CTRL_CSR_EN_BITS;

@@ -20,6 +20,7 @@ set_property(CACHE MICRONES_APU_ENGINE PROPERTY STRINGS micrones infones)
 set(MICRONES_BOARD "breadboard" CACHE STRING "Pico target board: breadboard or v0_1")
 set_property(CACHE MICRONES_BOARD PROPERTY STRINGS breadboard v0_1)
 option(MICRONES_ENABLE_PERF_LOG "Enable per-second performance/audio diagnostic logging" OFF)
+option(MICRONES_HDMI_STDIO_USB "Enable USB CDC stdio for HDMI builds" ON)
 
 if (MICRONES_PLATFORM STREQUAL "pico")
     set(PICO_BOARD pico2 CACHE STRING "Target board")
@@ -399,9 +400,9 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
                 )
             endif ()
         elseif (backend_name STREQUAL "hdmi")
-            # Default: silence USB+UART so HDMI doesn't share resources with
-            # stdio. Set -DMICRONES_HDMI_STDIO_USB=ON for a CDC ACM serial
-            # console (open /dev/ttyACM0 at any baud) for bring-up debugging.
+            # Default: keep USB CDC stdio enabled for HDMI bring-up/debugging.
+            # HSTX no longer borrows pll_usb, so USB can stay on while audio
+            # uses an integer-derived clk_sys/2 HSTX clock.
             if (MICRONES_HDMI_STDIO_USB)
                 pico_enable_stdio_usb(${target_name} 1)
                 target_compile_definitions(${target_name} PRIVATE MICRONES_HDMI_STDIO_USB_ENABLED=1)

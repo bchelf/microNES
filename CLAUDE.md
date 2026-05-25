@@ -404,11 +404,12 @@ Each NES frame's audio islands are double-buffered. `present_frame()`
 refills the inactive buffer from the PCM ring then flips a single byte
 to swap. The DMA ISR snapshots the active index once per scanline.
 
-- Audio sample packets: scanlines 12–36 (25 lines × 8 packets/line × 4
-  stereo frames/packet = 800 frames/video-frame = 48 kHz exactly).
-- Control island: scanline 37, carries AVI InfoFrame + Audio InfoFrame +
-  General Control Packet (clears AVMUTE) + ACR (N=6144, CTS=25000).
-- Lines 38–44 stay plain VBI as a buffer before the next active region.
+- Control island: scanline 12, carries AVI InfoFrame + Audio InfoFrame +
+  General Control Packet (clears AVMUTE) + ACR (N=6144, CTS=31500).
+- Audio sample packets: scanlines 13–32 (20 lines × 8 packets/line × 4
+  stereo frames/packet = 640 frames/video-frame). At 75 Hz this consumes
+  48 kHz exactly.
+- Lines 33–44 stay plain VBI as a buffer before the next active region.
 
 Per-line cmd layout (audio VBI line, 276 words total):
 - HFP repeat 16, HSYNC repeat 96, RAW island (268 words), post-HSYNC
@@ -437,10 +438,10 @@ Pure DVI sinks tolerate these symbols as benign control codewords.
 
 ### Memory budget
 
-- 2 × 25 × 276 × 4 B = ~54 KB for audio VBI buffers (double-buffered)
+- 2 × 20 × 276 × 4 B = ~43 KB for audio VBI buffers (double-buffered)
 - 148 × 4 B ≈ 0.6 KB for the control VBI buffer
 - 2048 stereo frames × 4 B = 8 KB for the PCM ring
-- Total: ~62 KB extra static SRAM on the HDMI target.
+- Total: ~52 KB extra static SRAM on the HDMI target.
 
 ### Diagnostics (`pico_audio_backend_*`)
 
@@ -456,13 +457,15 @@ backend so existing diag printouts in `main.c` work unchanged:
 - BCH poly (0xAB vs 0x83): if AVI InfoFrame doesn't take, flip the
   constant. Host test prints the computed ECC so it can be compared
   against an external trace.
-- Pixel clock 25 MHz (we run clk_sys=250/clk_hstx=125/CLKDIV=5) vs
-  25.175 MHz VGA standard. Sinks typically tolerate this; if a sink
-  refuses to lock, ACR's CTS=25000 should still match what the sink
-  recovers from the link.
-- Sample-rate drift: NES outputs ~60.099 Hz × 800 ≈ 48,079 samples/sec,
-  HDMI consumes 48,000 — small excess handled by the circular-overwrite
-  ring policy. Same trade-off as the MAX98357 backend.
+- Pixel clock is 31.5 MHz: clk_sys=315 MHz, clk_hstx=157.5 MHz
+  (integer /2 divider), HSTX CLKDIV=5. This gives an 800×525 total at
+  75 Hz and avoids the fractional clk_hstx jitter that corrupts TERC4
+  data islands.
+- USB stdio stays enabled by default. HSTX no longer reconfigures or
+  borrows pll_usb, so pll_usb remains available for CDC ACM debugging.
+- Sample-rate drift: HDMI consumes exactly 48,000 stereo frames/sec
+  (75 × 640). The NES APU production cadence is close but not identical;
+  small drift is handled by the circular-overwrite ring policy.
 
 ## ESP32-S3 Implementation Notes
 
