@@ -12,6 +12,7 @@
 #include "hardware/structs/hstx_fifo.h"
 #include "pico/time.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -402,25 +403,22 @@ static void hdmi_refill_audio_islands(uint32_t buf_idx) {
 
 static void hdmi_refill_test_tone_islands(void) {
     uint32_t saved_frame_no = s_hdmi_audio_frame_no;
-    uint32_t saved_phase = s_hdmi_test_tone_phase;
 
     s_hdmi_audio_frame_no = 0u;
-    s_hdmi_test_tone_phase = 0u;
     for (uint32_t slot = 0u; slot < HDMI_TEST_TONE_PACKET_SLOTS; ++slot) {
         HdmiPacket packet;
         int16_t samples[8];
-        const uint32_t tone_step = (uint32_t)((440ull << 32) / HDMI_AUDIO_SAMPLE_RATE_HZ);
         for (uint32_t i = 0u; i < 4u; ++i) {
-            int16_t s = (s_hdmi_test_tone_phase & 0x80000000u) ? 12000 : -12000;
+            uint32_t sample_idx = (slot * 4u) + i;
+            float angle = ((float)sample_idx * 11.0f * 2.0f * 3.14159265358979323846f) / 1200.0f;
+            int16_t s = (int16_t)(sinf(angle) * 10000.0f);
             samples[i * 2u + 0u] = s;
             samples[i * 2u + 1u] = s;
-            s_hdmi_test_tone_phase += tone_step;
         }
         hdmi_pkt_make_audio_sample(&packet, samples, 4u, &s_hdmi_audio_frame_no);
         hdmi_di_emit_island(&packet, 1u, 1u, 0u, s_hdmi_test_tone_islands[slot]);
     }
     s_hdmi_audio_frame_no = saved_frame_no;
-    s_hdmi_test_tone_phase = saved_phase;
 }
 
 static inline void hdmi_audio_scheduler_tick(void) {
@@ -878,6 +876,11 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
 size_t video_hstx_hdmi_audio_push(const int16_t *samples,
                                   size_t count) {
 #if MICRONES_HDMI_DATA_ISLANDS
+#if MICRONES_HDMI_TEST_TONE
+    (void)samples;
+    (void)count;
+    return 0u;
+#else
     if (samples == NULL || count == 0u) {
         return 0u;
     }
@@ -898,6 +901,7 @@ size_t video_hstx_hdmi_audio_push(const int16_t *samples,
         ++written;
     }
     return written;
+#endif
 #else
     (void)samples;
     return count;
