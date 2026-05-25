@@ -294,18 +294,15 @@ void hdmi_pkt_make_avi_infoframe(HdmiPacket *pkt) {
 }
 
 void hdmi_pkt_make_audio_infoframe(HdmiPacket *pkt) {
-    /* Audio InfoFrame version 1, body length 10 (CEA-861-F §6.6). */
+    /* Audio InfoFrame version 1, body length 10 (CEA-861-F §6.6).
+     * Matches pico_hdmi: explicit CT/SF/SS instead of "refer to stream." */
     uint8_t body[10];
     memset(body, 0, sizeof(body));
-    /* Byte 1: CT[7:4]=0 (refer to stream), CC[2:0]=1 (2ch). */
-    body[0] = 0x01u;
-    /* Byte 2: SF[4:2]=0 (refer to stream), SS[1:0]=0 (refer to stream). */
-    body[1] = 0x00u;
-    /* Byte 3: format-dependent, zero for PCM. */
-    body[2] = 0x00u;
-    /* Byte 4: CA = 0x00 (FL,FR). */
-    body[3] = 0x00u;
-    /* Bytes 5..10: zero. */
+    /* Byte 1: CT[7:4]=1 (PCM), CC[2:0]=1 (2 channels). */
+    body[0] = (uint8_t)(0x01u | (0x01u << 4));
+    /* Byte 2: SF[4:2]=3 (48 kHz), SS[1:0]=1 (16 bit). */
+    body[1] = (uint8_t)(0x01u | (0x03u << 2));
+    /* Byte 3..10: zero. */
     pack_infoframe(pkt, HDMI_PKT_TYPE_INFOFRAME_AUDIO, 1u, 10u, body);
 }
 
@@ -367,15 +364,9 @@ void hdmi_pkt_make_audio_sample(HdmiPacket *pkt,
         sb[4] = (uint8_t)(r & 0xFFu);
         sb[5] = (uint8_t)((r >> 8) & 0xFFu);
 
-        /* Byte 6: V, U, C, P per channel (IEC-60958).
-         *   bit 0: ch0 V (validity; 0 = valid LPCM)
-         *   bit 1: ch0 U (user data; 0)
-         *   bit 2: ch0 C (channel status bit for this frame)
-         *   bit 3: ch0 P (even parity over data + V + U + C)
-         *   bits 4..7: same for ch1 */
-        uint8_t c_bit = iec60958_channel_status_bit(*frame_no + s);
-
-        uint8_t parity_l = c_bit, parity_r = c_bit;
+        /* Byte 6: V, U, C, P per channel.
+         * Match pico_hdmi: V=U=C=0; parity over data bytes only. */
+        uint8_t parity_l = 0u, parity_r = 0u;
         for (uint32_t i = 0u; i < 3u; ++i) {
             uint8_t bl = sb[i];
             uint8_t br = sb[3u + i];
@@ -384,8 +375,7 @@ void hdmi_pkt_make_audio_sample(HdmiPacket *pkt,
                 parity_r ^= (uint8_t)((br >> b) & 1u);
             }
         }
-        sb[6] = (uint8_t)((c_bit << 2) | (parity_l << 3) |
-                           (c_bit << 6) | (parity_r << 7));
+        sb[6] = (uint8_t)((parity_l << 3) | (parity_r << 7));
     }
     *frame_no = *frame_no + nsamples;
 }
