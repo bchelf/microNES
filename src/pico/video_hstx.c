@@ -67,7 +67,7 @@ static int s_dmach_pong = -1;
  * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
 #define HDMI_AUDIO_PACKET_SLOTS      210u
-#define HDMI_TEST_TONE_PACKET_SLOTS  256u
+#define HDMI_TEST_TONE_PACKET_SLOTS  300u /* 1200 samples = 11 cycles at 440 Hz */
 #define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
 #define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
 
@@ -199,6 +199,7 @@ static volatile uint32_t s_hdmi_audio_refills;
 static volatile uint32_t s_hdmi_audio_missed_swaps;
 static volatile uint32_t s_hdmi_audio_packets_built;
 static uint32_t s_hdmi_audio_packet_cursor;
+static uint32_t s_hdmi_test_tone_packet_cursor;
 static uint32_t s_hdmi_audio_sample_accum_fp;
 
 /* PCM ring drained when assembling audio sample packets. Stereo frames. */
@@ -434,7 +435,12 @@ static const uint32_t *hdmi_next_audio_island(void) {
 
     uint32_t cursor = s_hdmi_audio_packet_cursor++;
 #if MICRONES_HDMI_TEST_TONE
-    return s_hdmi_test_tone_islands[cursor & (HDMI_TEST_TONE_PACKET_SLOTS - 1u)];
+    (void)cursor;
+    uint32_t tone_cursor = s_hdmi_test_tone_packet_cursor++;
+    if (s_hdmi_test_tone_packet_cursor >= HDMI_TEST_TONE_PACKET_SLOTS) {
+        s_hdmi_test_tone_packet_cursor = 0u;
+    }
+    return s_hdmi_test_tone_islands[tone_cursor];
 #else
     if (cursor < HDMI_AUDIO_PACKET_SLOTS) {
         return s_hdmi_audio_islands[s_hdmi_audio_active_buf][cursor];
@@ -643,6 +649,7 @@ bool video_hstx_init(void) {
     s_hdmi_audio_missed_swaps = 0u;
     s_hdmi_audio_packets_built = 0u;
     s_hdmi_audio_packet_cursor = 0u;
+    s_hdmi_test_tone_packet_cursor = 0u;
     s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_test_tone_phase = 0u;
@@ -859,6 +866,7 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     s_hdmi_audio_missed_swaps = 0u;
     s_hdmi_audio_packets_built = 0u;
     s_hdmi_audio_packet_cursor = 0u;
+    s_hdmi_test_tone_packet_cursor = 0u;
     s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_test_tone_phase = 0u;
