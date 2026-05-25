@@ -204,6 +204,8 @@ int main(void) {
 #if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
             if (time_us_64() >= next_diag_us) {
                 video_hstx_print_diag();
+                printf("[audio] apu_avail=%u\n",
+                       (unsigned)nes_audio_available_samples(&emulator_video.nes));
                 next_diag_us = time_us_64() + 5000000ull;
             }
 #endif
