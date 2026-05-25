@@ -83,7 +83,6 @@ static int s_dmach_pong = -1;
     (MODE_H_SYNC_WIDTH - HDMI_DI_PREAMBLE_PIXELS - HDMI_ONE_PACKET_ISLAND_WORDS)
 #define HDMI_AUDIO_SAMPLES_PER_LINE_FP \
     ((uint32_t)((((uint64_t)HDMI_AUDIO_SAMPLE_RATE_HZ * MODE_H_TOTAL_PIXELS) << 16u) / HDMI_PIXEL_CLOCK_HZ))
-#define HDMI_AUDIO_MAX_ACCUM_FP      (8u << 16u)
 
 #define HDMI_VBLANK_DI_LINE_WORDS \
     (2u + 1u + 2u + 1u + 1u + HDMI_ONE_PACKET_ISLAND_WORDS + 1u + 2u + 1u + 2u + 1u)
@@ -418,9 +417,6 @@ static void hdmi_build_silence_islands(void) {
 
 static inline void hdmi_audio_scheduler_tick(void) {
     s_hdmi_audio_sample_accum_fp += HDMI_AUDIO_SAMPLES_PER_LINE_FP;
-    if (s_hdmi_audio_sample_accum_fp > HDMI_AUDIO_MAX_ACCUM_FP) {
-        s_hdmi_audio_sample_accum_fp = HDMI_AUDIO_MAX_ACCUM_FP;
-    }
 }
 
 static const uint32_t *hdmi_next_audio_island(void) {
