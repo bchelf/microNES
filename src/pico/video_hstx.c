@@ -68,6 +68,8 @@ static int s_dmach_pong = -1;
  * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
 #define HDMI_AUDIO_QUEUE_SIZE        256u
+#define HDMI_AUDIO_QUEUE_TARGET      160u
+#define HDMI_AUDIO_SERVICE_BUDGET    32u
 #define HDMI_TEST_TONE_PACKET_SLOTS  300u /* 1200 samples = 11 cycles at 440 Hz */
 #define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
 #define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
@@ -802,7 +804,9 @@ void video_hstx_hdmi_audio_service(void) {
 #if MICRONES_HDMI_TEST_TONE
     return;
 #else
-    while (hdmi_audio_queue_level() < (HDMI_AUDIO_QUEUE_SIZE - 16u) &&
+    uint32_t built = 0u;
+    while (built < HDMI_AUDIO_SERVICE_BUDGET &&
+           hdmi_audio_queue_level() < HDMI_AUDIO_QUEUE_TARGET &&
            hdmi_pcm_available_frames() >= 4u) {
         uint32_t head = s_hdmi_audio_queue_head;
         uint32_t next = (head + 1u) & (HDMI_AUDIO_QUEUE_SIZE - 1u);
@@ -820,6 +824,7 @@ void video_hstx_hdmi_audio_service(void) {
         hdmi_di_emit_island(&packet, 1u, 1u, 0u, s_hdmi_audio_queue[head]);
         s_hdmi_audio_queue_head = next;
         ++s_hdmi_audio_refills;
+        ++built;
     }
 #endif
 #endif
