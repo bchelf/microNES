@@ -68,6 +68,8 @@ static int s_dmach_pong = -1;
  * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
 #define HDMI_AUDIO_QUEUE_SIZE        256u
+#define HDMI_AUDIO_QUEUE_TARGET      192u
+#define HDMI_AUDIO_SERVICE_BUDGET    8u
 #define HDMI_TEST_TONE_PACKET_SLOTS  300u /* 1200 samples = 11 cycles at 440 Hz */
 #define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
 #define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
@@ -201,6 +203,8 @@ static volatile uint32_t s_hdmi_audio_queue_tail;
 static uint32_t s_hdmi_audio_packet_cursor;
 static uint32_t s_hdmi_test_tone_packet_cursor;
 static uint32_t s_hdmi_audio_sample_accum_fp;
+static int16_t s_hdmi_audio_last_l;
+static int16_t s_hdmi_audio_last_r;
 
 /* PCM ring drained when assembling audio sample packets. Stereo frames. */
 #define HDMI_PCM_RING_FRAMES 2048u  /* must be a power of two */
@@ -366,10 +370,14 @@ static void hdmi_pull_stereo_samples(int16_t out[8], uint32_t want_frames,
         out[i * 2u + 0u] = s_hdmi_pcm_ring[idx * 2u + 0u];
         out[i * 2u + 1u] = s_hdmi_pcm_ring[idx * 2u + 1u];
     }
+    if (take > 0u) {
+        s_hdmi_audio_last_l = out[(take - 1u) * 2u + 0u];
+        s_hdmi_audio_last_r = out[(take - 1u) * 2u + 1u];
+    }
     /* If under-running, pad with the last sample (or zero if buffer empty). */
     if (take < want_frames) {
-        int16_t pad_l = take ? out[(take - 1u) * 2u + 0u] : 0;
-        int16_t pad_r = take ? out[(take - 1u) * 2u + 1u] : 0;
+        int16_t pad_l = take ? out[(take - 1u) * 2u + 0u] : s_hdmi_audio_last_l;
+        int16_t pad_r = take ? out[(take - 1u) * 2u + 1u] : s_hdmi_audio_last_r;
         for (uint32_t i = take; i < want_frames; ++i) {
             out[i * 2u + 0u] = pad_l;
             out[i * 2u + 1u] = pad_r;
@@ -627,6 +635,8 @@ bool video_hstx_init(void) {
     s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_test_tone_phase = 0u;
+    s_hdmi_audio_last_l = 0;
+    s_hdmi_audio_last_r = 0;
     s_hdmi_pcm_head = 0u;
     s_hdmi_pcm_tail = 0u;
     s_hdmi_audio_underruns = 0u;
@@ -802,8 +812,9 @@ void video_hstx_hdmi_audio_service(void) {
 #if MICRONES_HDMI_TEST_TONE
     return;
 #else
-    while (hdmi_audio_queue_level() < (HDMI_AUDIO_QUEUE_SIZE - 16u) &&
-           hdmi_pcm_available_frames() >= 4u) {
+    uint32_t built = 0u;
+    while (built < HDMI_AUDIO_SERVICE_BUDGET &&
+           hdmi_audio_queue_level() < HDMI_AUDIO_QUEUE_TARGET) {
         uint32_t head = s_hdmi_audio_queue_head;
         uint32_t next = (head + 1u) & (HDMI_AUDIO_QUEUE_SIZE - 1u);
         if (next == s_hdmi_audio_queue_tail) {
@@ -820,6 +831,7 @@ void video_hstx_hdmi_audio_service(void) {
         hdmi_di_emit_island(&packet, 1u, 1u, 0u, s_hdmi_audio_queue[head]);
         s_hdmi_audio_queue_head = next;
         ++s_hdmi_audio_refills;
+        ++built;
     }
 #endif
 #endif
@@ -841,6 +853,8 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_test_tone_phase = 0u;
+    s_hdmi_audio_last_l = 0;
+    s_hdmi_audio_last_r = 0;
     s_hdmi_audio_underruns = 0u;
     s_hdmi_audio_overruns = 0u;
 #endif
