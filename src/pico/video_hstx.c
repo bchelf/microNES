@@ -185,6 +185,10 @@ static HdmiScanlineSlot __attribute__((aligned(4)))
 static volatile uint32_t s_hdmi_scanline_head;
 static volatile uint32_t s_hdmi_scanline_tail;
 static volatile uint32_t s_hdmi_scanline_stalls;
+static volatile uint32_t s_hdmi_scanline_submitted;
+static volatile uint32_t s_hdmi_scanline_expanded;
+static volatile uint32_t s_hdmi_scanline_max_level;
+static volatile uint32_t s_hdmi_scanline_scan_collisions;
 
 /* --- HDMI data island cmd buffers --------------------------------------- */
 
@@ -297,6 +301,14 @@ static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
         return;
     }
 
+    uint32_t scanline = s_v_scanline;
+    if (scanline >= (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES)) {
+        uint32_t active_y = scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
+        if ((active_y / NES_SCALE) == y) {
+            ++s_hdmi_scanline_scan_collisions;
+        }
+    }
+
     uint8_t *dst = &s_framebuf[(uint32_t)y * MODE_H_ACTIVE_PIXELS];
     if (s_borders_dirty) {
         memset(dst, 0, NES_VIEW_X);
@@ -313,6 +325,7 @@ static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
     if (y == NES_FRAME_HEIGHT - 1u) {
         s_borders_dirty = false;
     }
+    ++s_hdmi_scanline_expanded;
 }
 
 static inline uint32_t hdmi_scanline_queue_level(void) {
@@ -728,6 +741,10 @@ bool video_hstx_init(void) {
     s_hdmi_scanline_head = 0u;
     s_hdmi_scanline_tail = 0u;
     s_hdmi_scanline_stalls = 0u;
+    s_hdmi_scanline_submitted = 0u;
+    s_hdmi_scanline_expanded = 0u;
+    s_hdmi_scanline_max_level = 0u;
+    s_hdmi_scanline_scan_collisions = 0u;
     s_dma_pong = false;
     s_v_scanline = 2u;
     s_vactive_cmdlist_posted = false;
@@ -817,6 +834,7 @@ void video_hstx_start(void) {
     s_vactive_cmdlist_posted = false;
     s_hdmi_scanline_head = 0u;
     s_hdmi_scanline_tail = 0u;
+    s_hdmi_scanline_max_level = 0u;
     hstx_configure_peripheral();
     hstx_configure_dma();
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS && \
@@ -872,7 +890,7 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
 
     for (uint32_t y = 0u; y < NES_FRAME_HEIGHT; ++y) {
         const uint8_t *src = nes_framebuffer_scanline_const(frame, (uint16_t)y);
-        video_hstx_submit_scanline(src, (uint16_t)y);
+        hdmi_expand_scanline_to_framebuf(src, (uint16_t)y);
     }
 
     uint64_t elapsed = time_us_64() - start_us;
@@ -900,16 +918,22 @@ void video_hstx_submit_scanline(const uint8_t *pixels, uint16_t y) {
         if (stalled) {
             ++s_hdmi_scanline_stalls;
         }
+        uint32_t level = next - s_hdmi_scanline_tail;
+        if (level > s_hdmi_scanline_max_level) {
+            s_hdmi_scanline_max_level = level;
+        }
         HdmiScanlineSlot *slot = &s_hdmi_scanline_queue[head % HDMI_SCANLINE_QUEUE_CAPACITY];
         __builtin_memcpy(slot->pixels, pixels, NES_FRAME_WIDTH);
         slot->y = y;
         MICRONES_DMB();
         s_hdmi_scanline_head = next;
+        ++s_hdmi_scanline_submitted;
         MICRONES_SEV();
         return;
     }
 #endif
 
+    ++s_hdmi_scanline_submitted;
     hdmi_expand_scanline_to_framebuf(pixels, y);
 }
 
@@ -949,27 +973,58 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
 }
 
 void video_hstx_print_diag(void) {
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u pcm_level=%lu q=%lu vq=%lu vstalls=%lu underruns=%lu overruns=%lu refills=%lu missed=%lu pkts=%lu\n",
+    static uint32_t prev_refills;
+    static uint32_t prev_missed;
+    static uint32_t prev_vsubmitted;
+    static uint32_t prev_vexpanded;
+    static uint32_t prev_vstalls;
+    uint32_t refills = 0u;
+    uint32_t missed = 0u;
+    uint32_t vsubmitted = s_hdmi_scanline_submitted;
+    uint32_t vexpanded = s_hdmi_scanline_expanded;
+    uint32_t vstalls = s_hdmi_scanline_stalls;
+#if MICRONES_HDMI_DATA_ISLANDS
+    refills = s_hdmi_audio_refills;
+    missed = s_hdmi_audio_missed_swaps;
+#endif
+
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u start=%u worker=%u vf=%llu pcm=%lu q=%lu vq=%lu vmax=%lu dref=%lu dmiss=%lu dvsub=%lu dvexp=%lu dvstall=%lu vcoll=%lu underruns=%lu overruns=%lu pkts=%lu\n",
            (unsigned long)s_diag_sys_hz,
            (unsigned long)s_diag_hstx_hz,
            (unsigned long)s_diag_pixel_hz,
            (unsigned)HDMI_AUDIO_CTS_VALUE,
            (unsigned)HDMI_AUDIO_N_VALUE,
            (unsigned)MICRONES_HDMI_TEST_TONE,
+           (unsigned)s_started,
+#if MICRONES_HDMI_DATA_ISLANDS
+           (unsigned)s_hdmi_audio_worker_running,
+#else
+           0u,
+#endif
+           (unsigned long long)s_stats.frames_presented,
 #if MICRONES_HDMI_DATA_ISLANDS
            (unsigned long)video_hstx_hdmi_audio_buffer_level(),
            (unsigned long)hdmi_audio_queue_level(),
            (unsigned long)hdmi_scanline_queue_level(),
-           (unsigned long)s_hdmi_scanline_stalls,
+           (unsigned long)s_hdmi_scanline_max_level,
+           (unsigned long)(refills - prev_refills),
+           (unsigned long)(missed - prev_missed),
+           (unsigned long)(vsubmitted - prev_vsubmitted),
+           (unsigned long)(vexpanded - prev_vexpanded),
+           (unsigned long)(vstalls - prev_vstalls),
+           (unsigned long)s_hdmi_scanline_scan_collisions,
            (unsigned long)video_hstx_hdmi_audio_underruns(),
            (unsigned long)video_hstx_hdmi_audio_overruns(),
-           (unsigned long)s_hdmi_audio_refills,
-           (unsigned long)s_hdmi_audio_missed_swaps,
            (unsigned long)s_hdmi_audio_packet_cursor
 #else
-           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL
+           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL
 #endif
     );
+    prev_refills = refills;
+    prev_missed = missed;
+    prev_vsubmitted = vsubmitted;
+    prev_vexpanded = vexpanded;
+    prev_vstalls = vstalls;
 }
 
 /* --- HDMI audio backend entry points ----------------------------------- */
