@@ -1018,22 +1018,31 @@ size_t video_hstx_hdmi_audio_push(const int16_t *samples,
     if (samples == NULL || count == 0u) {
         return 0u;
     }
+    /* Push in small batches so the spin lock (which disables interrupts on
+     * this core) is never held longer than ~0.5 us.  The HSTX DMA chain
+     * has a 5 us deadline during active-line cmdlist phases; holding the
+     * lock for a full 256-sample batch (~8 us) can delay the ISR past
+     * that deadline and cause stale DMA configuration / signal loss. */
     size_t written = 0u;
-    uint32_t save = spin_lock_blocking(s_hdmi_pcm_lock);
-    for (size_t i = 0u; i < count; ++i) {
-        uint32_t head = s_hdmi_pcm_head;
-        uint32_t next = (head + 1u) & (HDMI_PCM_RING_FRAMES - 1u);
-        if (next == s_hdmi_pcm_tail) {
-            s_hdmi_pcm_tail = (s_hdmi_pcm_tail + 1u) & (HDMI_PCM_RING_FRAMES - 1u);
-            ++s_hdmi_audio_overruns;
+    size_t remaining = count;
+    while (remaining > 0u) {
+        size_t batch = remaining > 16u ? 16u : remaining;
+        uint32_t save = spin_lock_blocking(s_hdmi_pcm_lock);
+        for (size_t i = 0u; i < batch; ++i) {
+            uint32_t head = s_hdmi_pcm_head;
+            uint32_t next = (head + 1u) & (HDMI_PCM_RING_FRAMES - 1u);
+            if (next == s_hdmi_pcm_tail) {
+                s_hdmi_pcm_tail = (s_hdmi_pcm_tail + 1u) & (HDMI_PCM_RING_FRAMES - 1u);
+                ++s_hdmi_audio_overruns;
+            }
+            s_hdmi_pcm_ring[head * 2u + 0u] = samples[written + i];
+            s_hdmi_pcm_ring[head * 2u + 1u] = samples[written + i];
+            s_hdmi_pcm_head = next;
         }
-        /* Backend contract is mono; duplicate to L and R. */
-        s_hdmi_pcm_ring[head * 2u + 0u] = samples[i];
-        s_hdmi_pcm_ring[head * 2u + 1u] = samples[i];
-        s_hdmi_pcm_head = next;
-        ++written;
+        spin_unlock(s_hdmi_pcm_lock, save);
+        written += batch;
+        remaining -= batch;
     }
-    spin_unlock(s_hdmi_pcm_lock, save);
     return written;
 #endif
 #else
