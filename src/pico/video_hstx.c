@@ -538,19 +538,22 @@ bool video_hstx_init(void) {
     hdmi_refill_control_island();
 
     /* Fill both audio buffers with NULL packets so the receiver sees a
-     * coherent data-island stream from the first frame. */
+     * coherent data-island stream from the first frame.  Emit directly
+     * into the first line buffer to avoid a 2 KB stack temporary. */
     {
         HdmiPacket null_pkts[HDMI_AUDIO_PACKETS_PER_LINE];
-        uint32_t null_island[HDMI_AUDIO_ISLAND_WORDS];
         for (uint32_t i = 0u; i < HDMI_AUDIO_PACKETS_PER_LINE; ++i) {
             hdmi_pkt_make_null(&null_pkts[i]);
         }
         hdmi_di_emit_block(null_pkts, HDMI_AUDIO_PACKETS_PER_LINE,
-                                 0u, 0u, null_island);
+                                 0u, 0u,
+                                 &s_hdmi_audio_line_buf[0][0][HDMI_ISLAND_DATA_OFFSET]);
         for (uint32_t b = 0u; b < 2u; ++b) {
             for (uint32_t line = 0u; line < HDMI_AUDIO_LINES; ++line) {
+                if (b == 0u && line == 0u) continue;
                 memcpy(&s_hdmi_audio_line_buf[b][line][HDMI_ISLAND_DATA_OFFSET],
-                       null_island, sizeof(null_island));
+                       &s_hdmi_audio_line_buf[0][0][HDMI_ISLAND_DATA_OFFSET],
+                       HDMI_AUDIO_ISLAND_WORDS * sizeof(uint32_t));
             }
         }
     }
