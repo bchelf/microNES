@@ -80,7 +80,7 @@ static inline uint32_t di_guardband_word(uint32_t hsync_active, uint32_t vsync_a
     uint8_t ch0_terc4 = (uint8_t)(0xCu | (v_bit << 1u) | h_bit);
     return (uint32_t)hdmi_terc4_lut[ch0_terc4] |
            ((uint32_t)0x133u << 10) |
-           ((uint32_t)0x2CCu << 20);
+           ((uint32_t)0x133u << 20);
 }
 
 void hdmi_di_encode_packet(const HdmiPacket *pkt,
@@ -106,30 +106,55 @@ void hdmi_di_encode_packet(const HdmiPacket *pkt,
     uint8_t h_line = (uint8_t)(hsync_active ? 0u : 1u);
     uint8_t v_line = (uint8_t)(vsync_active ? 0u : 1u);
 
+    /* Encode CH0 (header + sync + packet-start flag). */
+    uint8_t hv = (uint8_t)(h_line | (v_line << 1u));
+    uint8_t hv1 = (uint8_t)(hv | 0x08u);
+    if (!first_packet) {
+        hv = hv1;
+    }
+
+    uint16_t ch0_lane[32];
+    uint32_t idx = 0u;
+    for (uint32_t i = 0u; i < 4u; ++i) {
+        uint8_t h = hdr_bytes[i];
+        ch0_lane[idx++] = hdmi_terc4_lut[((h << 2) & 4u) | hv]; hv = hv1;
+        ch0_lane[idx++] = hdmi_terc4_lut[((h << 1) & 4u) | hv];
+        ch0_lane[idx++] = hdmi_terc4_lut[(h & 4u)        | hv];
+        ch0_lane[idx++] = hdmi_terc4_lut[((h >> 1) & 4u) | hv];
+        ch0_lane[idx++] = hdmi_terc4_lut[((h >> 2) & 4u) | hv];
+        ch0_lane[idx++] = hdmi_terc4_lut[((h >> 3) & 4u) | hv];
+        ch0_lane[idx++] = hdmi_terc4_lut[((h >> 4) & 4u) | hv];
+        ch0_lane[idx++] = hdmi_terc4_lut[((h >> 5) & 4u) | hv];
+    }
+
+    /* Encode CH1/CH2 (subpacket data). Matches pico_hdmi's bit-transpose
+     * interleaving: for each byte position across the 4 subpackets, a 4×8
+     * matrix transpose puts one bit from each subpacket into contiguous
+     * nibbles, which are then assigned to 4 consecutive pixels. */
+    uint16_t ch1_lane[32], ch2_lane[32];
+    for (uint32_t i = 0u; i < 8u; ++i) {
+        uint32_t v = (uint32_t)sp[0][i] |
+                     ((uint32_t)sp[1][i] << 8u) |
+                     ((uint32_t)sp[2][i] << 16u) |
+                     ((uint32_t)sp[3][i] << 24u);
+        uint32_t t = (v ^ (v >> 7u)) & 0x00AA00AAu;
+        v = v ^ t ^ (t << 7u);
+        t = (v ^ (v >> 14u)) & 0x0000CCCCu;
+        v = v ^ t ^ (t << 14u);
+        ch1_lane[i * 4u + 0u] = hdmi_terc4_lut[(v >>  0u) & 0xFu];
+        ch1_lane[i * 4u + 1u] = hdmi_terc4_lut[(v >> 16u) & 0xFu];
+        ch1_lane[i * 4u + 2u] = hdmi_terc4_lut[(v >>  4u) & 0xFu];
+        ch1_lane[i * 4u + 3u] = hdmi_terc4_lut[(v >> 20u) & 0xFu];
+        ch2_lane[i * 4u + 0u] = hdmi_terc4_lut[(v >>  8u) & 0xFu];
+        ch2_lane[i * 4u + 1u] = hdmi_terc4_lut[(v >> 24u) & 0xFu];
+        ch2_lane[i * 4u + 2u] = hdmi_terc4_lut[(v >> 12u) & 0xFu];
+        ch2_lane[i * 4u + 3u] = hdmi_terc4_lut[(v >> 28u) & 0xFu];
+    }
+
     for (uint32_t k = 0u; k < HDMI_PACKET_RAW_WORDS; ++k) {
-        /* CH0: bit0=HSYNC, bit1=VSYNC, bit2=header_bit_k, bit3=new_packet (k==0). */
-        uint32_t hbit = (uint32_t)((hdr_bytes[k >> 3u] >> (k & 7u)) & 1u);
-        uint32_t newpk = (k == 0u && first_packet) ? 1u : 0u;
-        uint8_t ch0 = (uint8_t)(h_line | (v_line << 1u) | (hbit << 2u) | (newpk << 3u));
-
-        /* CH1: one bit from low half (bytes 0..3) of each of 4 subpackets. */
-        uint32_t lo_idx = k;                    /* 0..31 */
-        uint32_t lo_byte = lo_idx >> 3u;        /* 0..3 */
-        uint32_t lo_bit  = lo_idx & 7u;
-        uint8_t ch1 = 0u;
-        for (uint32_t s = 0u; s < 4u; ++s) {
-            ch1 |= (uint8_t)(((sp[s][lo_byte] >> lo_bit) & 1u) << s);
-        }
-
-        /* CH2: one bit from high half (bytes 4..7) of each of 4 subpackets. */
-        uint32_t hi_byte = 4u + (k >> 3u);      /* 4..7 */
-        uint32_t hi_bit  = k & 7u;
-        uint8_t ch2 = 0u;
-        for (uint32_t s = 0u; s < 4u; ++s) {
-            ch2 |= (uint8_t)(((sp[s][hi_byte] >> hi_bit) & 1u) << s);
-        }
-
-        out_words[k] = pack_terc4(ch0, ch1, ch2);
+        out_words[k] = (uint32_t)ch0_lane[k] |
+                       ((uint32_t)ch1_lane[k] << 10u) |
+                       ((uint32_t)ch2_lane[k] << 20u);
     }
 }
 
