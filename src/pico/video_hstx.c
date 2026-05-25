@@ -57,7 +57,7 @@ static int s_dmach_pong = -1;
 #define NES_SCALE 2u
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
-#define HDMI_SCANLINE_QUEUE_CAPACITY 32u
+#define HDMI_SCANLINE_QUEUE_CAPACITY 256u
 
 #define HSTX_INTERNAL_CLKDIV 5u
 #define HDMI_HSTX_CLOCK_HZ   157500000u
@@ -297,17 +297,8 @@ static void init_palette_rgb332(void) {
 #define MICRONES_DMB() __asm volatile ("dmb ish" ::: "memory")
 #define MICRONES_SEV() __asm volatile ("sev" ::: "memory")
 
-static bool hdmi_scanout_near_framebuf_row(uint16_t y) {
-    uint32_t scanline = s_v_scanline;
-    if (scanline < (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES)) {
-        return false;
-    }
-
-    uint32_t active_y = scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
-    uint32_t stored_y = active_y / NES_SCALE;
-    return stored_y == y ||
-           (stored_y > 0u && stored_y - 1u == y) ||
-           (stored_y + 1u == y);
+static bool hdmi_scanout_in_active_video(void) {
+    return s_v_scanline >= (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
 }
 
 static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
@@ -346,7 +337,7 @@ static bool hdmi_expand_one_queued_scanline(void) {
 
     MICRONES_DMB();
     HdmiScanlineSlot *slot = &s_hdmi_scanline_queue[tail % HDMI_SCANLINE_QUEUE_CAPACITY];
-    if (hdmi_scanout_near_framebuf_row(slot->y)) {
+    if (hdmi_scanout_in_active_video()) {
         ++s_hdmi_scanline_scan_collisions;
         ++s_hdmi_scanline_scan_defers;
         return false;
