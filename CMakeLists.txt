@@ -404,6 +404,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             # console (open /dev/ttyACM0 at any baud) for bring-up debugging.
             if (MICRONES_HDMI_STDIO_USB)
                 pico_enable_stdio_usb(${target_name} 1)
+                target_compile_definitions(${target_name} PRIVATE MICRONES_HDMI_STDIO_USB_ENABLED=1)
             else ()
                 pico_enable_stdio_usb(${target_name} 0)
             endif ()
