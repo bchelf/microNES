@@ -198,15 +198,20 @@ int main(void) {
 #endif
 
         bool reset_button_was_down = pico_status_reset_button_down();
-        uint64_t next_diag_us = time_us_64() + 5000000ull;
+        uint64_t next_diag_us = time_us_64() + 1000000ull;
+        uint32_t diag_samples_pushed = 0;
 
         while (true) {
 #if defined(MICRONES_PICO_VIDEO_BACKEND_HDMI)
             if (time_us_64() >= next_diag_us) {
                 video_hstx_print_diag();
-                printf("[audio] apu_avail=%u\n",
-                       (unsigned)nes_audio_available_samples(&emulator_video.nes));
-                next_diag_us = time_us_64() + 5000000ull;
+                printf("[audio] apu_avail=%u pushed_last_sec=%u frames=%llu stepping=%d\n",
+                       (unsigned)nes_audio_available_samples(&emulator_video.nes),
+                       (unsigned)diag_samples_pushed,
+                       (unsigned long long)nes_frame_count(&emulator_video.nes),
+                       (int)frame.stepping_nes);
+                diag_samples_pushed = 0;
+                next_diag_us = time_us_64() + 1000000ull;
             }
 #endif
             /* Pace emulation to the NTSC NES frame cadence (~16.639 ms,
@@ -353,6 +358,7 @@ int main(void) {
                         }
 #else
                         pico_audio_backend_push_samples(pcm_tmp, n);
+                        diag_samples_pushed += n;
 #endif
                     }
 #if MICRONES_ENABLE_PERF_LOG
