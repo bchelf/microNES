@@ -310,12 +310,13 @@ static bool hdmi_scanout_near_framebuf_row(uint16_t y) {
            (stored_y + 1u == y);
 }
 
-static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
+static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y,
+                                             bool avoid_scanout_race) {
     if (src == NULL || y >= NES_FRAME_HEIGHT) {
         return;
     }
 
-    if (hdmi_scanout_near_framebuf_row(y)) {
+    if (avoid_scanout_race && hdmi_scanout_near_framebuf_row(y)) {
         ++s_hdmi_scanline_scan_collisions;
         ++s_hdmi_scanline_scan_waits;
         while (hdmi_scanout_near_framebuf_row(y)) {
@@ -354,7 +355,7 @@ static bool hdmi_expand_one_queued_scanline(void) {
 
     MICRONES_DMB();
     HdmiScanlineSlot *slot = &s_hdmi_scanline_queue[tail % HDMI_SCANLINE_QUEUE_CAPACITY];
-    hdmi_expand_scanline_to_framebuf(slot->pixels, slot->y);
+    hdmi_expand_scanline_to_framebuf(slot->pixels, slot->y, true);
     MICRONES_DMB();
     s_hdmi_scanline_tail = tail + 1u;
     return true;
@@ -905,7 +906,7 @@ void video_hstx_present_frame(const NesFrameBuffer *frame) {
 
     for (uint32_t y = 0u; y < NES_FRAME_HEIGHT; ++y) {
         const uint8_t *src = nes_framebuffer_scanline_const(frame, (uint16_t)y);
-        hdmi_expand_scanline_to_framebuf(src, (uint16_t)y);
+        hdmi_expand_scanline_to_framebuf(src, (uint16_t)y, false);
     }
 
     uint64_t elapsed = time_us_64() - start_us;
@@ -949,7 +950,7 @@ void video_hstx_submit_scanline(const uint8_t *pixels, uint16_t y) {
 #endif
 
     ++s_hdmi_scanline_submitted;
-    hdmi_expand_scanline_to_framebuf(pixels, y);
+    hdmi_expand_scanline_to_framebuf(pixels, y, false);
 }
 
 void video_hstx_draw_test_pattern(void) {
