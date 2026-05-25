@@ -189,6 +189,26 @@ uint32_t hdmi_di_emit_block(const HdmiPacket *packets, uint32_t npackets,
     return (uint32_t)(p - out);
 }
 
+uint32_t hdmi_di_emit_island(const HdmiPacket *packets, uint32_t npackets,
+                             uint32_t hsync_active, uint32_t vsync_active,
+                             uint32_t *out) {
+    uint32_t *p = out;
+
+    uint32_t gb = di_guardband_word(hsync_active, vsync_active);
+    *p++ = gb;
+    *p++ = gb;
+
+    for (uint32_t i = 0u; i < npackets; ++i) {
+        hdmi_di_encode_packet(&packets[i], i == 0u, hsync_active, vsync_active, p);
+        p += HDMI_PACKET_RAW_WORDS;
+    }
+
+    *p++ = gb;
+    *p++ = gb;
+
+    return (uint32_t)(p - out);
+}
+
 /* --- Packet builders ----------------------------------------------------- */
 
 void hdmi_pkt_make_null(HdmiPacket *pkt) {

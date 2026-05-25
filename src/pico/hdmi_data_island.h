@@ -88,6 +88,15 @@ uint32_t hdmi_di_emit_block(const HdmiPacket *packets, uint32_t npackets,
                             uint32_t hsync_active, uint32_t vsync_active,
                             uint32_t *out_words);
 
+/*
+ * Emit only the data-island guard bands and packet payloads, omitting the
+ * 8-pixel data-island preamble. This matches the pico_hdmi reference layout,
+ * where the line command list emits the preamble separately inside HSYNC.
+ */
+uint32_t hdmi_di_emit_island(const HdmiPacket *packets, uint32_t npackets,
+                             uint32_t hsync_active, uint32_t vsync_active,
+                             uint32_t *out_words);
+
 /* --- Helpers to build the packets we use. --------------------------------- */
 
 void hdmi_pkt_make_null(HdmiPacket *pkt);

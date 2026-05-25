@@ -29,6 +29,10 @@
 #define MODE_H_SYNC_WIDTH    96u
 #define MODE_H_BACK_PORCH    48u
 #define MODE_H_ACTIVE_PIXELS 640u
+#define MODE_H_TOTAL_PIXELS ( \
+    MODE_H_FRONT_PORCH + MODE_H_SYNC_WIDTH + \
+    MODE_H_BACK_PORCH + MODE_H_ACTIVE_PIXELS \
+)
 
 #define MODE_V_FRONT_PORCH   10u
 #define MODE_V_SYNC_WIDTH    2u
@@ -58,64 +62,31 @@ static int s_dmach_pong = -1;
 
 /* --- HDMI audio scheduler tunables ------------------------------------- */
 
-/* 8 audio sample packets per data island × 25 lines = 200 packets/frame.
- * At 4 stereo samples per ASP, that's 800 frames/video-frame. With the
- * 25 MHz / 800 / 525 HDMI mode this is 800 × 60 Hz = 48 kHz exactly.
+/* Match pico_hdmi's 480p layout: one data-island packet per scanline,
+ * placed inside the 96-pixel HSYNC pulse. The packet scheduler is driven by
+ * pixel clock, so the audio rate remains 48 kHz even at our 25.000 MHz mode.
  */
-#define HDMI_AUDIO_PACKETS_PER_LINE 8u
-#define HDMI_AUDIO_LINES            25u
-/* The control island (AVI + Audio InfoFrame + GCP + ACR) goes on the FIRST
- * line of V_BP — most TVs sample InfoFrames within a few lines of VSYNC and
- * give up on the link if they don't see them early. Audio sample packets
- * follow on the next 25 lines. */
+#define HDMI_AUDIO_PACKET_SLOTS      210u
+#define HDMI_CONTROL_PACKET_LINES    4u   /* AVI + Audio IF + GCP + ACR */
 #define HDMI_CONTROL_VBI_LINE        12u  /* first V_BP line after VSYNC */
-#define HDMI_AUDIO_FIRST_VBI_LINE   (HDMI_CONTROL_VBI_LINE + 1u)
-#define HDMI_AUDIO_LAST_VBI_LINE    (HDMI_AUDIO_FIRST_VBI_LINE + HDMI_AUDIO_LINES - 1u)
-
-#define HDMI_CONTROL_PACKETS         4u   /* AVI + Audio IF + GCP + ACR */
 
 #define HDMI_AUDIO_SAMPLE_RATE_HZ    48000u
 #define HDMI_AUDIO_N_VALUE           6144u   /* 48 kHz, per HDMI 1.4 §7.2.2 */
 #define HDMI_AUDIO_CTS_VALUE         25000u  /* for 25 MHz pixel clock */
 
-/* Full island = preamble(8) + guard(2) + packets + guard(2), all in one RAW. */
-#define HDMI_AUDIO_ISLAND_WORDS \
-    (HDMI_DI_PREAMBLE_PIXELS + (2u * HDMI_DI_GUARDBAND_PIXELS) + \
-     (HDMI_AUDIO_PACKETS_PER_LINE * HDMI_PACKET_RAW_WORDS))
+#define HDMI_ONE_PACKET_ISLAND_WORDS \
+    ((2u * HDMI_DI_GUARDBAND_PIXELS) + HDMI_PACKET_RAW_WORDS)
+#define HDMI_SYNC_AFTER_DI_PIXELS \
+    (MODE_H_SYNC_WIDTH - HDMI_DI_PREAMBLE_PIXELS - HDMI_ONE_PACKET_ISLAND_WORDS)
+#define HDMI_AUDIO_SAMPLES_PER_LINE_FP \
+    ((uint32_t)((((uint64_t)HDMI_AUDIO_SAMPLE_RATE_HZ * MODE_H_TOTAL_PIXELS) << 16u) / HDMI_PIXEL_CLOCK_HZ))
 
-#define HDMI_CONTROL_ISLAND_WORDS \
-    (HDMI_DI_PREAMBLE_PIXELS + (2u * HDMI_DI_GUARDBAND_PIXELS) + \
-     (HDMI_CONTROL_PACKETS * HDMI_PACKET_RAW_WORDS))
+#define HDMI_VBLANK_DI_LINE_WORDS \
+    (2u + 1u + 2u + 1u + 1u + HDMI_ONE_PACKET_ISLAND_WORDS + 1u + 2u + 1u + 2u + 1u)
 
-/* Pixel positions: the data island starts immediately after HSYNC pulse. */
-#define HDMI_DI_POST_HSYNC_FILLER_PIXELS \
-    (MODE_H_BACK_PORCH + MODE_H_ACTIVE_PIXELS - HDMI_AUDIO_ISLAND_WORDS)
-
-#define HDMI_CONTROL_POST_FILLER_PIXELS \
-    (MODE_H_BACK_PORCH + MODE_H_ACTIVE_PIXELS - HDMI_CONTROL_ISLAND_WORDS)
-
-/* Layout of a VBI line cmd buffer:
- *   [RAW_REPEAT|HFP, sync_v1_h1,         // 2 words
- *    RAW_REPEAT|HSYNC, sync_v1_h0,        // 2 words
- *    NOP,                                  // 1 word
- *    RAW|island_words, ...island...,       // 1 + island words
- *    NOP,                                  // 1 word
- *    RAW_REPEAT|post_filler, sync_v1_h1,  // 2 words
- *    NOP]                                  // 1 word
- *
- * The RAW block contains preamble + guard + packets + guard as a single
- * continuous emission. This is the layout that successfully triggered HDMI
- * mode detection (green-screen test).
- */
-#define HDMI_AUDIO_LINE_WORDS \
-    (2u + 2u + 1u + 1u + HDMI_AUDIO_ISLAND_WORDS + 1u + 2u + 1u)
-
-#define HDMI_CONTROL_LINE_WORDS \
-    (2u + 2u + 1u + 1u + HDMI_CONTROL_ISLAND_WORDS + 1u + 2u + 1u)
-
-/* Offset of the first island RAW data word inside a line cmd buffer.
- * Layout: [0..1] HFP, [2..3] HSYNC, [4] NOP, [5] RAW cmd, [6..] island. */
-#define HDMI_ISLAND_DATA_OFFSET 6u
+#define HDMI_ACTIVE_DI_LINE_WORDS \
+    (2u + 1u + 2u + 1u + 1u + HDMI_ONE_PACKET_ISLAND_WORDS + 1u + 2u + 1u + \
+     2u + 1u + 2u + 1u + 2u + 1u)
 
 /* --- Existing VBI cmd lists (DVI-compatible, no data island) ------------ */
 
@@ -201,10 +172,19 @@ static uint8_t __attribute__((aligned(4)))
 #if MICRONES_HDMI_DATA_ISLANDS
 
 static uint32_t __attribute__((aligned(4)))
-    s_hdmi_audio_line_buf[2][HDMI_AUDIO_LINES][HDMI_AUDIO_LINE_WORDS];
+    s_hdmi_audio_islands[2][HDMI_AUDIO_PACKET_SLOTS][HDMI_ONE_PACKET_ISLAND_WORDS];
 
 static uint32_t __attribute__((aligned(4)))
-    s_hdmi_control_line_buf[HDMI_CONTROL_LINE_WORDS];
+    s_hdmi_null_island[HDMI_ONE_PACKET_ISLAND_WORDS];
+
+static uint32_t __attribute__((aligned(4)))
+    s_hdmi_control_line_buf[HDMI_CONTROL_PACKET_LINES][HDMI_VBLANK_DI_LINE_WORDS];
+
+static uint32_t __attribute__((aligned(4)))
+    s_hdmi_vblank_di_line_buf[2][HDMI_VBLANK_DI_LINE_WORDS];
+
+static uint32_t __attribute__((aligned(4)))
+    s_hdmi_active_di_line_buf[2][HDMI_ACTIVE_DI_LINE_WORDS];
 
 static volatile uint8_t s_hdmi_audio_active_buf;
 static volatile uint8_t s_hdmi_audio_refill_buf;
@@ -213,6 +193,9 @@ static volatile bool s_hdmi_audio_refill_pending;
 static volatile bool s_hdmi_audio_ready;
 static volatile uint32_t s_hdmi_audio_refills;
 static volatile uint32_t s_hdmi_audio_missed_swaps;
+static volatile uint32_t s_hdmi_audio_packets_built;
+static uint32_t s_hdmi_audio_packet_cursor;
+static uint32_t s_hdmi_audio_sample_accum_fp;
 
 /* PCM ring drained when assembling audio sample packets. Stereo frames. */
 #define HDMI_PCM_RING_FRAMES 2048u  /* must be a power of two */
@@ -279,34 +262,78 @@ static void init_palette_rgb332(void) {
 
 #if MICRONES_HDMI_DATA_ISLANDS
 
-static void hdmi_init_line_template(uint32_t *buf, uint32_t island_words,
-                                    uint32_t post_filler_pixels) {
+static const uint32_t k_hdmi_di_preamble_v1_h0 =
+    TMDS_CTRL_10 | ((uint32_t)TMDS_CTRL_01 << 10) |
+    ((uint32_t)TMDS_CTRL_01 << 20);
+
+static void hdmi_build_vblank_di_line(uint32_t *buf,
+                                      const uint32_t island[HDMI_ONE_PACKET_ISLAND_WORDS]) {
     uint32_t *p = buf;
     *p++ = HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH;
     *p++ = SYNC_V1_H1;
-    *p++ = HSTX_CMD_RAW_REPEAT | MODE_H_SYNC_WIDTH;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW_REPEAT | HDMI_DI_PREAMBLE_PIXELS;
+    *p++ = k_hdmi_di_preamble_v1_h0;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW | HDMI_ONE_PACKET_ISLAND_WORDS;
+    memcpy(p, island, HDMI_ONE_PACKET_ISLAND_WORDS * sizeof(*p));
+    p += HDMI_ONE_PACKET_ISLAND_WORDS;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW_REPEAT | HDMI_SYNC_AFTER_DI_PIXELS;
     *p++ = SYNC_V1_H0;
     *p++ = HSTX_CMD_NOP;
-    *p++ = HSTX_CMD_RAW | island_words;
-    for (uint32_t i = 0u; i < island_words; ++i) {
-        *p++ = 0u;
-    }
-    *p++ = HSTX_CMD_NOP;
-    *p++ = HSTX_CMD_RAW_REPEAT | post_filler_pixels;
+    *p++ = HSTX_CMD_RAW_REPEAT | (MODE_H_BACK_PORCH + MODE_H_ACTIVE_PIXELS);
     *p++ = SYNC_V1_H1;
     *p++ = HSTX_CMD_NOP;
 }
 
-static void hdmi_refill_control_island(void) {
-    HdmiPacket packets[HDMI_CONTROL_PACKETS];
-    hdmi_pkt_make_avi_infoframe(&packets[0]);
-    hdmi_pkt_make_audio_infoframe(&packets[1]);
-    hdmi_pkt_make_general_control(&packets[2], 0, 1);
-    hdmi_pkt_make_acr(&packets[3], HDMI_AUDIO_N_VALUE, HDMI_AUDIO_CTS_VALUE);
+static void hdmi_build_active_di_line(uint32_t *buf,
+                                      const uint32_t island[HDMI_ONE_PACKET_ISLAND_WORDS]) {
+    uint32_t *p = buf;
+    *p++ = HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH;
+    *p++ = SYNC_V1_H1;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW_REPEAT | HDMI_DI_PREAMBLE_PIXELS;
+    *p++ = k_hdmi_di_preamble_v1_h0;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW | HDMI_ONE_PACKET_ISLAND_WORDS;
+    memcpy(p, island, HDMI_ONE_PACKET_ISLAND_WORDS * sizeof(*p));
+    p += HDMI_ONE_PACKET_ISLAND_WORDS;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW_REPEAT | HDMI_SYNC_AFTER_DI_PIXELS;
+    *p++ = SYNC_V1_H0;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW_REPEAT |
+           (MODE_H_BACK_PORCH - HDMI_VIDEO_PREAMBLE_PIXELS - HDMI_VIDEO_GUARDBAND_PIXELS);
+    *p++ = SYNC_V1_H1;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW_REPEAT | HDMI_VIDEO_PREAMBLE_PIXELS;
+    *p++ = hdmi_video_preamble_word;
+    *p++ = HSTX_CMD_NOP;
+    *p++ = HSTX_CMD_RAW_REPEAT | HDMI_VIDEO_GUARDBAND_PIXELS;
+    *p++ = hdmi_video_guardband_word;
+    *p++ = HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS;
+}
 
-    hdmi_di_emit_block(packets, HDMI_CONTROL_PACKETS,
-                             0u, 0u,
-                             &s_hdmi_control_line_buf[HDMI_ISLAND_DATA_OFFSET]);
+static void hdmi_refill_control_islands(void) {
+    HdmiPacket packet;
+    uint32_t island[HDMI_ONE_PACKET_ISLAND_WORDS];
+
+    hdmi_pkt_make_avi_infoframe(&packet);
+    hdmi_di_emit_island(&packet, 1u, 1u, 0u, island);
+    hdmi_build_vblank_di_line(s_hdmi_control_line_buf[0], island);
+
+    hdmi_pkt_make_audio_infoframe(&packet);
+    hdmi_di_emit_island(&packet, 1u, 1u, 0u, island);
+    hdmi_build_vblank_di_line(s_hdmi_control_line_buf[1], island);
+
+    hdmi_pkt_make_general_control(&packet, 0, 1);
+    hdmi_di_emit_island(&packet, 1u, 1u, 0u, island);
+    hdmi_build_vblank_di_line(s_hdmi_control_line_buf[2], island);
+
+    hdmi_pkt_make_acr(&packet, HDMI_AUDIO_N_VALUE, HDMI_AUDIO_CTS_VALUE);
+    hdmi_di_emit_island(&packet, 1u, 1u, 0u, island);
+    hdmi_build_vblank_di_line(s_hdmi_control_line_buf[3], island);
 }
 
 static inline uint32_t hdmi_pcm_available_frames(void) {
@@ -343,30 +370,46 @@ static void hdmi_pull_stereo_samples(int16_t out[8], uint32_t want_frames,
 }
 
 static void hdmi_refill_audio_islands(uint32_t buf_idx) {
-    HdmiPacket packets[HDMI_AUDIO_PACKETS_PER_LINE];
-    for (uint32_t line = 0u; line < HDMI_AUDIO_LINES; ++line) {
-        for (uint32_t p = 0u; p < HDMI_AUDIO_PACKETS_PER_LINE; ++p) {
-            int16_t samples[8];
-            uint32_t got;
+    uint32_t built = 0u;
+    for (; built < HDMI_AUDIO_PACKET_SLOTS; ++built) {
+        HdmiPacket packet;
+        int16_t samples[8];
+        uint32_t got;
 #if MICRONES_HDMI_TEST_TONE
-            const uint32_t tone_step = (uint32_t)((440ull << 32) / HDMI_AUDIO_SAMPLE_RATE_HZ);
-            for (uint32_t i = 0u; i < 4u; ++i) {
-                int16_t s = (s_hdmi_test_tone_phase & 0x80000000u) ? 12000 : -12000;
-                samples[i * 2u + 0u] = s;
-                samples[i * 2u + 1u] = s;
-                s_hdmi_test_tone_phase += tone_step;
-            }
-            got = 4u;
-#else
-            hdmi_pull_stereo_samples(samples, 4u, &got);
-#endif
-            hdmi_pkt_make_audio_sample(&packets[p], samples,
-                                       4u, &s_hdmi_audio_frame_no);
+        const uint32_t tone_step = (uint32_t)((440ull << 32) / HDMI_AUDIO_SAMPLE_RATE_HZ);
+        for (uint32_t i = 0u; i < 4u; ++i) {
+            int16_t s = (s_hdmi_test_tone_phase & 0x80000000u) ? 12000 : -12000;
+            samples[i * 2u + 0u] = s;
+            samples[i * 2u + 1u] = s;
+            s_hdmi_test_tone_phase += tone_step;
         }
-        hdmi_di_emit_block(packets, HDMI_AUDIO_PACKETS_PER_LINE,
-                                0u, 0u,
-                                &s_hdmi_audio_line_buf[buf_idx][line][HDMI_ISLAND_DATA_OFFSET]);
+        got = 4u;
+#else
+        hdmi_pull_stereo_samples(samples, 4u, &got);
+#endif
+        (void)got;
+        hdmi_pkt_make_audio_sample(&packet, samples, 4u, &s_hdmi_audio_frame_no);
+        hdmi_di_emit_island(&packet, 1u, 1u, 0u,
+                            s_hdmi_audio_islands[buf_idx][built]);
     }
+    s_hdmi_audio_packets_built = built;
+}
+
+static inline void hdmi_audio_scheduler_tick(void) {
+    s_hdmi_audio_sample_accum_fp += HDMI_AUDIO_SAMPLES_PER_LINE_FP;
+}
+
+static const uint32_t *hdmi_next_audio_island(void) {
+    if (s_hdmi_audio_sample_accum_fp < (4u << 16u)) {
+        return s_hdmi_null_island;
+    }
+    s_hdmi_audio_sample_accum_fp -= (4u << 16u);
+
+    uint32_t cursor = s_hdmi_audio_packet_cursor++;
+    if (cursor < HDMI_AUDIO_PACKET_SLOTS) {
+        return s_hdmi_audio_islands[s_hdmi_audio_active_buf][cursor];
+    }
+    return s_hdmi_null_island;
 }
 
 #endif /* MICRONES_HDMI_DATA_ISLANDS */
@@ -378,9 +421,12 @@ static void __scratch_x("") hstx_dma_irq(void) {
     dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
     dma_hw->intr = 1u << ch_num;
     s_dma_pong = !s_dma_pong;
+    uint32_t cmd_buf_idx = (ch_num == (uint32_t)s_dmach_ping) ? 0u : 1u;
 
-#if MICRONES_HDMI_DATA_ISLANDS
-    uint8_t audio_buf = s_hdmi_audio_active_buf;
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+    if (!s_vactive_cmdlist_posted) {
+        hdmi_audio_scheduler_tick();
+    }
 #endif
 
     if (s_v_scanline >= MODE_V_FRONT_PORCH &&
@@ -389,27 +435,36 @@ static void __scratch_x("") hstx_dma_irq(void) {
         ch->transfer_count = count_of(s_vblank_line_vsync_on);
     } else if (s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH) {
 #if MICRONES_HDMI_DATA_ISLANDS
-        if (s_v_scanline == HDMI_CONTROL_VBI_LINE) {
-            ch->read_addr = (uintptr_t)s_hdmi_control_line_buf;
-            ch->transfer_count = HDMI_CONTROL_LINE_WORDS;
-        }
+        if (s_v_scanline >= HDMI_CONTROL_VBI_LINE &&
+            s_v_scanline < HDMI_CONTROL_VBI_LINE + HDMI_CONTROL_PACKET_LINES) {
+            uint32_t line_idx = s_v_scanline - HDMI_CONTROL_VBI_LINE;
+            ch->read_addr = (uintptr_t)s_hdmi_control_line_buf[line_idx];
+            ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
+        } else {
 #if MICRONES_HDMI_AUDIO_PACKETS
-        else if (s_v_scanline >= HDMI_AUDIO_FIRST_VBI_LINE &&
-                 s_v_scanline <= HDMI_AUDIO_LAST_VBI_LINE) {
-            uint32_t line_idx = s_v_scanline - HDMI_AUDIO_FIRST_VBI_LINE;
-            ch->read_addr = (uintptr_t)&s_hdmi_audio_line_buf[audio_buf][line_idx][0];
-            ch->transfer_count = HDMI_AUDIO_LINE_WORDS;
-        }
-#endif
-        else
-#endif
-        {
+            const uint32_t *island = hdmi_next_audio_island();
+            hdmi_build_vblank_di_line(s_hdmi_vblank_di_line_buf[cmd_buf_idx], island);
+            ch->read_addr = (uintptr_t)s_hdmi_vblank_di_line_buf[cmd_buf_idx];
+            ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
+#else
             ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
             ch->transfer_count = count_of(s_vblank_line_vsync_off);
+#endif
         }
+#else
+        ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
+        ch->transfer_count = count_of(s_vblank_line_vsync_off);
+#endif
     } else if (!s_vactive_cmdlist_posted) {
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+        const uint32_t *island = hdmi_next_audio_island();
+        hdmi_build_active_di_line(s_hdmi_active_di_line_buf[cmd_buf_idx], island);
+        ch->read_addr = (uintptr_t)s_hdmi_active_di_line_buf[cmd_buf_idx];
+        ch->transfer_count = HDMI_ACTIVE_DI_LINE_WORDS;
+#else
         ch->read_addr = (uintptr_t)s_vactive_line;
         ch->transfer_count = count_of(s_vactive_line);
+#endif
         s_vactive_cmdlist_posted = true;
     } else {
         uint32_t active_y = s_v_scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
@@ -433,6 +488,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
             } else {
                 ++s_hdmi_audio_missed_swaps;
             }
+            s_hdmi_audio_packet_cursor = 0u;
 #endif
         }
     }
@@ -543,18 +599,6 @@ bool video_hstx_init(void) {
 #endif
 
 #if MICRONES_HDMI_DATA_ISLANDS
-    /* Build VBI line templates and pre-populate islands with NULL packets so
-     * the channel is well-formed even before audio samples arrive. */
-    for (uint32_t b = 0u; b < 2u; ++b) {
-        for (uint32_t line = 0u; line < HDMI_AUDIO_LINES; ++line) {
-            hdmi_init_line_template(&s_hdmi_audio_line_buf[b][line][0],
-                                    HDMI_AUDIO_ISLAND_WORDS,
-                                    HDMI_DI_POST_HSYNC_FILLER_PIXELS);
-        }
-    }
-    hdmi_init_line_template(s_hdmi_control_line_buf,
-                             HDMI_CONTROL_ISLAND_WORDS,
-                             HDMI_CONTROL_POST_FILLER_PIXELS);
     s_hdmi_audio_active_buf = 0u;
     s_hdmi_audio_refill_buf = 1u;
     s_hdmi_audio_ready_buf = 0u;
@@ -562,6 +606,9 @@ bool video_hstx_init(void) {
     s_hdmi_audio_ready = false;
     s_hdmi_audio_refills = 0u;
     s_hdmi_audio_missed_swaps = 0u;
+    s_hdmi_audio_packets_built = 0u;
+    s_hdmi_audio_packet_cursor = 0u;
+    s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_test_tone_phase = 0u;
     s_hdmi_pcm_head = 0u;
@@ -569,22 +616,18 @@ bool video_hstx_init(void) {
     s_hdmi_audio_underruns = 0u;
     s_hdmi_audio_overruns = 0u;
 
-    hdmi_refill_control_island();
+    hdmi_refill_control_islands();
 
     /* Fill both audio buffers with NULL packets so the receiver sees a
      * coherent data-island stream from the first frame. */
     {
-        HdmiPacket null_pkts[HDMI_AUDIO_PACKETS_PER_LINE];
-        uint32_t null_island[HDMI_AUDIO_ISLAND_WORDS];
-        for (uint32_t i = 0u; i < HDMI_AUDIO_PACKETS_PER_LINE; ++i) {
-            hdmi_pkt_make_null(&null_pkts[i]);
-        }
-        hdmi_di_emit_block(null_pkts, HDMI_AUDIO_PACKETS_PER_LINE,
-                                 0u, 0u, null_island);
+        HdmiPacket null_pkt;
+        hdmi_pkt_make_null(&null_pkt);
+        hdmi_di_emit_island(&null_pkt, 1u, 1u, 0u, s_hdmi_null_island);
         for (uint32_t b = 0u; b < 2u; ++b) {
-            for (uint32_t line = 0u; line < HDMI_AUDIO_LINES; ++line) {
-                memcpy(&s_hdmi_audio_line_buf[b][line][HDMI_ISLAND_DATA_OFFSET],
-                       null_island, sizeof(null_island));
+            for (uint32_t i = 0u; i < HDMI_AUDIO_PACKET_SLOTS; ++i) {
+                memcpy(s_hdmi_audio_islands[b][i], s_hdmi_null_island,
+                       sizeof(s_hdmi_null_island));
             }
         }
     }
@@ -719,7 +762,7 @@ void video_hstx_get_stats(VideoHstxStats *stats_out) {
 }
 
 void video_hstx_print_diag(void) {
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u pcm_level=%lu underruns=%lu overruns=%lu refills=%lu missed=%lu\n",
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u pcm_level=%lu underruns=%lu overruns=%lu refills=%lu missed=%lu pkts=%lu\n",
            (unsigned long)s_diag_sys_hz,
            (unsigned long)s_diag_hstx_hz,
            (unsigned long)s_diag_pixel_hz,
@@ -731,9 +774,10 @@ void video_hstx_print_diag(void) {
            (unsigned long)video_hstx_hdmi_audio_underruns(),
            (unsigned long)video_hstx_hdmi_audio_overruns(),
            (unsigned long)s_hdmi_audio_refills,
-           (unsigned long)s_hdmi_audio_missed_swaps
+           (unsigned long)s_hdmi_audio_missed_swaps,
+           (unsigned long)s_hdmi_audio_packet_cursor
 #else
-           0UL, 0UL, 0UL, 0UL, 0UL
+           0UL, 0UL, 0UL, 0UL, 0UL, 0UL
 #endif
     );
 }
@@ -773,6 +817,9 @@ void video_hstx_hdmi_audio_init(uint32_t sample_rate) {
     s_hdmi_audio_ready = false;
     s_hdmi_audio_refills = 0u;
     s_hdmi_audio_missed_swaps = 0u;
+    s_hdmi_audio_packets_built = 0u;
+    s_hdmi_audio_packet_cursor = 0u;
+    s_hdmi_audio_sample_accum_fp = 0u;
     s_hdmi_audio_frame_no = 0u;
     s_hdmi_test_tone_phase = 0u;
     s_hdmi_audio_underruns = 0u;
