@@ -6,6 +6,7 @@
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
+#include "hardware/pll.h"
 #include "hardware/sync.h"
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
@@ -399,11 +400,19 @@ static void __scratch_x("") hstx_dma_irq(void) {
 }
 
 static void hstx_configure_peripheral(void) {
-    const uint32_t sys_hz = clock_get_hz(clk_sys);
+    /* Source clk_hstx from pll_usb (reconfigured to 125 MHz) instead of
+     * clk_sys. This decouples HSTX timing from the CPU clock: clk_sys
+     * can run at 315 MHz for emulator performance while clk_hstx gets a
+     * clean 125 MHz → 25 MHz pixel clock with no fractional jitter.
+     * USB stdio is disabled on the HDMI target, so pll_usb is free.
+     *
+     * PLL config: XTAL=12 MHz, VCO=1500 MHz (fbdiv=125),
+     * post_div1=6, post_div2=2 → 1500/(6×2) = 125 MHz. */
+    pll_init(pll_usb, 1u, 1500u * MHZ, 6u, 2u);
 
     clock_configure(clk_hstx, 0,
-                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLK_SYS,
-                    sys_hz, HSTX_PIXEL_CLOCK_HZ);
+                    CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,
+                    125u * MHZ, HSTX_PIXEL_CLOCK_HZ);
 
     hstx_ctrl_hw->expand_tmds =
         2  << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB |
