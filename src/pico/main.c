@@ -381,7 +381,8 @@ int main(void) {
 #endif
                 }
 
-                emulator_video_adapter_present_frame(&emulator_video);
+                /* HDMI publishes scanlines as the emulator steps them; the
+                 * HSTX backend expands those rows on core 1. */
                 video_hstx_hdmi_audio_service();
             }
 #else
