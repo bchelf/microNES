@@ -199,12 +199,14 @@ static uint32_t __attribute__((aligned(4)))
 static volatile uint32_t s_hdmi_scanline_stalls;
 static volatile uint32_t s_hdmi_dma_double_hits;
 static volatile uint32_t s_hdmi_dma_race_rebuilds;
+static volatile uint32_t s_hdmi_dma_phase_corrections;
 static volatile uint64_t s_hdmi_first_dbl_vf;
 static volatile uint32_t s_hdmi_scanline_submitted;
 static volatile uint32_t s_hdmi_scanline_expanded;
 static volatile uint32_t s_hdmi_scanline_max_level;
 static volatile uint32_t s_hdmi_frame_submitted;
 static volatile uint32_t s_hdmi_frame_expanded;
+static uint32_t s_last_isr_us;
 
 /* --- HDMI data island cmd buffers --------------------------------------- */
 
@@ -689,11 +691,40 @@ static void __scratch_x("") hstx_dma_irq(void) {
     }
     dma_hw->intr = to_process;
 
-    if (to_process == (ping_mask | pong_mask)) {
+    uint32_t channels_to_handle =
+        (to_process == (ping_mask | pong_mask)) ? 2u : 1u;
+
+    if (channels_to_handle == 2u) {
         ++s_hdmi_dma_double_hits;
         if (s_hdmi_first_dbl_vf == 0u)
             s_hdmi_first_dbl_vf = s_stats.frames_presented;
     }
+
+    /* Resync scanline counter after IRQ blackouts (e.g. printf over USB).
+     * During a blackout the DMA chain replays stale buffers autonomously;
+     * IRQ flags are single bits, not counters, so no matter how many
+     * scanlines played we only see one IRQ per channel.  Use wall-clock
+     * time to compute how many scanlines the TV physically advanced and
+     * skip the counter forward to match. Without this, the counter falls
+     * permanently behind and builds VBI-sized buffers during active video
+     * (or vice-versa), cascading into a 4x drain. */
+    uint32_t now = timer_hw->timerawl;
+    if (s_last_isr_us != 0u) {
+        uint32_t elapsed = now - s_last_isr_us;
+        /* Scanline period ≈ 25.4 µs (800 pixels / 31.5 MHz).
+         * Using 25 µs is conservative (at most 1 extra advance per
+         * blackout, which self-corrects on the next ISR). */
+        uint32_t expected = elapsed / 25u;
+        if (expected > channels_to_handle) {
+            uint32_t extra = expected - channels_to_handle;
+            if (extra > MODE_V_TOTAL_LINES)
+                extra = MODE_V_TOTAL_LINES;
+            s_hdmi_dma_phase_corrections += extra;
+            for (uint32_t i = 0u; i < extra; ++i)
+                hstx_advance_scanline();
+        }
+    }
+    s_last_isr_us = now;
 
     if (to_process & ping_mask) {
         if (dma_channel_is_busy(s_dmach_ping)) {
@@ -806,11 +837,15 @@ bool video_hstx_init(void) {
     memset(s_framebuf, 0, sizeof(s_framebuf));
     memset(s_line_buf, 0, sizeof(s_line_buf));
     s_hdmi_scanline_stalls = 0u;
+    s_hdmi_dma_double_hits = 0u;
+    s_hdmi_dma_race_rebuilds = 0u;
+    s_hdmi_dma_phase_corrections = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
     s_hdmi_scanline_max_level = 0u;
     s_hdmi_frame_submitted = 0u;
     s_hdmi_frame_expanded = 0u;
+    s_last_isr_us = 0u;
     s_v_scanline = 2u;
     s_started = false;
     s_irq_configured = false;
@@ -1027,7 +1062,7 @@ void video_hstx_print_diag(void) {
     static uint32_t s_printf_max_us;
 
     uint32_t tp0 = timer_hw->timerawl;
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u start=%u worker=%u vf=%llu pcm=%lu q=%lu vq=%lu vmax=%lu dref=%lu dmiss=%lu dvsub=%lu dvexp=%lu dvstall=%lu vfsub=%lu vfexp=%lu underruns=%lu overruns=%lu pkts=%lu dbl=%lu race=%lu 1stdbl=%llu spinmax=%lu printmax=%lu\n",
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u start=%u worker=%u vf=%llu pcm=%lu q=%lu vq=%lu vmax=%lu dref=%lu dmiss=%lu dvsub=%lu dvexp=%lu dvstall=%lu vfsub=%lu vfexp=%lu underruns=%lu overruns=%lu pkts=%lu dbl=%lu race=%lu phase=%lu 1stdbl=%llu spinmax=%lu printmax=%lu\n",
            (unsigned long)s_diag_sys_hz,
            (unsigned long)s_diag_hstx_hz,
            (unsigned long)s_diag_pixel_hz,
@@ -1058,11 +1093,12 @@ void video_hstx_print_diag(void) {
            (unsigned long)s_hdmi_audio_packet_cursor,
            (unsigned long)s_hdmi_dma_double_hits,
            (unsigned long)s_hdmi_dma_race_rebuilds,
+           (unsigned long)s_hdmi_dma_phase_corrections,
            (unsigned long long)s_hdmi_first_dbl_vf,
            (unsigned long)s_hdmi_push_max_spin_us,
            (unsigned long)s_printf_max_us
 #else
-           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0ULL, 0UL, 0UL, 0UL
+           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0ULL, 0UL, 0UL, 0UL
 #endif
     );
     uint32_t tp1 = timer_hw->timerawl;
