@@ -679,16 +679,22 @@ static void __scratch_x("") hstx_dma_irq(void) {
     }
 
     if (to_process & ping_mask) {
-        if (dma_channel_is_busy(s_dmach_ping)) ++s_hdmi_dma_race_rebuilds;
-        uint32_t words = hstx_build_scanline(s_line_buf[0], 0u);
-        dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
-        dma_hw->ch[s_dmach_ping].transfer_count = words;
+        if (dma_channel_is_busy(s_dmach_ping)) {
+            ++s_hdmi_dma_race_rebuilds;
+        } else {
+            uint32_t words = hstx_build_scanline(s_line_buf[0], 0u);
+            dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
+            dma_hw->ch[s_dmach_ping].transfer_count = words;
+        }
     }
     if (to_process & pong_mask) {
-        if (dma_channel_is_busy(s_dmach_pong)) ++s_hdmi_dma_race_rebuilds;
-        uint32_t words = hstx_build_scanline(s_line_buf[1], 1u);
-        dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
-        dma_hw->ch[s_dmach_pong].transfer_count = words;
+        if (dma_channel_is_busy(s_dmach_pong)) {
+            ++s_hdmi_dma_race_rebuilds;
+        } else {
+            uint32_t words = hstx_build_scanline(s_line_buf[1], 1u);
+            dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
+            dma_hw->ch[s_dmach_pong].transfer_count = words;
+        }
     }
 }
 
