@@ -58,6 +58,14 @@ static int s_dmach_pong = -1;
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
 
+/* Each framebuffer line starts with an HSTX_CMD_TMDS prefix word so that
+ * stale DMA config for the pixel phase always presents a valid TMDS
+ * command to the HSTX, preventing the HSTX from misinterpreting pixel
+ * data as commands (which causes rapid FIFO drain and a 4x cascade). */
+#define FRAMEBUF_CMD_PREFIX_BYTES 4u
+#define FRAMEBUF_LINE_STRIDE     (FRAMEBUF_CMD_PREFIX_BYTES + MODE_H_ACTIVE_PIXELS)
+#define FRAMEBUF_LINE_DMA_WORDS  (FRAMEBUF_LINE_STRIDE / sizeof(uint32_t))
+
 #define HSTX_INTERNAL_CLKDIV 5u
 #define HDMI_HSTX_CLOCK_HZ   157500000u
 #define HDMI_PIXEL_CLOCK_HZ  (HDMI_HSTX_CLOCK_HZ / HSTX_INTERNAL_CLKDIV)
@@ -90,7 +98,7 @@ static int s_dmach_pong = -1;
 
 #define HDMI_ACTIVE_DI_LINE_WORDS \
     (2u + 1u + 2u + 1u + 1u + HDMI_ONE_PACKET_ISLAND_WORDS + 1u + 2u + 1u + \
-     2u + 1u + 2u + 1u + 2u + 1u)
+     2u + 1u + 2u + 1u + 2u)
 
 /* --- Existing VBI cmd lists (DVI-compatible, no data island) ------------ */
 
@@ -144,6 +152,9 @@ static uint32_t s_vblank_line_vsync_on[] = {
 #define MICRONES_HDMI_AUDIO_CORE1 1
 #endif
 
+/* The HSTX_CMD_TMDS command is NOT included here — it lives as a prefix
+ * word in each framebuffer line (see FRAMEBUF_CMD_PREFIX_BYTES) so that
+ * stale pixel-phase DMA always presents a valid TMDS command. */
 #if MICRONES_HDMI_VIDEO_PREAMBLE
 static uint32_t s_vactive_line[] = {
     HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH,
@@ -156,7 +167,6 @@ static uint32_t s_vactive_line[] = {
     0u, /* patched in init to hdmi_video_preamble_word */
     HSTX_CMD_RAW_REPEAT | HDMI_VIDEO_GUARDBAND_PIXELS,
     0u, /* patched in init to hdmi_video_guardband_word */
-    HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS,
 };
 #else
 static uint32_t s_vactive_line[] = {
@@ -167,12 +177,11 @@ static uint32_t s_vactive_line[] = {
     HSTX_CMD_RAW_REPEAT | MODE_H_BACK_PORCH,
     SYNC_V1_H1,
     HSTX_CMD_NOP,
-    HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS,
 };
 #endif
 
 static uint8_t __attribute__((aligned(4)))
-    s_framebuf[MODE_H_ACTIVE_PIXELS * FRAMEBUF_STORED_LINES];
+    s_framebuf[FRAMEBUF_LINE_STRIDE * FRAMEBUF_STORED_LINES];
 
 static volatile uint32_t s_hdmi_scanline_stalls;
 static volatile uint32_t s_hdmi_dma_double_hits;
@@ -295,7 +304,7 @@ static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
         return;
     }
 
-    uint8_t *dst = &s_framebuf[(uint32_t)y * MODE_H_ACTIVE_PIXELS];
+    uint8_t *dst = &s_framebuf[(uint32_t)y * FRAMEBUF_LINE_STRIDE + FRAMEBUF_CMD_PREFIX_BYTES];
     if (s_borders_dirty) {
         memset(dst, 0, NES_VIEW_X);
         memset(dst + NES_VIEW_X + (NES_FRAME_WIDTH * NES_SCALE), 0,
@@ -373,7 +382,6 @@ static void hdmi_build_active_di_line(uint32_t *buf,
     *p++ = HSTX_CMD_NOP;
     *p++ = HSTX_CMD_RAW_REPEAT | HDMI_VIDEO_GUARDBAND_PIXELS;
     *p++ = hdmi_video_guardband_word;
-    *p++ = HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS;
 }
 
 static void hdmi_refill_control_islands(void) {
@@ -643,8 +651,8 @@ static void __scratch_x("") hstx_dma_irq(void) {
         } else {
             uint32_t active_y = s_v_scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
             uint32_t stored_y = active_y / NES_SCALE;
-            ch->read_addr = (uintptr_t)&s_framebuf[stored_y * MODE_H_ACTIVE_PIXELS];
-            ch->transfer_count = MODE_H_ACTIVE_PIXELS / sizeof(uint32_t);
+            ch->read_addr = (uintptr_t)&s_framebuf[stored_y * FRAMEBUF_LINE_STRIDE];
+            ch->transfer_count = FRAMEBUF_LINE_DMA_WORDS;
             s_vactive_cmdlist_posted = false;
         }
 
@@ -741,6 +749,10 @@ bool video_hstx_init(void) {
     snprintf(s_last_error, sizeof(s_last_error), "%s", "");
     memset(&s_stats, 0, sizeof(s_stats));
     memset(s_framebuf, 0, sizeof(s_framebuf));
+    for (uint32_t y = 0u; y < FRAMEBUF_STORED_LINES; ++y) {
+        uint32_t *cmd = (uint32_t *)&s_framebuf[y * FRAMEBUF_LINE_STRIDE];
+        *cmd = HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS;
+    }
     s_hdmi_scanline_stalls = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
@@ -926,7 +938,7 @@ void video_hstx_draw_test_pattern(void) {
                 uint8_t level = ((x / 16u) ^ (display_y / 16u)) & 1u ? 255u : 0u;
                 c = rgb332(level, level, level);
             }
-            s_framebuf[y * MODE_H_ACTIVE_PIXELS + x] = c;
+            s_framebuf[y * FRAMEBUF_LINE_STRIDE + FRAMEBUF_CMD_PREFIX_BYTES + x] = c;
         }
     }
     s_borders_dirty = true;
