@@ -131,12 +131,7 @@ static const uint8_t k_palette_rgb332[64] = {
     0xf9, 0xdd, 0xbe, 0xbf, 0x1f, 0xfb, 0x00, 0x00,
 };
 
-static void __scratch_x("") hstx_dma_irq(void) {
-    uint32_t ch_num = s_dma_pong ? (uint32_t)s_dmach_pong : (uint32_t)s_dmach_ping;
-    dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
-    dma_hw->intr = 1u << ch_num;
-    s_dma_pong = !s_dma_pong;
-
+static void hstx_configure_next_scanline(dma_channel_hw_t *ch) {
     if (s_v_scanline >= MODE_V_FRONT_PORCH &&
         s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
         ch->read_addr = (uintptr_t)s_vblank_line_vsync_on;
@@ -162,6 +157,28 @@ static void __scratch_x("") hstx_dma_irq(void) {
             ++s_stats.frames_presented;
         }
     }
+}
+
+static void __scratch_x("") hstx_dma_irq(void) {
+    /* Without chaining, exactly one channel completes per ISR.  The OTHER
+     * channel was pre-configured by the previous ISR and is ready to go.
+     *
+     * Pipeline: start the pre-configured channel immediately (minimises the
+     * HSTX FIFO gap), then configure the just-completed channel for the
+     * scanline AFTER the one that's now running.
+     *
+     * If the ISR was blocked (e.g. by printf), the DMA was simply idle — no
+     * stale data replayed, no cascade. */
+    uint32_t completed = s_dma_pong ? (uint32_t)s_dmach_pong : (uint32_t)s_dmach_ping;
+    uint32_t next      = s_dma_pong ? (uint32_t)s_dmach_ping : (uint32_t)s_dmach_pong;
+
+    dma_hw->intr = 1u << completed;
+
+    dma_channel_start(next);
+
+    s_dma_pong = !s_dma_pong;
+
+    hstx_configure_next_scanline(&dma_hw->ch[completed]);
 }
 
 static void hstx_configure_peripheral(void) {
@@ -208,8 +225,12 @@ static void hstx_configure_peripheral(void) {
 
 static void hstx_configure_dma(void) {
     const uint32_t mask = (1u << s_dmach_ping) | (1u << s_dmach_pong);
+
+    /* No chaining: each channel chains to itself (disabled).  The ISR
+     * explicitly starts the next channel after configuring it, so a delayed
+     * ISR causes a stall instead of stale-data replay cascades. */
     dma_channel_config c = dma_channel_get_default_config((uint)s_dmach_ping);
-    channel_config_set_chain_to(&c, (uint)s_dmach_pong);
+    channel_config_set_chain_to(&c, (uint)s_dmach_ping);
     channel_config_set_dreq(&c, DREQ_HSTX);
     dma_channel_configure((uint)s_dmach_ping, &c,
                           &hstx_fifo_hw->fifo,
@@ -218,7 +239,7 @@ static void hstx_configure_dma(void) {
                           false);
 
     c = dma_channel_get_default_config((uint)s_dmach_pong);
-    channel_config_set_chain_to(&c, (uint)s_dmach_ping);
+    channel_config_set_chain_to(&c, (uint)s_dmach_pong);
     channel_config_set_dreq(&c, DREQ_HSTX);
     dma_channel_configure((uint)s_dmach_pong, &c,
                           &hstx_fifo_hw->fifo,
