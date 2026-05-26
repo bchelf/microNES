@@ -336,8 +336,9 @@ static const uint32_t k_hdmi_di_preamble_v1_h0 =
     TMDS_CTRL_10 | ((uint32_t)TMDS_CTRL_01 << 10) |
     ((uint32_t)TMDS_CTRL_01 << 20);
 
-static void hdmi_build_vblank_di_line(uint32_t *buf,
-                                      const uint32_t island[HDMI_ONE_PACKET_ISLAND_WORDS]) {
+static void __scratch_x("vbl") hdmi_build_vblank_di_line(
+        uint32_t *buf,
+        const uint32_t island[HDMI_ONE_PACKET_ISLAND_WORDS]) {
     uint32_t *p = buf;
     *p++ = HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH;
     *p++ = SYNC_V1_H1;
@@ -346,7 +347,9 @@ static void hdmi_build_vblank_di_line(uint32_t *buf,
     *p++ = k_hdmi_di_preamble_v1_h0;
     *p++ = HSTX_CMD_NOP;
     *p++ = HSTX_CMD_RAW | HDMI_ONE_PACKET_ISLAND_WORDS;
-    memcpy(p, island, HDMI_ONE_PACKET_ISLAND_WORDS * sizeof(*p));
+    for (uint32_t i = 0u; i < HDMI_ONE_PACKET_ISLAND_WORDS; ++i) {
+        p[i] = island[i];
+    }
     p += HDMI_ONE_PACKET_ISLAND_WORDS;
     *p++ = HSTX_CMD_NOP;
     *p++ = HSTX_CMD_RAW_REPEAT | HDMI_SYNC_AFTER_DI_PIXELS;
@@ -357,8 +360,9 @@ static void hdmi_build_vblank_di_line(uint32_t *buf,
     *p++ = HSTX_CMD_NOP;
 }
 
-static void hdmi_build_active_di_line(uint32_t *buf,
-                                      const uint32_t island[HDMI_ONE_PACKET_ISLAND_WORDS]) {
+static void __scratch_x("act") hdmi_build_active_di_line(
+        uint32_t *buf,
+        const uint32_t island[HDMI_ONE_PACKET_ISLAND_WORDS]) {
     uint32_t *p = buf;
     *p++ = HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH;
     *p++ = SYNC_V1_H1;
@@ -367,7 +371,9 @@ static void hdmi_build_active_di_line(uint32_t *buf,
     *p++ = k_hdmi_di_preamble_v1_h0;
     *p++ = HSTX_CMD_NOP;
     *p++ = HSTX_CMD_RAW | HDMI_ONE_PACKET_ISLAND_WORDS;
-    memcpy(p, island, HDMI_ONE_PACKET_ISLAND_WORDS * sizeof(*p));
+    for (uint32_t i = 0u; i < HDMI_ONE_PACKET_ISLAND_WORDS; ++i) {
+        p[i] = island[i];
+    }
     p += HDMI_ONE_PACKET_ISLAND_WORDS;
     *p++ = HSTX_CMD_NOP;
     *p++ = HSTX_CMD_RAW_REPEAT | HDMI_SYNC_AFTER_DI_PIXELS;
@@ -490,7 +496,7 @@ static inline void hdmi_audio_scheduler_tick(void) {
     s_hdmi_audio_sample_accum_fp += HDMI_AUDIO_SAMPLES_PER_LINE_FP;
 }
 
-static const uint32_t *hdmi_next_audio_island(void) {
+static const uint32_t * __scratch_x("nxt") hdmi_next_audio_island(void) {
     if (s_hdmi_audio_sample_accum_fp < (4u << 16u)) {
         return s_hdmi_null_island;
     }
