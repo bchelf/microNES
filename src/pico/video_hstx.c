@@ -51,29 +51,28 @@
 #define HSTX_CMD_TMDS        (0x2u << 12)
 #define HSTX_CMD_NOP         (0xfu << 12)
 
-/* Four DMA channels arranged as two "slots" (A and B). Each slot has a
- * CMD channel for the blanking/sync cmdlist and a PIX channel for the
- * TMDS pixel data.  The chain is: A_CMD→A_PIX→B_CMD→B_PIX→A_CMD→...
- * IRQs fire only on PIX completions (once per full scanline), giving
- * the ISR the entire 25 µs line period to reconfigure the completed
- * slot for 2 scanlines ahead.  This eliminates the fragile 5 µs
- * intra-line deadline of the old two-phase ping/pong model. */
-static int s_dmach_a_cmd = -1;
-static int s_dmach_a_pix = -1;
-static int s_dmach_b_cmd = -1;
-static int s_dmach_b_pix = -1;
+/* Two DMA channels in a ping/pong arrangement. Each channel transfers
+ * one complete scanline from a contiguous line buffer. The ISR fires
+ * once per scanline (both channels have IRQ enabled) and builds the
+ * NEXT scanline into the buffer that just finished transmitting.
+ * Chain: ping→pong→ping→... */
+static int s_dmach_ping = -1;
+static int s_dmach_pong = -1;
 
 #define NES_SCALE 2u
 #define NES_VIEW_X ((MODE_H_ACTIVE_PIXELS - (NES_FRAME_WIDTH * NES_SCALE)) / 2u)
 #define FRAMEBUF_STORED_LINES NES_FRAME_HEIGHT
 
-/* Each framebuffer line starts with an HSTX_CMD_TMDS prefix word so that
- * stale DMA config for the pixel phase always presents a valid TMDS
- * command to the HSTX, preventing the HSTX from misinterpreting pixel
- * data as commands (which causes rapid FIFO drain and a 4x cascade). */
-#define FRAMEBUF_CMD_PREFIX_BYTES 4u
-#define FRAMEBUF_LINE_STRIDE     (FRAMEBUF_CMD_PREFIX_BYTES + MODE_H_ACTIVE_PIXELS)
-#define FRAMEBUF_LINE_DMA_WORDS  (FRAMEBUF_LINE_STRIDE / sizeof(uint32_t))
+/* Framebuffer: plain pixel data, no HSTX command prefix. The ISR copies
+ * pixel data into the contiguous line buffer after the cmdlist. */
+#define FRAMEBUF_LINE_BYTES      MODE_H_ACTIVE_PIXELS
+#define FRAMEBUF_PIXEL_WORDS     (MODE_H_ACTIVE_PIXELS / sizeof(uint32_t))
+
+/* Contiguous line buffers for the single-DMA-per-scanline model.
+ * Largest line is an active line with a data-island cmdlist prefix:
+ *   HDMI_ACTIVE_DI_LINE_WORDS (56) + FRAMEBUF_PIXEL_WORDS (160) = 216.
+ * VBI lines are smaller (7-50 words). */
+#define MAX_LINE_WORDS 216u
 
 #define HSTX_INTERNAL_CLKDIV 5u
 #define HDMI_HSTX_CLOCK_HZ   157500000u
@@ -107,7 +106,7 @@ static int s_dmach_b_pix = -1;
 
 #define HDMI_ACTIVE_DI_LINE_WORDS \
     (2u + 1u + 2u + 1u + 1u + HDMI_ONE_PACKET_ISLAND_WORDS + 1u + 2u + 1u + \
-     2u + 1u + 2u + 1u + 2u)
+     2u + 1u + 2u + 1u + 2u + 1u) /* +1 for HSTX_CMD_TMDS appended */
 
 /* --- Existing VBI cmd lists (DVI-compatible, no data island) ------------ */
 
@@ -161,9 +160,8 @@ static uint32_t s_vblank_line_vsync_on[] = {
 #define MICRONES_HDMI_AUDIO_CORE1 1
 #endif
 
-/* The HSTX_CMD_TMDS command is NOT included here — it lives as a prefix
- * word in each framebuffer line (see FRAMEBUF_CMD_PREFIX_BYTES) so that
- * stale pixel-phase DMA always presents a valid TMDS command. */
+/* Active-line cmdlist including HSTX_CMD_TMDS at the end. The ISR copies
+ * this prefix into the line buffer, then appends pixel data after it. */
 #if MICRONES_HDMI_VIDEO_PREAMBLE
 static uint32_t s_vactive_line[] = {
     HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH,
@@ -176,6 +174,7 @@ static uint32_t s_vactive_line[] = {
     0u, /* patched in init to hdmi_video_preamble_word */
     HSTX_CMD_RAW_REPEAT | HDMI_VIDEO_GUARDBAND_PIXELS,
     0u, /* patched in init to hdmi_video_guardband_word */
+    HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS,
 };
 #else
 static uint32_t s_vactive_line[] = {
@@ -185,12 +184,17 @@ static uint32_t s_vactive_line[] = {
     SYNC_V1_H0,
     HSTX_CMD_RAW_REPEAT | MODE_H_BACK_PORCH,
     SYNC_V1_H1,
-    HSTX_CMD_NOP,
+    HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS,
 };
 #endif
 
 static uint8_t __attribute__((aligned(4)))
-    s_framebuf[FRAMEBUF_LINE_STRIDE * FRAMEBUF_STORED_LINES];
+    s_framebuf[FRAMEBUF_LINE_BYTES * FRAMEBUF_STORED_LINES];
+
+/* Two ping/pong line buffers — each large enough for the biggest
+ * possible scanline (active line with data-island prefix + pixels). */
+static uint32_t __attribute__((aligned(4)))
+    s_line_buf[2][MAX_LINE_WORDS];
 
 static volatile uint32_t s_hdmi_scanline_stalls;
 static volatile uint32_t s_hdmi_dma_double_hits;
@@ -220,12 +224,6 @@ static uint32_t __attribute__((aligned(4)))
 
 static uint32_t __attribute__((aligned(4)))
     s_hdmi_control_line_buf[HDMI_CONTROL_PACKET_LINES][HDMI_VBLANK_DI_LINE_WORDS];
-
-static uint32_t __attribute__((aligned(4)))
-    s_hdmi_vblank_di_line_buf[2][HDMI_VBLANK_DI_LINE_WORDS];
-
-static uint32_t __attribute__((aligned(4)))
-    s_hdmi_active_di_line_buf[2][HDMI_ACTIVE_DI_LINE_WORDS];
 
 static volatile uint32_t s_hdmi_audio_refills;
 static volatile uint32_t s_hdmi_audio_missed_swaps;
@@ -257,7 +255,6 @@ static volatile bool s_hdmi_audio_worker_running;
 static uint32_t s_v_scanline = 2u;
 static bool s_started;
 static bool s_irq_configured;
-static uint32_t s_hstx_nop_word = HSTX_CMD_NOP;
 
 static uint32_t s_diag_sys_hz;
 static uint32_t s_diag_hstx_hz;
@@ -313,7 +310,7 @@ static void hdmi_expand_scanline_to_framebuf(const uint8_t *src, uint16_t y) {
         return;
     }
 
-    uint8_t *dst = &s_framebuf[(uint32_t)y * FRAMEBUF_LINE_STRIDE + FRAMEBUF_CMD_PREFIX_BYTES];
+    uint8_t *dst = &s_framebuf[(uint32_t)y * FRAMEBUF_LINE_BYTES];
     if (s_borders_dirty) {
         memset(dst, 0, NES_VIEW_X);
         memset(dst + NES_VIEW_X + (NES_FRAME_WIDTH * NES_SCALE), 0,
@@ -397,6 +394,7 @@ static void __scratch_x("act") hdmi_build_active_di_line(
     *p++ = HSTX_CMD_NOP;
     *p++ = HSTX_CMD_RAW_REPEAT | HDMI_VIDEO_GUARDBAND_PIXELS;
     *p++ = hdmi_video_guardband_word;
+    *p++ = HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS;
 }
 
 static void hdmi_refill_control_islands(void) {
@@ -579,70 +577,74 @@ static void __not_in_flash_func(video_hstx_audio_core1_entry)(void) {
 
 /* --- DMA / ISR --------------------------------------------------------- */
 
-/* Configure slot (CMD + PIX channels) for the NEXT scanline to display.
- * CMD gets the blanking/sync/data-island cmdlist; PIX gets the pixel
- * data (TMDS prefix + framebuf) for active lines or a 1-word NOP for
- * VBI lines.  Advances s_v_scanline after configuration. */
-static void __scratch_x("cfg") hstx_configure_slot(
-        dma_channel_hw_t *cmd_ch, dma_channel_hw_t *pix_ch,
-        uint32_t cmd_buf_idx) {
+/* Build a complete scanline into buf[]. Returns the word count written.
+ * This function runs from SRAM (__scratch_x) since it is called from
+ * the DMA ISR and must not stall on XIP cache misses. */
+static uint32_t __scratch_x("bld") hstx_build_scanline(
+        uint32_t *buf, uint32_t buf_idx) {
+    (void)buf_idx;
     uint32_t vbi_end = MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH;
+    uint32_t *p = buf;
 
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
     hdmi_audio_scheduler_tick();
 #endif
 
-    /* Configure CMD channel (blanking/sync). */
     if (s_v_scanline >= MODE_V_FRONT_PORCH &&
         s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
-        cmd_ch->read_addr = (uintptr_t)s_vblank_line_vsync_on;
-        cmd_ch->transfer_count = count_of(s_vblank_line_vsync_on);
+        /* VSYNC-on VBI line — copy the static cmdlist. */
+        for (uint32_t i = 0u; i < count_of(s_vblank_line_vsync_on); ++i) {
+            *p++ = s_vblank_line_vsync_on[i];
+        }
     } else if (s_v_scanline < vbi_end) {
+        /* VBI line (vsync off) — may carry data islands. */
 #if MICRONES_HDMI_DATA_ISLANDS
         if (s_v_scanline >= HDMI_CONTROL_VBI_LINE &&
             s_v_scanline < HDMI_CONTROL_VBI_LINE + HDMI_CONTROL_PACKET_LINES) {
             uint32_t line_idx = s_v_scanline - HDMI_CONTROL_VBI_LINE;
-            cmd_ch->read_addr = (uintptr_t)s_hdmi_control_line_buf[line_idx];
-            cmd_ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
+            const uint32_t *src = s_hdmi_control_line_buf[line_idx];
+            for (uint32_t i = 0u; i < HDMI_VBLANK_DI_LINE_WORDS; ++i) {
+                *p++ = src[i];
+            }
         } else {
 #if MICRONES_HDMI_AUDIO_PACKETS
             const uint32_t *island = hdmi_next_audio_island();
-            hdmi_build_vblank_di_line(s_hdmi_vblank_di_line_buf[cmd_buf_idx], island);
-            cmd_ch->read_addr = (uintptr_t)s_hdmi_vblank_di_line_buf[cmd_buf_idx];
-            cmd_ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
+            hdmi_build_vblank_di_line(buf, island);
+            p = buf + HDMI_VBLANK_DI_LINE_WORDS;
 #else
-            cmd_ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
-            cmd_ch->transfer_count = count_of(s_vblank_line_vsync_off);
+            for (uint32_t i = 0u; i < count_of(s_vblank_line_vsync_off); ++i) {
+                *p++ = s_vblank_line_vsync_off[i];
+            }
 #endif
         }
 #else
-        cmd_ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
-        cmd_ch->transfer_count = count_of(s_vblank_line_vsync_off);
+        for (uint32_t i = 0u; i < count_of(s_vblank_line_vsync_off); ++i) {
+            *p++ = s_vblank_line_vsync_off[i];
+        }
 #endif
     } else {
+        /* Active (visible) line — cmdlist prefix + pixel data. */
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
         const uint32_t *island = hdmi_next_audio_island();
-        hdmi_build_active_di_line(s_hdmi_active_di_line_buf[cmd_buf_idx], island);
-        cmd_ch->read_addr = (uintptr_t)s_hdmi_active_di_line_buf[cmd_buf_idx];
-        cmd_ch->transfer_count = HDMI_ACTIVE_DI_LINE_WORDS;
+        hdmi_build_active_di_line(buf, island);
+        p = buf + HDMI_ACTIVE_DI_LINE_WORDS;
 #else
-        cmd_ch->read_addr = (uintptr_t)s_vactive_line;
-        cmd_ch->transfer_count = count_of(s_vactive_line);
+        for (uint32_t i = 0u; i < count_of(s_vactive_line); ++i) {
+            *p++ = s_vactive_line[i];
+        }
 #endif
-    }
-
-    /* Configure PIX channel (pixel data or VBI NOP). */
-    if (s_v_scanline >= vbi_end) {
+        /* Copy pixel data from framebuffer. Word-copy loop (not memcpy)
+         * because this function must run entirely from SRAM. */
         uint32_t active_y = s_v_scanline - vbi_end;
         uint32_t stored_y = active_y / NES_SCALE;
-        pix_ch->read_addr = (uintptr_t)&s_framebuf[stored_y * FRAMEBUF_LINE_STRIDE];
-        pix_ch->transfer_count = FRAMEBUF_LINE_DMA_WORDS;
-    } else {
-        pix_ch->read_addr = (uintptr_t)&s_hstx_nop_word;
-        pix_ch->transfer_count = 1u;
+        const uint32_t *src = (const uint32_t *)&s_framebuf[stored_y * FRAMEBUF_LINE_BYTES];
+        for (uint32_t i = 0u; i < FRAMEBUF_PIXEL_WORDS; ++i) {
+            *p++ = src[i];
+        }
     }
 
     /* Advance to next scanline. */
+    uint32_t words = (uint32_t)(p - buf);
     s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
     if (s_v_scanline == 0u) {
         ++s_stats.frames_presented;
@@ -650,33 +652,36 @@ static void __scratch_x("cfg") hstx_configure_slot(
         s_hdmi_audio_packet_cursor = 0u;
 #endif
     }
+    return words;
 }
 
 static void __scratch_x("") hstx_dma_irq(void) {
-    /* IRQs are only enabled on PIX channels (a_pix and b_pix).
-     * When a PIX channel fires, its entire slot (CMD+PIX) is done.
-     * The OTHER slot's CMD is already running (or about to).
-     * We reconfigure the completed slot for 2 scanlines ahead. */
-    const uint32_t a_pix_mask = 1u << (uint32_t)s_dmach_a_pix;
-    const uint32_t b_pix_mask = 1u << (uint32_t)s_dmach_b_pix;
+    /* Both ping and pong channels have IRQ enabled. When a channel
+     * completes, the other channel is already running (chained).
+     * We build the NEXT scanline into the buffer that just finished
+     * transmitting. */
+    const uint32_t ping_mask = 1u << (uint32_t)s_dmach_ping;
+    const uint32_t pong_mask = 1u << (uint32_t)s_dmach_pong;
     uint32_t ints = dma_hw->ints0;
-    uint32_t to_process = ints & (a_pix_mask | b_pix_mask);
+    uint32_t to_process = ints & (ping_mask | pong_mask);
     if (to_process == 0u) {
         return;
     }
     dma_hw->intr = to_process;
 
-    if (to_process == (a_pix_mask | b_pix_mask)) {
+    if (to_process == (ping_mask | pong_mask)) {
         ++s_hdmi_dma_double_hits;
     }
 
-    if (to_process & a_pix_mask) {
-        hstx_configure_slot(&dma_hw->ch[s_dmach_a_cmd],
-                            &dma_hw->ch[s_dmach_a_pix], 0u);
+    if (to_process & ping_mask) {
+        uint32_t words = hstx_build_scanline(s_line_buf[0], 0u);
+        dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
+        dma_hw->ch[s_dmach_ping].transfer_count = words;
     }
-    if (to_process & b_pix_mask) {
-        hstx_configure_slot(&dma_hw->ch[s_dmach_b_cmd],
-                            &dma_hw->ch[s_dmach_b_pix], 1u);
+    if (to_process & pong_mask) {
+        uint32_t words = hstx_build_scanline(s_line_buf[1], 1u);
+        dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
+        dma_hw->ch[s_dmach_pong].transfer_count = words;
     }
 }
 
@@ -724,33 +729,33 @@ static void hstx_configure_peripheral(void) {
 }
 
 static void hstx_configure_dma(void) {
-    /* Chain: a_cmd → a_pix → b_cmd → b_pix → a_cmd → ... */
-    static const struct { int *ch; int chain_to_idx; } ch_order[] = {
-        { &s_dmach_a_cmd, 1 },  /* 0: a_cmd → a_pix */
-        { &s_dmach_a_pix, 2 },  /* 1: a_pix → b_cmd */
-        { &s_dmach_b_cmd, 3 },  /* 2: b_cmd → b_pix */
-        { &s_dmach_b_pix, 0 },  /* 3: b_pix → a_cmd */
-    };
+    /* Chain: ping → pong → ping → ... */
+    dma_channel_config c;
 
-    for (uint32_t i = 0u; i < 4u; ++i) {
-        int ch = *ch_order[i].ch;
-        int chain_to = *ch_order[ch_order[i].chain_to_idx].ch;
-        dma_channel_config c = dma_channel_get_default_config((uint)ch);
-        channel_config_set_chain_to(&c, (uint)chain_to);
-        channel_config_set_dreq(&c, DREQ_HSTX);
-        dma_channel_configure((uint)ch, &c,
-                              &hstx_fifo_hw->fifo,
-                              s_vblank_line_vsync_off,
-                              count_of(s_vblank_line_vsync_off),
-                              false);
-    }
+    /* Ping channel — chains to pong. */
+    c = dma_channel_get_default_config((uint)s_dmach_ping);
+    channel_config_set_chain_to(&c, (uint)s_dmach_pong);
+    channel_config_set_dreq(&c, DREQ_HSTX);
+    dma_channel_configure((uint)s_dmach_ping, &c,
+                          &hstx_fifo_hw->fifo,
+                          s_line_buf[0],
+                          count_of(s_vblank_line_vsync_off),
+                          false);
 
-    /* IRQs only on PIX channels — one ISR per full scanline. */
-    const uint32_t irq_mask = (1u << s_dmach_a_pix) | (1u << s_dmach_b_pix);
-    const uint32_t all_mask = (1u << s_dmach_a_cmd) | (1u << s_dmach_a_pix) |
-                              (1u << s_dmach_b_cmd) | (1u << s_dmach_b_pix);
+    /* Pong channel — chains to ping. */
+    c = dma_channel_get_default_config((uint)s_dmach_pong);
+    channel_config_set_chain_to(&c, (uint)s_dmach_ping);
+    channel_config_set_dreq(&c, DREQ_HSTX);
+    dma_channel_configure((uint)s_dmach_pong, &c,
+                          &hstx_fifo_hw->fifo,
+                          s_line_buf[1],
+                          count_of(s_vblank_line_vsync_off),
+                          false);
+
+    /* IRQs on both channels — one ISR per scanline. */
+    const uint32_t all_mask = (1u << s_dmach_ping) | (1u << s_dmach_pong);
     dma_hw->intr = all_mask;
-    dma_hw->inte0 = (dma_hw->inte0 & ~all_mask) | irq_mask;
+    dma_hw->inte0 = (dma_hw->inte0 & ~all_mask) | all_mask;
     if (!s_irq_configured) {
         irq_set_exclusive_handler(DMA_IRQ_0, hstx_dma_irq);
         s_irq_configured = true;
@@ -767,10 +772,7 @@ bool video_hstx_init(void) {
     snprintf(s_last_error, sizeof(s_last_error), "%s", "");
     memset(&s_stats, 0, sizeof(s_stats));
     memset(s_framebuf, 0, sizeof(s_framebuf));
-    for (uint32_t y = 0u; y < FRAMEBUF_STORED_LINES; ++y) {
-        uint32_t *cmd = (uint32_t *)&s_framebuf[y * FRAMEBUF_LINE_STRIDE];
-        *cmd = HSTX_CMD_TMDS | MODE_H_ACTIVE_PIXELS;
-    }
+    memset(s_line_buf, 0, sizeof(s_line_buf));
     s_hdmi_scanline_stalls = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
@@ -783,10 +785,8 @@ bool video_hstx_init(void) {
     s_borders_dirty = true;
     init_palette_rgb332();
 
-    if (s_dmach_a_cmd < 0) s_dmach_a_cmd = dma_claim_unused_channel(true);
-    if (s_dmach_a_pix < 0) s_dmach_a_pix = dma_claim_unused_channel(true);
-    if (s_dmach_b_cmd < 0) s_dmach_b_cmd = dma_claim_unused_channel(true);
-    if (s_dmach_b_pix < 0) s_dmach_b_pix = dma_claim_unused_channel(true);
+    if (s_dmach_ping < 0) s_dmach_ping = dma_claim_unused_channel(true);
+    if (s_dmach_pong < 0) s_dmach_pong = dma_claim_unused_channel(true);
 
 #if MICRONES_HDMI_VIDEO_PREAMBLE
     /* Patch the per-pixel HDMI preamble/guard-band words into the active-line
@@ -861,24 +861,28 @@ void video_hstx_start(void) {
     s_hdmi_scanline_max_level = 0u;
     hstx_configure_peripheral();
     hstx_configure_dma();
-    /* Pre-configure both slots for the first two scanlines so the
-     * chain has valid data from the start. */
-    hstx_configure_slot(&dma_hw->ch[s_dmach_a_cmd],
-                        &dma_hw->ch[s_dmach_a_pix], 0u);
-    hstx_configure_slot(&dma_hw->ch[s_dmach_b_cmd],
-                        &dma_hw->ch[s_dmach_b_pix], 1u);
+    /* Pre-build the first two scanlines into the ping/pong buffers
+     * so the chain has valid data from the start. */
+    {
+        uint32_t words0 = hstx_build_scanline(s_line_buf[0], 0u);
+        dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
+        dma_hw->ch[s_dmach_ping].transfer_count = words0;
+
+        uint32_t words1 = hstx_build_scanline(s_line_buf[1], 1u);
+        dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
+        dma_hw->ch[s_dmach_pong].transfer_count = words1;
+    }
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS && \
     MICRONES_HDMI_AUDIO_CORE1 && !MICRONES_HDMI_TEST_TONE
     s_hdmi_audio_worker_running = true;
     multicore_launch_core1(video_hstx_audio_core1_entry);
 #endif
     s_started = true;
-    dma_channel_start((uint)s_dmach_a_cmd);
+    dma_channel_start((uint)s_dmach_ping);
 }
 
 void video_hstx_stop(void) {
-    const uint32_t all_mask = (1u << s_dmach_a_cmd) | (1u << s_dmach_a_pix) |
-                              (1u << s_dmach_b_cmd) | (1u << s_dmach_b_pix);
+    const uint32_t all_mask = (1u << s_dmach_ping) | (1u << s_dmach_pong);
 
     if (!s_started) {
         return;
@@ -896,14 +900,10 @@ void video_hstx_stop(void) {
 #endif
 
     /* RP2350-E5: clear EN bits before aborting chained channels. */
-    for (int i = 0; i < 4; ++i) {
-        int ch = (int[]){s_dmach_a_cmd, s_dmach_a_pix, s_dmach_b_cmd, s_dmach_b_pix}[i];
-        hw_clear_bits(&dma_hw->ch[ch].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
-    }
-    dma_channel_abort((uint)s_dmach_a_cmd);
-    dma_channel_abort((uint)s_dmach_a_pix);
-    dma_channel_abort((uint)s_dmach_b_cmd);
-    dma_channel_abort((uint)s_dmach_b_pix);
+    hw_clear_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+    hw_clear_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+    dma_channel_abort((uint)s_dmach_ping);
+    dma_channel_abort((uint)s_dmach_pong);
     dma_hw->intr = all_mask;
     hstx_ctrl_hw->csr = 0u;
 
@@ -961,7 +961,7 @@ void video_hstx_draw_test_pattern(void) {
                 uint8_t level = ((x / 16u) ^ (display_y / 16u)) & 1u ? 255u : 0u;
                 c = rgb332(level, level, level);
             }
-            s_framebuf[y * FRAMEBUF_LINE_STRIDE + FRAMEBUF_CMD_PREFIX_BYTES + x] = c;
+            s_framebuf[y * FRAMEBUF_LINE_BYTES + x] = c;
         }
     }
     s_borders_dirty = true;
