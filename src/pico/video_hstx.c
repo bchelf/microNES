@@ -198,6 +198,8 @@ static uint32_t __attribute__((aligned(4)))
 
 static volatile uint32_t s_hdmi_scanline_stalls;
 static volatile uint32_t s_hdmi_dma_double_hits;
+static volatile uint32_t s_hdmi_dma_race_rebuilds;
+static volatile uint64_t s_hdmi_first_dbl_vf;
 static volatile uint32_t s_hdmi_scanline_submitted;
 static volatile uint32_t s_hdmi_scanline_expanded;
 static volatile uint32_t s_hdmi_scanline_max_level;
@@ -249,6 +251,7 @@ static volatile uint32_t s_hdmi_audio_underruns;
 static volatile uint32_t s_hdmi_audio_overruns;
 static spin_lock_t *s_hdmi_pcm_lock;
 static volatile bool s_hdmi_audio_worker_running;
+static volatile uint32_t s_hdmi_push_max_spin_us;
 
 #endif /* MICRONES_HDMI_DATA_ISLANDS */
 
@@ -671,14 +674,18 @@ static void __scratch_x("") hstx_dma_irq(void) {
 
     if (to_process == (ping_mask | pong_mask)) {
         ++s_hdmi_dma_double_hits;
+        if (s_hdmi_first_dbl_vf == 0u)
+            s_hdmi_first_dbl_vf = s_stats.frames_presented;
     }
 
     if (to_process & ping_mask) {
+        if (dma_channel_is_busy(s_dmach_ping)) ++s_hdmi_dma_race_rebuilds;
         uint32_t words = hstx_build_scanline(s_line_buf[0], 0u);
         dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
         dma_hw->ch[s_dmach_ping].transfer_count = words;
     }
     if (to_process & pong_mask) {
+        if (dma_channel_is_busy(s_dmach_pong)) ++s_hdmi_dma_race_rebuilds;
         uint32_t words = hstx_build_scanline(s_line_buf[1], 1u);
         dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
         dma_hw->ch[s_dmach_pong].transfer_count = words;
@@ -992,7 +999,10 @@ void video_hstx_print_diag(void) {
     missed = s_hdmi_audio_missed_swaps;
 #endif
 
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u start=%u worker=%u vf=%llu pcm=%lu q=%lu vq=%lu vmax=%lu dref=%lu dmiss=%lu dvsub=%lu dvexp=%lu dvstall=%lu vfsub=%lu vfexp=%lu underruns=%lu overruns=%lu pkts=%lu dbl=%lu\n",
+    static uint32_t s_printf_max_us;
+
+    uint32_t tp0 = timer_hw->timerawl;
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u start=%u worker=%u vf=%llu pcm=%lu q=%lu vq=%lu vmax=%lu dref=%lu dmiss=%lu dvsub=%lu dvexp=%lu dvstall=%lu vfsub=%lu vfexp=%lu underruns=%lu overruns=%lu pkts=%lu dbl=%lu race=%lu 1stdbl=%llu spinmax=%lu printmax=%lu\n",
            (unsigned long)s_diag_sys_hz,
            (unsigned long)s_diag_hstx_hz,
            (unsigned long)s_diag_pixel_hz,
@@ -1021,11 +1031,19 @@ void video_hstx_print_diag(void) {
            (unsigned long)video_hstx_hdmi_audio_underruns(),
            (unsigned long)video_hstx_hdmi_audio_overruns(),
            (unsigned long)s_hdmi_audio_packet_cursor,
-           (unsigned long)s_hdmi_dma_double_hits
+           (unsigned long)s_hdmi_dma_double_hits,
+           (unsigned long)s_hdmi_dma_race_rebuilds,
+           (unsigned long long)s_hdmi_first_dbl_vf,
+           (unsigned long)s_hdmi_push_max_spin_us,
+           (unsigned long)s_printf_max_us
 #else
-           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL
+           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0ULL, 0UL, 0UL, 0UL
 #endif
     );
+    uint32_t tp1 = timer_hw->timerawl;
+    uint32_t pdur = tp1 - tp0;
+    if (pdur > s_printf_max_us) s_printf_max_us = pdur;
+
     prev_refills = refills;
     prev_missed = missed;
     prev_vsubmitted = vsubmitted;
@@ -1095,7 +1113,11 @@ size_t video_hstx_hdmi_audio_push(const int16_t *samples,
     size_t remaining = count;
     while (remaining > 0u) {
         size_t batch = remaining > 16u ? 16u : remaining;
+        uint32_t t0 = timer_hw->timerawl;
         uint32_t save = spin_lock_blocking(s_hdmi_pcm_lock);
+        uint32_t elapsed = timer_hw->timerawl - t0;
+        if (elapsed > s_hdmi_push_max_spin_us)
+            s_hdmi_push_max_spin_us = elapsed;
         for (size_t i = 0u; i < batch; ++i) {
             uint32_t head = s_hdmi_pcm_head;
             uint32_t next = (head + 1u) & (HDMI_PCM_RING_FRAMES - 1u);
