@@ -658,6 +658,23 @@ static uint32_t __scratch_x("bld") hstx_build_scanline(
     return words;
 }
 
+/* Advance scanline counter and audio scheduler without building a buffer.
+ * Called when the ISR must skip a rebuild because the DMA channel is still
+ * busy — prevents scanline phase drift between the physical TV position
+ * and the logical counter. */
+static void __scratch_x("adv") hstx_advance_scanline(void) {
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+    hdmi_audio_scheduler_tick();
+#endif
+    s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
+    if (s_v_scanline == 0u) {
+        ++s_stats.frames_presented;
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+        s_hdmi_audio_packet_cursor = 0u;
+#endif
+    }
+}
+
 static void __scratch_x("") hstx_dma_irq(void) {
     /* Both ping and pong channels have IRQ enabled. When a channel
      * completes, the other channel is already running (chained).
@@ -681,6 +698,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
     if (to_process & ping_mask) {
         if (dma_channel_is_busy(s_dmach_ping)) {
             ++s_hdmi_dma_race_rebuilds;
+            hstx_advance_scanline();
         } else {
             uint32_t words = hstx_build_scanline(s_line_buf[0], 0u);
             dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
@@ -690,6 +708,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
     if (to_process & pong_mask) {
         if (dma_channel_is_busy(s_dmach_pong)) {
             ++s_hdmi_dma_race_rebuilds;
+            hstx_advance_scanline();
         } else {
             uint32_t words = hstx_build_scanline(s_line_buf[1], 1u);
             dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
