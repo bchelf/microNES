@@ -565,10 +565,6 @@ static void __not_in_flash_func(video_hstx_audio_core1_entry)(void) {
 /* --- DMA / ISR --------------------------------------------------------- */
 
 static void __scratch_x("") hstx_dma_irq(void) {
-    /* Read hardware interrupt status to find which channel(s) completed.
-     * Clear the flags immediately so any completion that occurs while we
-     * are in this ISR will set a fresh flag and trigger a new invocation
-     * after we return. */
     const uint32_t ping_mask = 1u << (uint32_t)s_dmach_ping;
     const uint32_t pong_mask = 1u << (uint32_t)s_dmach_pong;
     uint32_t ints = dma_hw->ints0;
@@ -579,92 +575,115 @@ static void __scratch_x("") hstx_dma_irq(void) {
     dma_hw->intr = to_process;
 
     if (to_process == (ping_mask | pong_mask)) {
+        /* Both channels completed before this ISR ran.  The chain has
+         * been ping-ponging with stale config — the two-phase cmdlist/
+         * pixel assignment is now out of sync with reality.  The safest
+         * recovery is to abort both channels, reset the phase state to
+         * "cmdlist not yet posted" (so the next line starts cleanly),
+         * and restart the chain.  This costs one glitched scanline but
+         * prevents the permanent 4x runaway. */
         ++s_hdmi_dma_double_hits;
+        hw_clear_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl,
+                      DMA_CH0_CTRL_TRIG_EN_BITS);
+        hw_clear_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl,
+                      DMA_CH0_CTRL_TRIG_EN_BITS);
+        dma_channel_abort((uint)s_dmach_ping);
+        dma_channel_abort((uint)s_dmach_pong);
+        dma_hw->intr = ping_mask | pong_mask;
+        /* Re-enable both channels for chaining. */
+        hw_set_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl,
+                    DMA_CH0_CTRL_TRIG_EN_BITS);
+        hw_set_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl,
+                    DMA_CH0_CTRL_TRIG_EN_BITS);
+        /* Reset phase to "start of next scanline" and advance past
+         * the corrupted line. */
+        s_vactive_cmdlist_posted = false;
+        s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
+        /* Fall through to configure and restart ping for the next line. */
+        to_process = ping_mask;
     }
 
-    for (uint32_t pass = 0u; pass < 2u && to_process != 0u; ++pass) {
-        uint32_t ch_num;
-        if (to_process & ping_mask) {
-            ch_num = (uint32_t)s_dmach_ping;
-            to_process &= ~ping_mask;
-        } else {
-            ch_num = (uint32_t)s_dmach_pong;
-            to_process &= ~pong_mask;
-        }
+    /* Process the single completed channel. */
+    uint32_t ch_num;
+    if (to_process & ping_mask) {
+        ch_num = (uint32_t)s_dmach_ping;
+    } else {
+        ch_num = (uint32_t)s_dmach_pong;
+    }
 
-        /* If this channel was re-chained and is already running, do NOT
-         * write to its registers — that would corrupt the active transfer
-         * and trigger immediate completion, causing the 4x runaway.
-         * Let it finish its (stale) run; we will handle it on the next
-         * IRQ when it completes again. We already cleared its IRQ flag
-         * above, so the next completion will set a fresh flag. */
-        if (dma_channel_is_busy((uint)ch_num)) {
-            continue;
-        }
+    if (dma_channel_is_busy((uint)ch_num)) {
+        return;
+    }
 
-        dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
-        uint32_t cmd_buf_idx = (ch_num == (uint32_t)s_dmach_ping) ? 0u : 1u;
+    dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
+    uint32_t cmd_buf_idx = (ch_num == (uint32_t)s_dmach_ping) ? 0u : 1u;
 
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-        if (!s_vactive_cmdlist_posted) {
-            hdmi_audio_scheduler_tick();
-        }
+    if (!s_vactive_cmdlist_posted) {
+        hdmi_audio_scheduler_tick();
+    }
 #endif
 
-        if (s_v_scanline >= MODE_V_FRONT_PORCH &&
-            s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
-            ch->read_addr = (uintptr_t)s_vblank_line_vsync_on;
-            ch->transfer_count = count_of(s_vblank_line_vsync_on);
-        } else if (s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH) {
+    if (s_v_scanline >= MODE_V_FRONT_PORCH &&
+        s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
+        ch->read_addr = (uintptr_t)s_vblank_line_vsync_on;
+        ch->transfer_count = count_of(s_vblank_line_vsync_on);
+    } else if (s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH) {
 #if MICRONES_HDMI_DATA_ISLANDS
-            if (s_v_scanline >= HDMI_CONTROL_VBI_LINE &&
-                s_v_scanline < HDMI_CONTROL_VBI_LINE + HDMI_CONTROL_PACKET_LINES) {
-                uint32_t line_idx = s_v_scanline - HDMI_CONTROL_VBI_LINE;
-                ch->read_addr = (uintptr_t)s_hdmi_control_line_buf[line_idx];
-                ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
-            } else {
+        if (s_v_scanline >= HDMI_CONTROL_VBI_LINE &&
+            s_v_scanline < HDMI_CONTROL_VBI_LINE + HDMI_CONTROL_PACKET_LINES) {
+            uint32_t line_idx = s_v_scanline - HDMI_CONTROL_VBI_LINE;
+            ch->read_addr = (uintptr_t)s_hdmi_control_line_buf[line_idx];
+            ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
+        } else {
 #if MICRONES_HDMI_AUDIO_PACKETS
-                const uint32_t *island = hdmi_next_audio_island();
-                hdmi_build_vblank_di_line(s_hdmi_vblank_di_line_buf[cmd_buf_idx], island);
-                ch->read_addr = (uintptr_t)s_hdmi_vblank_di_line_buf[cmd_buf_idx];
-                ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
-#else
-                ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
-                ch->transfer_count = count_of(s_vblank_line_vsync_off);
-#endif
-            }
+            const uint32_t *island = hdmi_next_audio_island();
+            hdmi_build_vblank_di_line(s_hdmi_vblank_di_line_buf[cmd_buf_idx], island);
+            ch->read_addr = (uintptr_t)s_hdmi_vblank_di_line_buf[cmd_buf_idx];
+            ch->transfer_count = HDMI_VBLANK_DI_LINE_WORDS;
 #else
             ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
             ch->transfer_count = count_of(s_vblank_line_vsync_off);
 #endif
-        } else if (!s_vactive_cmdlist_posted) {
-#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-            const uint32_t *island = hdmi_next_audio_island();
-            hdmi_build_active_di_line(s_hdmi_active_di_line_buf[cmd_buf_idx], island);
-            ch->read_addr = (uintptr_t)s_hdmi_active_di_line_buf[cmd_buf_idx];
-            ch->transfer_count = HDMI_ACTIVE_DI_LINE_WORDS;
+        }
 #else
-            ch->read_addr = (uintptr_t)s_vactive_line;
-            ch->transfer_count = count_of(s_vactive_line);
+        ch->read_addr = (uintptr_t)s_vblank_line_vsync_off;
+        ch->transfer_count = count_of(s_vblank_line_vsync_off);
 #endif
-            s_vactive_cmdlist_posted = true;
-        } else {
-            uint32_t active_y = s_v_scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
-            uint32_t stored_y = active_y / NES_SCALE;
-            ch->read_addr = (uintptr_t)&s_framebuf[stored_y * FRAMEBUF_LINE_STRIDE];
-            ch->transfer_count = FRAMEBUF_LINE_DMA_WORDS;
-            s_vactive_cmdlist_posted = false;
-        }
-
-        if (!s_vactive_cmdlist_posted) {
-            s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
-            if (s_v_scanline == 0u) {
-                ++s_stats.frames_presented;
+    } else if (!s_vactive_cmdlist_posted) {
 #if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-                s_hdmi_audio_packet_cursor = 0u;
+        const uint32_t *island = hdmi_next_audio_island();
+        hdmi_build_active_di_line(s_hdmi_active_di_line_buf[cmd_buf_idx], island);
+        ch->read_addr = (uintptr_t)s_hdmi_active_di_line_buf[cmd_buf_idx];
+        ch->transfer_count = HDMI_ACTIVE_DI_LINE_WORDS;
+#else
+        ch->read_addr = (uintptr_t)s_vactive_line;
+        ch->transfer_count = count_of(s_vactive_line);
 #endif
-            }
+        s_vactive_cmdlist_posted = true;
+    } else {
+        uint32_t active_y = s_v_scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
+        uint32_t stored_y = active_y / NES_SCALE;
+        ch->read_addr = (uintptr_t)&s_framebuf[stored_y * FRAMEBUF_LINE_STRIDE];
+        ch->transfer_count = FRAMEBUF_LINE_DMA_WORDS;
+        s_vactive_cmdlist_posted = false;
+    }
+
+    if (!s_vactive_cmdlist_posted) {
+        s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
+        if (s_v_scanline == 0u) {
+            ++s_stats.frames_presented;
+#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
+            s_hdmi_audio_packet_cursor = 0u;
+#endif
         }
+    }
+
+    /* After a double-hit recovery, restart the chain. This is placed
+     * after the channel configuration so the restarted DMA reads the
+     * freshly-written read_addr and transfer_count. */
+    if ((ints & (ping_mask | pong_mask)) == (ping_mask | pong_mask)) {
+        dma_channel_start((uint)ch_num);
     }
 }
 
