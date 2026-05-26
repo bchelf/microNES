@@ -131,7 +131,7 @@ static const uint8_t k_palette_rgb332[64] = {
     0xf9, 0xdd, 0xbe, 0xbf, 0x1f, 0xfb, 0x00, 0x00,
 };
 
-static void hstx_configure_next_scanline(dma_channel_hw_t *ch) {
+static void __scratch_x("") hstx_configure_next_scanline(dma_channel_hw_t *ch) {
     if (s_v_scanline >= MODE_V_FRONT_PORCH &&
         s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
         ch->read_addr = (uintptr_t)s_vblank_line_vsync_on;
