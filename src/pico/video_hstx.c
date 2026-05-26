@@ -557,30 +557,23 @@ static void __not_in_flash_func(video_hstx_audio_core1_entry)(void) {
 /* --- DMA / ISR --------------------------------------------------------- */
 
 static void __scratch_x("") hstx_dma_irq(void) {
-    /* Determine which channel(s) actually completed from hardware status
-     * rather than inferring from s_dma_pong.  When both channels complete
-     * between ISR invocations (e.g. due to brief IRQ latency), relying on
-     * s_dma_pong causes the ISR to reconfigure the wrong channel —
-     * potentially one that is already running — leading to cascading
-     * spurious completions and a 4x frame-rate runaway. */
+    /* Read hardware interrupt status to find which channel(s) completed.
+     * Clear the flags immediately so any completion that occurs while we
+     * are in this ISR will set a fresh flag and trigger a new invocation
+     * after we return. */
     const uint32_t ping_mask = 1u << (uint32_t)s_dmach_ping;
     const uint32_t pong_mask = 1u << (uint32_t)s_dmach_pong;
     uint32_t ints = dma_hw->ints0;
-
-    /* Process each channel that actually completed. */
     uint32_t to_process = ints & (ping_mask | pong_mask);
     if (to_process == 0u) {
         return;
     }
+    dma_hw->intr = to_process;
 
-    /* If both completed (rare double-hit), process both in order.
-     * Clear their flags and advance state for each. */
     if (to_process == (ping_mask | pong_mask)) {
         ++s_hdmi_dma_double_hits;
     }
-    dma_hw->intr = to_process;
 
-    /* Process one or two completions. */
     for (uint32_t pass = 0u; pass < 2u && to_process != 0u; ++pass) {
         uint32_t ch_num;
         if (to_process & ping_mask) {
@@ -590,6 +583,17 @@ static void __scratch_x("") hstx_dma_irq(void) {
             ch_num = (uint32_t)s_dmach_pong;
             to_process &= ~pong_mask;
         }
+
+        /* If this channel was re-chained and is already running, do NOT
+         * write to its registers — that would corrupt the active transfer
+         * and trigger immediate completion, causing the 4x runaway.
+         * Let it finish its (stale) run; we will handle it on the next
+         * IRQ when it completes again. We already cleared its IRQ flag
+         * above, so the next completion will set a fresh flag. */
+        if (dma_channel_is_busy((uint)ch_num)) {
+            continue;
+        }
+
         dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
         uint32_t cmd_buf_idx = (ch_num == (uint32_t)s_dmach_ping) ? 0u : 1u;
 
