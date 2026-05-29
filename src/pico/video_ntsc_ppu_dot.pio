@@ -1,0 +1,49 @@
+;
+; video_ntsc_ppu_dot.pio -- analog test-pattern output at NES PPU-dot cadence
+;
+; One FIFO word emits one 5-bit symbol.  The test pattern emits two symbols
+; per NES PPU dot, so each scanline is 682 symbols.
+;   bits [31:28] = 4-bit DAC code
+;   bit  [27]    = sync clamp gate
+;
+; At 315 MHz:
+;   out pins, 5 [2] = 3 PIO cycles/symbol
+;   clkdiv = 2503 / 256 = 9.77734375
+;   symbol rate = 315 MHz / (3 * 9.77734375) = 10.739113 MHz
+;   error ≈ -44 ppm from 3FSC / 2x PPU dot rate.
+;
+
+.program video_ntsc_ppu_dot
+
+.wrap_target
+    out pins, 5 [2]
+.wrap
+
+% c-sdk {
+#include "hardware/gpio.h"
+
+static inline void video_ntsc_ppu_dot_program_init(
+    PIO   pio,
+    uint  sm,
+    uint  offset,
+    uint  pin_base,
+    float clk_div
+) {
+    pio_sm_config c = video_ntsc_ppu_dot_program_get_default_config(offset);
+
+    sm_config_set_out_pins(&c, pin_base, 5);
+    sm_config_set_out_shift(&c, /*shift_direction_right=*/false,
+                            /*autopull=*/true, /*threshold=*/5);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_clkdiv(&c, clk_div);
+
+    for (uint i = 0; i < 5; i++) {
+        pio_gpio_init(pio, pin_base + i);
+        gpio_set_drive_strength(pin_base + i, GPIO_DRIVE_STRENGTH_4MA);
+        gpio_set_slew_rate(pin_base + i, GPIO_SLEW_RATE_SLOW);
+    }
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 5, true);
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}
