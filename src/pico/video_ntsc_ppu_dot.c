@@ -424,13 +424,16 @@ void video_ntsc_ppu_dot_precompute_palette(const uint8_t *palette_to_luma, int p
         if (hue >= 1 && hue <= 4 && row >= 1 && row <= 2 && luma > 0) {
             luma--;
         }
+        if (hue >= 5 && hue <= 7 && row >= 1 && row <= 2 && luma > 0) {
+            luma--;
+        }
 
         int base = (int)VIDEO_DAC_BLANK + (luma * (int)VIDEO_LUMA_SCALE) / 7;
         float amp = (hue == 0) ? 0.0f : 1.35f;
         if (row == 0) {
             amp *= 0.65f;
         } else if (row == 3) {
-            amp *= 0.45f;
+            amp *= 0.30f;
         }
 
         /* Calibrated from the $21-$2C analog palette grid:
@@ -444,6 +447,8 @@ void video_ntsc_ppu_dot_precompute_palette(const uint8_t *palette_to_luma, int p
             amp *= 1.12f;
         } else if (hue == 11 || hue == 12) {
             phase_hue += 1;
+        } else if (hue >= 5 && hue <= 7) {
+            amp *= 1.18f;
         }
         float phase_rad = (float)phase_hue * 30.0f * (float)M_PI / 180.0f;
         for (int s = 0; s < 3; ++s) {
