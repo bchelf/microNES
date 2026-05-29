@@ -130,6 +130,41 @@ static void shell_render_current(AppShell *shell) {
     }
 }
 
+static void shell_absorb_menu_direction(AppShell *shell, uint8_t buttons) {
+    if (shell == NULL) {
+        return;
+    }
+
+    bool up_held = (buttons & NES_BUTTON_UP) != 0u;
+    bool down_held = (buttons & NES_BUTTON_DOWN) != 0u;
+    if (up_held && !down_held) {
+        shell->menu.hold_dir = -1;
+        shell->menu.hold_frames = 1;
+    } else if (down_held && !up_held) {
+        shell->menu.hold_dir = +1;
+        shell->menu.hold_frames = 1;
+    } else {
+        shell->menu.hold_dir = 0;
+        shell->menu.hold_frames = 0;
+    }
+}
+
+static void shell_return_to_menu(AppShell *shell, uint8_t buttons) {
+    if (shell == NULL) {
+        return;
+    }
+
+    int previous_index = shell->running_index;
+    shell_unload_running(shell);
+    shell_set_status(shell, "");
+    shell_decide_state(shell);
+    if (shell->state == APP_SHELL_STATE_MENU && previous_index >= 0) {
+        rom_menu_select(&shell->menu, shell->source, previous_index);
+        shell_absorb_menu_direction(shell, buttons);
+    }
+    shell_render_current(shell);
+}
+
 void app_shell_init(AppShell *shell, RomSource *source, Nes *nes) {
     if (shell == NULL) {
         return;
@@ -202,10 +237,8 @@ void app_shell_request_menu(AppShell *shell) {
         shell->state == APP_SHELL_STATE_CONFIRM_ERASE) {
         return;
     }
-    shell_unload_running(shell);
+    shell_return_to_menu(shell, 0u);
     shell->exit_combo_latched = false;
-    shell_decide_state(shell);
-    shell_render_current(shell);
 }
 
 void app_shell_request_reset(AppShell *shell) {
@@ -359,10 +392,7 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         }
     } else if (combo_now && !combo_prev) {
         /* Edge-trigger the exit. */
-        shell_unload_running(shell);
-        shell_set_status(shell, "");
-        shell_decide_state(shell);
-        shell_render_current(shell);
+        shell_return_to_menu(shell, curr);
         out.just_entered_menu = true;
         out.stepping_nes = false;
         NesControllerState forwarded = { 0 };

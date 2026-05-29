@@ -1,6 +1,7 @@
 #ifndef MICRONES_SCANLINE_QUEUE_H
 #define MICRONES_SCANLINE_QUEUE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 // SPSC lock-free ring buffer for NES scanline pixel data.
@@ -33,5 +34,9 @@ void scanline_queue_push(ScanlineQueue *q, const uint8_t *pixels, uint16_t y);
 // Pop one scanline. Blocks using WFE until a slot is available.
 // Called from core 1 only.
 void scanline_queue_pop_blocking(ScanlineQueue *q, ScanlineQueueSlot *out_slot);
+
+// Try to pop one scanline without blocking. Returns false if empty.
+// Called from core 1 only.
+bool scanline_queue_try_pop(ScanlineQueue *q, ScanlineQueueSlot *out_slot);
 
 #endif

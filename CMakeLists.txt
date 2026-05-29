@@ -290,6 +290,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
             target_sources(${target_name} PRIVATE
                 src/pico/pico_video_backend_analog.c
                 src/pico/video_ntsc.c
+                src/pico/video_ntsc_ppu_dot.c
             )
             target_link_libraries(${target_name} PRIVATE
                 hardware_dma
@@ -307,6 +308,9 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
 
             pico_generate_pio_header(${target_name}
                 ${CMAKE_CURRENT_LIST_DIR}/src/pico/video_ntsc.pio
+            )
+            pico_generate_pio_header(${target_name}
+                ${CMAKE_CURRENT_LIST_DIR}/src/pico/video_ntsc_ppu_dot.pio
             )
         elseif (backend_name STREQUAL "tft")
             target_sources(${target_name} PRIVATE

@@ -25,6 +25,10 @@ typedef enum {
 
 void rom_menu_init(RomMenu *menu);
 
+/* Move the cursor to a ROM entry and keep it visible.  Intended for callers
+ * returning from a running ROM to the menu. */
+void rom_menu_select(RomMenu *menu, RomSource *source, int index);
+
 /* Process one frame of input.  Edge-detects button-down events using
  * prev_buttons vs curr_buttons.  Up/Down auto-repeat after a brief hold so
  * navigating long lists feels responsive.  Returns whether a launch was

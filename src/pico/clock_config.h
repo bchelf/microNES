@@ -46,7 +46,7 @@
 #  define MICRONES_VREG_SETTLE_MS   20u
 
 /*
- * PIO: fixed at 'out pins, 4 [10]' = 11 sys_clk cycles/sample.
+ * PIO: fixed at 'out pins, 5 [10]' = 11 sys_clk cycles/sample.
  * clkdiv=2.0 → effective rate = 315 MHz / (2 × 11) = 14.318182 MHz  ✓
  */
 #  define MICRONES_PIO_CLKDIV       2.0f
@@ -72,7 +72,7 @@
 #  define MICRONES_VREG_SETTLE_MS   10u
 
 /*
- * PIO: fixed at 'out pins, 4 [10]' = 11 sys_clk cycles/sample.
+ * PIO: fixed at 'out pins, 5 [10]' = 11 sys_clk cycles/sample.
  * clkdiv=1.0 → effective rate = 157.5 MHz / (1 × 11) = 14.318182 MHz  ✓
  */
 #  define MICRONES_PIO_CLKDIV       1.0f

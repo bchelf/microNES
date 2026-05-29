@@ -150,14 +150,18 @@ void video_ntsc_perf_get(MicronesVideoNtscPerfStats *stats_out);
 void build_chroma_lut(void);
 
 /*
- * Render one complete NTSC scanline (910 valid samples + 2 padding) into buf.
+ * Render one full-width composite scanline template into buf.  The emulator
+ * analog path DMAs 909 words from this buffer for a stable constant-length
+ * 4FSC scanline.
  *
- *   buf    : output buffer, exactly VIDEO_WORDS_PER_LINE (114) uint32_t words.
+ *   buf    : output buffer, exactly VIDEO_WORDS_PER_LINE (909) uint32_t words.
  *   pixels : 256 NES palette-index bytes for an active line (NULL if blanking).
  *   active : true = active video, false = blank line with normal horizontal sync.
  *
- * Output format: 8 nibbles packed per word, MSB first (nibble 0 in bits 31:28).
- * GP4 sync timing is handled separately by the Core 1 loop.
+ * Output format: one 5-bit symbol per word, MSB first.  Each symbol is
+ * {sync gate, DAC[3:0]} in bits [31:27].
+ * The sync gate is part of each packed symbol and is driven by the same PIO
+ * state machine as the DAC pins.
  */
 void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active);
 
@@ -175,7 +179,7 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
 void video_ntsc_core1_entry(void);
 
 /* NTSC frame geometry constants */
-#define VIDEO_WORDS_PER_LINE     114u   /* 912 nibbles; 910 valid + 2 padding   */
+#define VIDEO_WORDS_PER_LINE     909u   /* constant 4FSC samples per scanline */
 #define VIDEO_LINES_PER_FRAME    262u
 #define VIDEO_VSYNC_LINES          9u   /* lines 0-8: pre-eq + vsync + post-eq  */
 #define VIDEO_TOP_BLANK_LINES     11u   /* lines 9-19: blank with burst         */
@@ -184,8 +188,8 @@ void video_ntsc_core1_entry(void);
 #define VIDEO_ACTIVE_END_LINE    260u   /* exclusive upper bound                */
 #define VIDEO_BOTTOM_BLANK_LINES   2u   /* lines 260-261                        */
 
-/* Horizontal timing (samples, at 14.318182 MHz) */
-#define VIDEO_SYNC_SAMPLES        47u   /* samples 0-46    */
+/* Horizontal timing (samples, at 14.318182 MHz / 4FSC) */
+#define VIDEO_SYNC_SAMPLES        47u   /* samples 0-46                         */
 #define VIDEO_BURST_START         72u   /* back-porch burst start sample        */
 #define VIDEO_BURST_SAMPLES       40u   /* 10 subcarrier cycles × 4 samp/cycle  */
 #define VIDEO_ACTIVE_START       116u   /* first active sample                  */

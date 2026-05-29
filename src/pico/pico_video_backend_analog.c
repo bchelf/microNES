@@ -1,6 +1,7 @@
 #include "pico_video_backend.h"
 
 #include "video_ntsc.h"
+#include "video_ntsc_ppu_dot.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -24,24 +25,33 @@ const char *pico_video_backend_last_error(void) {
 }
 
 bool pico_video_backend_init(void) {
+#if defined(MICRONES_PICO_VIDEO_MODE_TEST_PATTERN)
+    video_ntsc_ppu_dot_test_init();
+#elif defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
+    video_ntsc_ppu_dot_emulator_init();
+#else
     video_ntsc_init();
+#endif
     return true;
 }
 
 void pico_video_backend_start_test_pattern(void) {
     s_emulator_started = false;
+#if defined(MICRONES_PICO_VIDEO_MODE_TEST_PATTERN)
+    video_ntsc_ppu_dot_test_start();
+#else
     video_ntsc_build_test_pattern_frame();
     video_ntsc_start();
+#endif
 }
 
 void pico_video_backend_start_emulator(void) {
 #if defined(MICRONES_PICO_VIDEO_MODE_EMULATOR)
     extern const uint8_t k_emulator_video_palette_to_gray[64];
 
-    video_ntsc_precompute_palette(k_emulator_video_palette_to_gray, 64);
+    video_ntsc_ppu_dot_precompute_palette(k_emulator_video_palette_to_gray, 64);
     scanline_queue_init(core1_video_get_queue());
-    video_ntsc_start();
-    multicore_launch_core1(video_ntsc_core1_entry);
+    multicore_launch_core1(video_ntsc_ppu_dot_core1_entry);
     s_emulator_started = true;
 #endif
 }
@@ -51,7 +61,7 @@ void pico_video_backend_suspend_for_flash(void) {
     if (!s_emulator_started || s_suspended_for_flash) {
         return;
     }
-    video_ntsc_stop();
+    video_ntsc_ppu_dot_stop();
     sleep_ms(5);
     multicore_reset_core1();
     s_suspended_for_flash = true;

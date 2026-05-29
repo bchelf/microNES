@@ -18,17 +18,17 @@
 ;   315 MHz, clkdiv=2.0 → 315,000,000 / (2 × 11) = 14.318182 MHz  ✓
 ;   157.5 MHz, clkdiv=1.0 → 157,500,000 / (1 × 11) = 14.318182 MHz  ✓
 ;
-; Each 'out pins, 4 [10]' = 1 execution cycle + 10 delay = 11 sys_clk cycles.
+; Each 'out pins, 5 [10]' = 1 execution cycle + 10 delay = 11 sys_clk cycles.
 ; clkdiv is set in clock_config.h and passed to video_ntsc_program_init().
 ;
-; FIFO packing: 8 nibbles per 32-bit word, MSB-first (shift-left, autopull at 32).
-;   Word bits [31:28] = nibble 0 (first sample), [3:0] = nibble 7 (eighth sample).
+; FIFO packing: 1 sample per 32-bit word, MSB-first (shift-left, autopull at 5).
+;   Word bits [31:28] = DAC sample, bit [27] = sync clamp gate.
 ;
 
 .program video_ntsc
 
 .wrap_target
-    out pins, 4  [10]   ; emit 4-bit DAC code on GP0-GP3; 11 cycles × clkdiv = 14.318 MHz
+    out pins, 5  [10]   ; emit 4-bit DAC code + sync gate; 11 cycles × clkdiv = 14.318 MHz
 .wrap
 
 % c-sdk {
@@ -39,30 +39,30 @@ static inline void video_ntsc_program_init(
     PIO   pio,
     uint  sm,
     uint  offset,
-    uint  pin_base,     // GP0 — must be 0 to match resistor-DAC wiring
+    uint  pin_base,     // first DAC pin; sync gate must be pin_base + 4
     float clk_div       // from clock_config.h: 2.0 @ 315 MHz, 1.0 @ 157.5 MHz
 ) {
     pio_sm_config c = video_ntsc_program_get_default_config(offset);
 
-    // Drive GP0-GP3 from this state machine
-    sm_config_set_out_pins(&c, pin_base, 4);
+    // Drive four DAC pins plus the contiguous sync-gate pin from this state machine.
+    sm_config_set_out_pins(&c, pin_base, 5);
 
-    // shift_direction=false → shift LEFT (MSB first); autopull at 32-bit threshold (= 8 nibbles)
-    sm_config_set_out_shift(&c, /*shift_direction_right=*/false, /*autopull=*/true, /*threshold=*/32);
+    // shift_direction=false → shift LEFT (MSB first); autopull after each 5-bit sample.
+    sm_config_set_out_shift(&c, /*shift_direction_right=*/false, /*autopull=*/true, /*threshold=*/5);
 
     // Join TX FIFOs → 8-entry deep TX FIFO reduces DMA pressure
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
 
-    // clk_div × 11 cycles = 14.318182 MHz NTSC sample rate
+    // clk_div × 11 cycles = 14.318182 MHz NTSC 4FSC sample rate
     sm_config_set_clkdiv(&c, clk_div);
 
     // Claim and configure GPIO pins
-    for (uint i = 0; i < 4; i++) {
+    for (uint i = 0; i < 5; i++) {
         pio_gpio_init(pio, pin_base + i);
         gpio_set_drive_strength(pin_base + i, GPIO_DRIVE_STRENGTH_4MA);
         gpio_set_slew_rate(pin_base + i, GPIO_SLEW_RATE_SLOW);
     }
-    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 4, /*output=*/true);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 5, /*output=*/true);
 
     pio_sm_init(pio, sm, offset, &c);
 }

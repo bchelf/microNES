@@ -65,3 +65,17 @@ void scanline_queue_pop_blocking(ScanlineQueue *q, ScanlineQueueSlot *out_slot) 
     *out_slot = q->slots[tail % SCANLINE_QUEUE_CAPACITY];
     q->tail = tail + 1u;
 }
+
+bool scanline_queue_try_pop(ScanlineQueue *q, ScanlineQueueSlot *out_slot) {
+    uint32_t tail = q->tail;
+
+    if (q->head == tail) {
+        return false;
+    }
+
+    MICRONES_DMB();
+
+    *out_slot = q->slots[tail % SCANLINE_QUEUE_CAPACITY];
+    q->tail = tail + 1u;
+    return true;
+}
