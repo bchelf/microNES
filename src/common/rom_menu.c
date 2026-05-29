@@ -164,6 +164,36 @@ static void move_selection(RomMenu *menu, RomSource *source, int dir) {
     menu->top = clamp_int(menu->top, 0, max_top);
 }
 
+void rom_menu_select(RomMenu *menu, RomSource *source, int index) {
+    if (menu == NULL) {
+        return;
+    }
+
+    int n = menu_total_items(menu, source);
+    if (n <= 0) {
+        menu->selected = 0;
+        menu->top = 0;
+        menu->hold_dir = 0;
+        menu->hold_frames = 0;
+        return;
+    }
+
+    int rom_count = source != NULL ? (int)source->count(source) : 0;
+    int max_rom_index = rom_count > 0 ? rom_count - 1 : 0;
+    menu->selected = clamp_int(index, 0, max_rom_index);
+
+    if (menu->selected < menu->top) {
+        menu->top = menu->selected;
+    } else if (menu->selected >= menu->top + MENU_VISIBLE_ROWS) {
+        menu->top = menu->selected - (MENU_VISIBLE_ROWS - 1);
+    }
+
+    int max_top = n > MENU_VISIBLE_ROWS ? n - MENU_VISIBLE_ROWS : 0;
+    menu->top = clamp_int(menu->top, 0, max_top);
+    menu->hold_dir = 0;
+    menu->hold_frames = 0;
+}
+
 RomMenuResult rom_menu_step(RomMenu *menu,
                             RomSource *source,
                             uint8_t prev_buttons,

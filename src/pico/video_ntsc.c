@@ -4,8 +4,11 @@
  * System clock : 315 MHz  (set by main() via set_sys_clock_pll before calling
  *                           video_ntsc_init)
  * Sample rate  : 315 MHz / 22 = 14.318182 MHz  (NTSC subcarrier × 4)
- * Frame rate   : 910 samp/line × 22 cyc/samp × 262 lines = 5,245,240 cyc/frame
- *                315,000,000 / 5,245,240 = 60.054 Hz  ✓
+ * Frame rate   : NES scanlines are 341 PPU dots.  At 4FSC, each PPU dot is
+ *                8/3 samples, so the exact scanline average would be
+ *                909.333... samples.  For visual stability this path emits
+ *                a constant 909-sample line:
+ *                14.3181818 MHz / (909 × 262) = 60.1205 Hz.
  *
  * Analytically derived DAC codes
  * (R0=1000Ω, R1=485Ω, R2=242Ω, R3=120Ω, R_series=75.5Ω, R_load=75Ω,
@@ -19,24 +22,22 @@
  *   luma_scale = 9  →  dac = 4 + (luma × 9) / 7,  luma ∈ [0..7]
  *   effective LSB ≈ 74 mV/code
  *
- * Line structure (910 samples at 14.318 MHz = 63.56 µs):
- *   Sync tip         : samples   0–46   (47 samp, DAC=0, GP4=HIGH)
+ * Full-width line template (909 samples at 14.318 MHz = 63.49 µs):
+ *   Sync tip         : samples   0–46   (47 samp, DAC=0, sync gate HIGH)
  *   Back porch       : samples  47–71   (25 samp, DAC=blank)
- *   Colorburst       : samples  72–111  (40 samp, 180° cosine ±2 around blank)
+ *   Colorburst       : samples  72–111  (40 samp, 10 subcarrier cycles)
  *   Remaining porch  : samples 112–115  ( 4 samp, DAC=blank)
  *   Active video     : samples 116–873  (758 samp, luma+chroma)
- *   Front porch      : samples 874–909  (36 samp, DAC=blank)
- *   Padding          : 2 extra nibbles  (fill to 912 = 114 words × 8 nibbles)
- *   Total valid      : 910 samples  ✓
+ *   Front porch      : samples 874–908  (35 samp, DAC=blank)
  *
- * DMA ping-pong: channels A and B, each 114 words (= one scanline buffer).
+ * DMA ping-pong: channels A and B, each 909 words (= one scanline buffer).
  *   A chains→B, B chains→A.
  *   Core 0 IRQ_0: lightweight re-arm for test-pattern / fallback mode.
  *   Core 1 IRQ_1: full render-and-re-arm for emulator mode.
  *
- * GP4 (sync clamp MOSFET): raised by IRQ1 handler at each line transition;
- *   lowered by Core 1 after busy_wait_at_least_cycles(1000) ≈ 3.18 µs
- *   (target = 47 × 22 = 1034 cycles; error < 1 sample = 22 cycles).
+ * Sync clamp gate: emitted by the PIO as bit 4 of each 5-bit sample symbol,
+ *   so horizontal sync edges are sample-accurate and do not depend on IRQ
+ *   latency or core scheduling.
  */
 
 #include "clock_config.h"
@@ -58,6 +59,10 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+
+#if MICRONES_VIDEO_SYNC_GPIO != (MICRONES_VIDEO_PIN_BASE + MICRONES_VIDEO_PIN_COUNT)
+#error "video_ntsc PIO sync output requires the sync gate pin immediately after the DAC pins"
+#endif
 
 /* =========================================================================
  * NTSC color encoding
@@ -128,7 +133,7 @@ void build_chroma_lut(void) {
  * separate table lookups from the inner render loop.
  *
  * color  : NES palette index 0-63 (bits [5:0] of pixel byte)
- * phase  : subcarrier phase = sample_index & 3  (VIDEO_ACTIVE_START=116, 116%4=0)
+ * phase  : subcarrier phase modulo 4.
  * value  : clamped DAC code [0..15]
  * ========================================================================= */
 static uint8_t s_dac_lut[64][4];
@@ -203,6 +208,20 @@ static uint s_pio_offset;
 static uint s_dma_chan[2];
 static dma_channel_config s_dma_cfg[2];
 
+#define VIDEO_SYMBOL_SYNC_GATE     0x10u
+
+static inline uint32_t video_ntsc_encode_symbol(uint8_t dac_code, bool sync_gate) {
+    uint32_t symbol = ((uint32_t)dac_code & 0x0fu) |
+                      (sync_gate ? VIDEO_SYMBOL_SYNC_GATE : 0u);
+    return symbol << 27;
+}
+
+static inline uint32_t video_ntsc_next_subcarrier_phase(uint32_t subcarrier_phase,
+                                                       uint32_t line_phase) {
+    (void)line_phase;
+    return (subcarrier_phase + VIDEO_WORDS_PER_LINE) & 3u;
+}
+
 /* =========================================================================
  * State shared between IRQ handler and Core 1 loop
  * ========================================================================= */
@@ -224,38 +243,36 @@ static bool s_test_pattern_filled = false;
 /* =========================================================================
  * render_scanline_composite()
  *
- * Packs 910 NTSC samples + 2 padding nibbles into 114 uint32_t words.
- * 8 nibbles per word, MSB first: nibble 0 → bits[31:28], nibble 7 → bits[3:0].
+ * Packs a full-width 909-sample composite line template into 909 uint32_t words.
+ * One 5-bit symbol per word, MSB first: symbol → bits[31:27].
  * ========================================================================= */
-void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active) {
-    uint32_t word      = 0;
-    int      nib_count = 0;
-
-#define EMIT(code)                                           \
+static void render_scanline_composite_phase(
+    uint32_t *buf,
+    const uint8_t *pixels,
+    bool active,
+    uint32_t subcarrier_phase
+) {
+#define EMIT(code, sync_gate)                                \
     do {                                                     \
-        word = (word << 4) | ((uint32_t)(code) & 0xFu);     \
-        if (++nib_count == 8) {                              \
-            *buf++ = word;                                   \
-            word = 0; nib_count = 0;                         \
-        }                                                    \
+        *buf++ = video_ntsc_encode_symbol((uint8_t)(code), (sync_gate)); \
     } while (0)
 
-    /* Sync (0-46): 47 samples at code 0 */
+    /* Sync (0-46): 47 samples at code 0 with sync gate high */
     for (uint i = 0; i < VIDEO_SYNC_SAMPLES; i++)
-        EMIT(VIDEO_DAC_SYNC);
+        EMIT(VIDEO_DAC_SYNC, true);
 
     /* Back porch before burst (47-71): 25 samples blank */
     for (uint i = VIDEO_SYNC_SAMPLES; i < VIDEO_BURST_START; i++)
-        EMIT(VIDEO_DAC_BLANK);
+        EMIT(VIDEO_DAC_BLANK, false);
 
     /* Colorburst (72-111): 40 samples, 180° cosine ±3 around blank */
     for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++)
-        EMIT(k_burst_pattern[(VIDEO_BURST_START + i) & 3u]);
+        EMIT(k_burst_pattern[(subcarrier_phase + VIDEO_BURST_START + i) & 3u], false);
 
     /* Remaining back porch (112-115): 4 samples blank */
     for (uint abs_s = VIDEO_BURST_START + VIDEO_BURST_SAMPLES;
          abs_s < VIDEO_ACTIVE_START; abs_s++)
-        EMIT(VIDEO_DAC_BLANK);
+        EMIT(VIDEO_DAC_BLANK, false);
 
     /* Active video (116-873): 758 samples
      *
@@ -265,8 +282,8 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
      * right to centre the image within the NTSC active window.
      *
      * Subcarrier phase for the pixel region: the border adds 37 samples
-     * to the offset, so the first pixel sample is at absolute sample
-     * 116+37 = 153.  153 % 4 = 1, accounted for below.
+     * to the active-video offset, so the first pixel sample is at absolute
+     * sample 116+37 = 153 plus the rolling line-start subcarrier phase.
      */
 #define VIDEO_BORDER_LEFT   37u
 #define VIDEO_BORDER_RIGHT  38u
@@ -275,13 +292,14 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
     if (active && pixels != NULL) {
         /* Left border */
         for (uint i = 0; i < VIDEO_BORDER_LEFT; i++)
-            EMIT(VIDEO_DAC_BLANK);
+            EMIT(VIDEO_DAC_BLANK, false);
 
         /*
          * Map 256 NES pixels across 683 active samples using fixed-point
          * integer scaling.  DAC code looked up directly from s_dac_lut.
          *   pixel_inc = (256 << 16) / 683 = 24563  (≈256/683, 16.16 fixed)
-         * Phase: first pixel sample is at absolute sample 153; 153 % 4 = 1.
+         * Phase: first pixel sample is at absolute sample 153 plus the rolling
+         * line-start subcarrier phase.
          */
         uint32_t       pixel_fp  = 0u;
         const uint32_t pixel_inc = (256u << 16u) / VIDEO_PIXEL_SAMPLES;
@@ -290,26 +308,27 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
             uint pixel_idx = pixel_fp >> 16u;
             if (pixel_idx >= 256u) pixel_idx = 255u;
             pixel_fp += pixel_inc;
-            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu][(VIDEO_BORDER_LEFT + s) & 3u]);
+            EMIT(s_dac_lut[pixels[pixel_idx] & 0x3Fu]
+                 [(subcarrier_phase + VIDEO_BORDER_LEFT + s) & 3u], false);
         }
 
         /* Right border */
         for (uint i = 0; i < VIDEO_BORDER_RIGHT; i++)
-            EMIT(VIDEO_DAC_BLANK);
+            EMIT(VIDEO_DAC_BLANK, false);
     } else {
         for (uint s = 0; s < VIDEO_ACTIVE_SAMPLES; s++)
-            EMIT(VIDEO_DAC_BLANK);
+            EMIT(VIDEO_DAC_BLANK, false);
     }
 
-    /* Front porch (874-909): 36 samples blank */
-    for (uint i = 0; i < 36u; i++)
-        EMIT(VIDEO_DAC_BLANK);
-
-    /* Padding nibbles 910-911: fill last word to 114 × 8 = 912 nibbles */
-    EMIT(VIDEO_DAC_BLANK);
-    EMIT(VIDEO_DAC_BLANK);
+    /* Front porch (874-908): 35 samples blank */
+    for (uint i = 0; i < 35u; i++)
+        EMIT(VIDEO_DAC_BLANK, false);
 
 #undef EMIT
+}
+
+void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active) {
+    render_scanline_composite_phase(buf, pixels, active, 0u);
 }
 
 /* =========================================================================
@@ -317,8 +336,10 @@ void render_scanline_composite(uint32_t *buf, const uint8_t *pixels, bool active
  * ========================================================================= */
 
 static void render_vsync_line(uint32_t *buf) {
-    /* All-sync: DAC code 0 for entire line.  GP4 stays HIGH (Core 1). */
-    memset(buf, 0, VIDEO_WORDS_PER_LINE * sizeof(uint32_t));
+    /* All-sync: DAC code 0 and sync gate high for the entire line. */
+    for (uint i = 0; i < VIDEO_WORDS_PER_LINE; ++i) {
+        buf[i] = video_ntsc_encode_symbol(VIDEO_DAC_SYNC, true);
+    }
 }
 
 static void render_blank_line(uint32_t *buf) {
@@ -329,17 +350,18 @@ static void render_test_scanline(uint32_t *buf) {
     /* 8 luma bars across the active region — no Core 1 needed */
     static const uint8_t bar_codes[8] = { 13, 11, 9, 7, 6, 5, 4, 4 };
 
-    uint32_t word      = 0;
-    int      nib_count = 0;
-
 #define EMIT_T(c) \
     do { \
-        word = (word << 4) | ((uint32_t)(c) & 0xFu); \
-        if (++nib_count == 8) { *buf++ = word; word = 0; nib_count = 0; } \
+        *buf++ = video_ntsc_encode_symbol((uint8_t)(c), false); \
+    } while (0)
+
+#define EMIT_T_SYNC(c) \
+    do { \
+        *buf++ = video_ntsc_encode_symbol((uint8_t)(c), true); \
     } while (0)
 
     for (uint i = 0; i < VIDEO_SYNC_SAMPLES; i++)
-        EMIT_T(VIDEO_DAC_SYNC);
+        EMIT_T_SYNC(VIDEO_DAC_SYNC);
     for (uint i = VIDEO_SYNC_SAMPLES; i < VIDEO_BURST_START; i++)
         EMIT_T(VIDEO_DAC_BLANK);
     for (uint i = 0; i < VIDEO_BURST_SAMPLES; i++)
@@ -351,23 +373,29 @@ static void render_test_scanline(uint32_t *buf) {
         uint bar = (s * 8u) / VIDEO_ACTIVE_SAMPLES;
         EMIT_T(bar_codes[bar]);
     }
-    for (uint i = 0; i < 38u; i++)  /* 36 front porch + 2 padding */
+    for (uint i = 0; i < 35u; i++)
         EMIT_T(VIDEO_DAC_BLANK);
 
 #undef EMIT_T
+#undef EMIT_T_SYNC
 }
 
-static void render_ntsc_line(int ntsc_line, uint32_t *buf, ScanlineQueue *queue) {
+static void render_ntsc_line(
+    int ntsc_line,
+    uint32_t *buf,
+    ScanlineQueue *queue,
+    uint32_t subcarrier_phase
+) {
     if (ntsc_line < (int)VIDEO_VSYNC_LINES) {
         render_vsync_line(buf);
     } else if (ntsc_line < (int)(VIDEO_VSYNC_LINES + VIDEO_TOP_BLANK_LINES) ||
                ntsc_line >= (int)VIDEO_ACTIVE_END_LINE) {
-        render_blank_line(buf);
+        render_scanline_composite_phase(buf, NULL, false, subcarrier_phase);
     } else {
         int active_y = ntsc_line - (int)VIDEO_ACTIVE_START_LINE;
         ScanlineQueueSlot slot;
         scanline_queue_pop_blocking(queue, &slot);
-        render_scanline_composite(buf, slot.pixels, true);
+        render_scanline_composite_phase(buf, slot.pixels, true, subcarrier_phase);
         if (active_y == (int)VIDEO_ACTIVE_LINES - 1) {
             s_frames_rendered++;
         }
@@ -378,7 +406,7 @@ static void render_ntsc_line(int ntsc_line, uint32_t *buf, ScanlineQueue *queue)
  * DMA helpers
  * ========================================================================= */
 
-static void dma_rearm(int buf_idx) {
+static void dma_rearm_words(int buf_idx, uint32_t transfer_words) {
     /*
      * Reset READ_ADDR and TRANS_COUNT without triggering.  The channel will
      * be triggered automatically when the other channel chains to it.
@@ -388,9 +416,13 @@ static void dma_rearm(int buf_idx) {
         &s_dma_cfg[buf_idx],
         &s_pio->txf[s_sm],       /* write addr: PIO TX FIFO        */
         scanline_buf[buf_idx],   /* read addr:  start of this buf  */
-        VIDEO_WORDS_PER_LINE,    /* transfer count                 */
+        transfer_words,          /* transfer count                 */
         false                    /* do not trigger                 */
     );
+}
+
+static void dma_rearm(int buf_idx) {
+    dma_rearm_words(buf_idx, VIDEO_WORDS_PER_LINE);
 }
 
 static void dma_abort_pair_cleanly(void) {
@@ -460,13 +492,10 @@ static void __isr dma_irq0_handler(void) {
 static volatile uint32_t s_irq1_fire_count = 0;
 
 static void __isr dma_irq1_handler(void) {
-    /*
-     * The DMA chain has already started the next channel.  Raise GP4
-     * immediately for the new line's horizontal sync pulse.
-     * IRQ latency on Cortex-M33 ≈ 12 cycles; error < 1 sample (22 cycles).
-     */
+    /* The DMA chain has already started the next channel.  The PIO sample
+     * stream carries the sync-gate bit, so the ISR only records which buffer
+     * is idle. */
     s_irq1_fire_count++;
-    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
 
     uint32_t mask   = (1u << s_dma_chan[0]) | (1u << s_dma_chan[1]);
     uint32_t status = dma_hw->ints1 & mask;
@@ -483,11 +512,6 @@ static void __isr dma_irq1_handler(void) {
 
 void video_ntsc_init(void) {
     build_chroma_lut();
-
-    /* GP4: sync clamp gate — output, initially LOW (MOSFET off) */
-    gpio_init(MICRONES_VIDEO_SYNC_GPIO);
-    gpio_set_dir(MICRONES_VIDEO_SYNC_GPIO, GPIO_OUT);
-    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
 
     /* Load PIO program and configure state machine */
     s_pio        = pio0;
@@ -515,7 +539,6 @@ void video_ntsc_start(void) {
     }
 
     pio_sm_set_enabled(s_pio, s_sm, true);
-    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);   /* GP4 LOW for test-pattern mode */
     dma_channel_start(s_dma_chan[0]);        /* A starts, chains to B, B to A… */
 }
 
@@ -534,7 +557,6 @@ void video_ntsc_stop(void) {
     pio_sm_set_enabled(s_pio, s_sm, false);
     pio_sm_clear_fifos(s_pio, s_sm);
     pio_sm_restart(s_pio, s_sm);
-    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
     s_dma_irq1_pending = false;
 }
 
@@ -630,7 +652,12 @@ void video_ntsc_core1_entry(void) {
     render_vsync_line(scanline_buf[0]);
     render_vsync_line(scanline_buf[1]);
 
-    /* Re-arm both channels with fresh vsync data */
+    /* Re-arm both channels with fresh vsync data. */
+    uint32_t display_line_phase = 1u;
+    uint32_t render_line_phase  = 2u;
+    uint32_t display_subcarrier_phase = video_ntsc_next_subcarrier_phase(0u, 0u);
+    uint32_t render_subcarrier_phase =
+        video_ntsc_next_subcarrier_phase(display_subcarrier_phase, display_line_phase);
     dma_rearm(0);
     dma_rearm(1);
 
@@ -639,17 +666,17 @@ void video_ntsc_core1_entry(void) {
     s_dma_irq1_pending = false;
     dma_set_irq1_channel_mask_enabled(ch_mask, true);
 
-    /* Start: GP4 HIGH for line 0 sync, then start channel A */
+    /* Start channel A; the PIO sample stream carries the sync-gate state. */
     pio_sm_set_enabled(s_pio, s_sm, true);
-    gpio_put(MICRONES_VIDEO_SYNC_GPIO, 1);
     dma_channel_start(s_dma_chan[0]);
 
     /*
      * Pipeline state after start:
      *   channel A is running buf[0] = line 0
      *   channel B is pre-armed with buf[1] = line 1
-     *   display_line = 1  (will be output when channel A completes)
-     *   render_line  = 2  (next to render)
+     *   display_line       = 1  (will be output when channel A completes)
+     *   render_line        = 2  (next to render)
+     *   display/render_subcarrier_phase track each line's 4FSC start phase.
      */
     int display_line = 1;
     int render_line  = 2;
@@ -662,25 +689,12 @@ void video_ntsc_core1_entry(void) {
 
         /*
          * At this point:
-         *   • The ISR has set GP4 HIGH for display_line's sync pulse.
          *   • s_idle_buf is the buffer whose channel just finished.
          *   • The other channel is already clocking out display_line.
-         *
-         * GP4 management:
-         *   Vsync lines (0-8): leave GP4 HIGH the entire line (continuous sync).
-         *   All other lines: drop GP4 after ~47 sync samples.
-         *     Target: 47 × 22 = 1034 cycles HIGH from line start (at 315 MHz).
-         *     IRQ latency + wakeup ≈ 20-30 cycles; we wait 1000 cycles so
-         *     total ≈ 1020-1030 cycles  (error < 1 sample = 22 cycles). ✓
          */
-        bool display_is_vsync = (display_line < (int)VIDEO_VSYNC_LINES);
-        if (!display_is_vsync) {
-            busy_wait_at_least_cycles(1000u);
-            gpio_put(MICRONES_VIDEO_SYNC_GPIO, 0);
-        }
-
         /* ---- Render render_line into the now-idle buffer ---- */
-        render_ntsc_line(render_line, scanline_buf[s_idle_buf], queue);
+        render_ntsc_line(render_line, scanline_buf[s_idle_buf], queue,
+                         render_subcarrier_phase);
 
         /*
          * Re-arm the idle channel.  It will be triggered by chain when the
@@ -692,8 +706,18 @@ void video_ntsc_core1_entry(void) {
         /* ---- Advance pipeline counters ---- */
         display_line++;
         if (display_line >= (int)VIDEO_LINES_PER_FRAME) display_line = 0;
+        display_subcarrier_phase =
+            video_ntsc_next_subcarrier_phase(display_subcarrier_phase,
+                                             display_line_phase);
+        display_line_phase++;
+        if (display_line_phase >= 3u) display_line_phase = 0u;
 
         render_line++;
         if (render_line >= (int)VIDEO_LINES_PER_FRAME) render_line = 0;
+        render_subcarrier_phase =
+            video_ntsc_next_subcarrier_phase(render_subcarrier_phase,
+                                             render_line_phase);
+        render_line_phase++;
+        if (render_line_phase >= 3u) render_line_phase = 0u;
     }
 }

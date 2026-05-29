@@ -101,9 +101,8 @@ int main(void) {
 #endif
 
     /* System clock — speed controlled by MICRONES_SYS_CLK_MHZ in clock_config.h.
-     * PIO is fixed at 'out pins, 4 [10]' (11 cycles); clkdiv scales to 14.318182 MHz.
-     *   315 MHz: PLL 1260/(2×2), VREG 1.20 V, clkdiv=2.0 → 315M/22 = 14.318 MHz
-     *   157.5 MHz: PLL 1260/(4×2), VREG 1.10 V, clkdiv=1.0 → 157.5M/11 = 14.318 MHz */
+     * Analog PIO is fixed at 'out pins, 5 [10]' (11 cycles); clkdiv scales
+     * to the 14.318182 MHz 4FSC sample clock. */
     vreg_set_voltage(MICRONES_VREG);
     sleep_ms(MICRONES_VREG_SETTLE_MS);
     set_sys_clock_pll(MICRONES_PLL_VCO_HZ, MICRONES_PLL_DIV1, MICRONES_PLL_DIV2);
