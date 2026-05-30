@@ -211,6 +211,31 @@ static uint32_t s_dma_start_us;
 static uint32_t s_ping_last_built;
 static uint32_t s_pong_last_built;
 
+/* --- Cascade-investigation diagnostics --------------------------------- */
+static volatile uint32_t s_isr_period_buckets[8];
+static volatile uint32_t s_isr_calls;
+static volatile uint32_t s_isr_max_us;
+static volatile uint32_t s_built_vbi;
+static volatile uint32_t s_built_active;
+static volatile uint32_t s_hstx_csr_sticky;
+static uint32_t s_prev_isr_us;
+
+/* Snapshot of all interesting state at the moment the first
+ * double-hit is recorded. Populated exactly once; printed every diag
+ * tick once filled so the user can grep it from the log. */
+static volatile uint32_t s_first_dbl_filled;
+static volatile uint32_t s_first_dbl_elapsed_us;
+static volatile uint32_t s_first_dbl_scanline;
+static volatile uint32_t s_first_dbl_ping_busy;
+static volatile uint32_t s_first_dbl_pong_busy;
+static volatile uint32_t s_first_dbl_ping_tc;
+static volatile uint32_t s_first_dbl_pong_tc;
+static volatile uint32_t s_first_dbl_ping_ra;
+static volatile uint32_t s_first_dbl_pong_ra;
+static volatile uint32_t s_first_dbl_hstx_csr;
+static volatile uint32_t s_first_dbl_prev_period;
+static volatile uint32_t s_first_dbl_ints0;
+
 /* --- HDMI data island cmd buffers --------------------------------------- */
 
 #if MICRONES_HDMI_DATA_ISLANDS
@@ -597,6 +622,12 @@ static uint32_t __scratch_x("bld") hstx_build_scanline_at(
     uint32_t vbi_end = MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH;
     uint32_t *p = buf;
 
+    if (scanline < vbi_end) {
+        ++s_built_vbi;
+    } else {
+        ++s_built_active;
+    }
+
     if (scanline >= MODE_V_FRONT_PORCH &&
         scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
         /* VSYNC-on VBI line — copy the static cmdlist. */
@@ -685,6 +716,7 @@ static void __scratch_x("") hstx_dma_irq(void) {
      * from per-call increments. The counter stays locked to physical
      * phase regardless of ISR rate; buffer content always matches phase;
      * no cascade trigger. */
+    uint32_t isr_entry_us = timer_hw->timerawl;
     const uint32_t ping_mask = 1u << (uint32_t)s_dmach_ping;
     const uint32_t pong_mask = 1u << (uint32_t)s_dmach_pong;
     uint32_t ints = dma_hw->ints0;
@@ -694,10 +726,44 @@ static void __scratch_x("") hstx_dma_irq(void) {
     }
     dma_hw->intr = to_process;
 
+    /* --- Cascade diagnostics: ISR period histogram + total count ---- */
+    ++s_isr_calls;
+    s_hstx_csr_sticky |= hstx_ctrl_hw->csr;
+    uint32_t isr_period = isr_entry_us - s_prev_isr_us;
+    s_prev_isr_us = isr_entry_us;
+    {
+        uint32_t bucket;
+        if (isr_period < 5u)         bucket = 0u;
+        else if (isr_period < 10u)   bucket = 1u;
+        else if (isr_period < 20u)   bucket = 2u;
+        else if (isr_period < 30u)   bucket = 3u;
+        else if (isr_period < 100u)  bucket = 4u;
+        else if (isr_period < 500u)  bucket = 5u;
+        else if (isr_period < 2000u) bucket = 6u;
+        else                         bucket = 7u;
+        ++s_isr_period_buckets[bucket];
+    }
+
     if (to_process == (ping_mask | pong_mask)) {
         ++s_hdmi_dma_double_hits;
-        if (s_hdmi_first_dbl_vf == 0u)
+        if (s_hdmi_first_dbl_vf == 0u) {
             s_hdmi_first_dbl_vf = s_stats.frames_presented;
+            /* Capture deep snapshot at the moment of first cascade
+             * trigger.  Done in-ISR so DMA state is exactly what the
+             * hardware saw when both channels' IRQ flags coincided. */
+            s_first_dbl_elapsed_us = isr_entry_us - s_dma_start_us;
+            s_first_dbl_scanline = s_v_scanline;
+            s_first_dbl_ping_busy = dma_channel_is_busy(s_dmach_ping) ? 1u : 0u;
+            s_first_dbl_pong_busy = dma_channel_is_busy(s_dmach_pong) ? 1u : 0u;
+            s_first_dbl_ping_tc = dma_hw->ch[s_dmach_ping].transfer_count;
+            s_first_dbl_pong_tc = dma_hw->ch[s_dmach_pong].transfer_count;
+            s_first_dbl_ping_ra = dma_hw->ch[s_dmach_ping].read_addr;
+            s_first_dbl_pong_ra = dma_hw->ch[s_dmach_pong].read_addr;
+            s_first_dbl_hstx_csr = hstx_ctrl_hw->csr;
+            s_first_dbl_prev_period = isr_period;
+            s_first_dbl_ints0 = ints;
+            s_first_dbl_filled = 1u;
+        }
     }
 
     /* Derive the target scanline for the buffer we're about to build,
@@ -765,6 +831,16 @@ static void __scratch_x("") hstx_dma_irq(void) {
             dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
             dma_hw->ch[s_dmach_pong].transfer_count = words;
             s_pong_last_built = s_v_scanline;
+        }
+    }
+
+    /* Track ISR duration so we can see if the ISR work itself is
+     * growing (and possibly causing the cascade by spending more time
+     * in the handler than the scanline period). */
+    {
+        uint32_t isr_dur = timer_hw->timerawl - isr_entry_us;
+        if (isr_dur > s_isr_max_us) {
+            s_isr_max_us = isr_dur;
         }
     }
 }
@@ -871,6 +947,14 @@ bool video_hstx_init(void) {
     s_ping_last_built = 0xFFFFFFFFu;
     s_pong_last_built = 0xFFFFFFFFu;
     s_v_scanline = 3u;
+    for (uint32_t i = 0u; i < 8u; ++i) s_isr_period_buckets[i] = 0u;
+    s_isr_calls = 0u;
+    s_isr_max_us = 0u;
+    s_built_vbi = 0u;
+    s_built_active = 0u;
+    s_hstx_csr_sticky = 0u;
+    s_prev_isr_us = 0u;
+    s_first_dbl_filled = 0u;
     s_started = false;
     s_irq_configured = false;
     s_borders_dirty = true;
@@ -1144,6 +1228,57 @@ void video_hstx_print_diag(void) {
     prev_vsubmitted = vsubmitted;
     prev_vexpanded = vexpanded;
     prev_vstalls = vstalls;
+
+    /* --- Cascade-investigation diagnostics ------------------------- */
+    static uint32_t prev_isr_calls;
+    static uint32_t prev_buckets[8];
+    static uint32_t prev_vbi;
+    static uint32_t prev_active;
+    uint32_t buckets_now[8];
+    for (uint32_t i = 0u; i < 8u; ++i) buckets_now[i] = s_isr_period_buckets[i];
+    uint32_t isr_now = s_isr_calls;
+    uint32_t built_vbi_now = s_built_vbi;
+    uint32_t built_active_now = s_built_active;
+    /* Atomically grab csr_sticky and reseed with current — this loses
+     * any bits that get set between the read and the write, but that's
+     * acceptable for diagnostic noise. */
+    uint32_t csr_sticky_now = s_hstx_csr_sticky;
+    s_hstx_csr_sticky = hstx_ctrl_hw->csr;
+
+    printf("[hstx2] isr=%lu isr_max=%lu p0_5=%lu p5_10=%lu p10_20=%lu p20_30=%lu p30_100=%lu p100_500=%lu p500_2k=%lu p2k=%lu bldVBI=%lu bldAct=%lu csr_sticky=%08lx\n",
+           (unsigned long)(isr_now - prev_isr_calls),
+           (unsigned long)s_isr_max_us,
+           (unsigned long)(buckets_now[0] - prev_buckets[0]),
+           (unsigned long)(buckets_now[1] - prev_buckets[1]),
+           (unsigned long)(buckets_now[2] - prev_buckets[2]),
+           (unsigned long)(buckets_now[3] - prev_buckets[3]),
+           (unsigned long)(buckets_now[4] - prev_buckets[4]),
+           (unsigned long)(buckets_now[5] - prev_buckets[5]),
+           (unsigned long)(buckets_now[6] - prev_buckets[6]),
+           (unsigned long)(buckets_now[7] - prev_buckets[7]),
+           (unsigned long)(built_vbi_now - prev_vbi),
+           (unsigned long)(built_active_now - prev_active),
+           (unsigned long)csr_sticky_now);
+
+    if (s_first_dbl_filled) {
+        printf("[1dbl] sl=%lu elap=%lu period=%lu pbz=%lu gbz=%lu pTC=%lu gTC=%lu pRA=%08lx gRA=%08lx csr=%08lx ints=%08lx\n",
+               (unsigned long)s_first_dbl_scanline,
+               (unsigned long)s_first_dbl_elapsed_us,
+               (unsigned long)s_first_dbl_prev_period,
+               (unsigned long)s_first_dbl_ping_busy,
+               (unsigned long)s_first_dbl_pong_busy,
+               (unsigned long)s_first_dbl_ping_tc,
+               (unsigned long)s_first_dbl_pong_tc,
+               (unsigned long)s_first_dbl_ping_ra,
+               (unsigned long)s_first_dbl_pong_ra,
+               (unsigned long)s_first_dbl_hstx_csr,
+               (unsigned long)s_first_dbl_ints0);
+    }
+
+    prev_isr_calls = isr_now;
+    for (uint32_t i = 0u; i < 8u; ++i) prev_buckets[i] = buckets_now[i];
+    prev_vbi = built_vbi_now;
+    prev_active = built_active_now;
 }
 
 /* --- HDMI audio backend entry points ----------------------------------- */
