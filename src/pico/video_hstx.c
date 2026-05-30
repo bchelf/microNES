@@ -110,13 +110,28 @@ static int s_dmach_pong = -1;
 
 /* --- Existing VBI cmd lists (DVI-compatible, no data island) ------------ */
 
+/* IMPORTANT: vsync buffers are split into 13 cmd-words instead of the
+ * original 7 to keep the source longer than the HSTX FIFO depth.  If a
+ * scanline buffer is small enough to fit entirely in the FIFO, DMA
+ * pushes all words back-to-back (no DREQ throttling), completes in
+ * sub-microsecond, then chains to the other channel which does the
+ * same — leading to a runaway "rapid pingponging" cascade where the
+ * ISR fires every few µs instead of every scanline.  The original
+ * hdmi_test_pattern.c warns about this and pads its lists with NOPs.
+ *
+ * The 688-pixel back-porch+active RAW_REPEAT is split into four
+ * 172-pixel pieces so the buffer is large enough to force HSTX-paced
+ * DMA, AND the additional REPEAT commands give the FIFO real
+ * pixel-clock-paced drain points along the way. */
 static uint32_t s_vblank_line_vsync_off[] = {
     HSTX_CMD_RAW_REPEAT | MODE_H_FRONT_PORCH,
     SYNC_V1_H1,
     HSTX_CMD_RAW_REPEAT | MODE_H_SYNC_WIDTH,
     SYNC_V1_H0,
-    HSTX_CMD_RAW_REPEAT | (MODE_H_BACK_PORCH + MODE_H_ACTIVE_PIXELS),
-    SYNC_V1_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V1_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V1_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V1_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V1_H1,
     HSTX_CMD_NOP
 };
 
@@ -125,8 +140,10 @@ static uint32_t s_vblank_line_vsync_on[] = {
     SYNC_V0_H1,
     HSTX_CMD_RAW_REPEAT | MODE_H_SYNC_WIDTH,
     SYNC_V0_H0,
-    HSTX_CMD_RAW_REPEAT | (MODE_H_BACK_PORCH + MODE_H_ACTIVE_PIXELS),
-    SYNC_V0_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V0_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V0_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V0_H1,
+    HSTX_CMD_RAW_REPEAT | 172u, SYNC_V0_H1,
     HSTX_CMD_NOP
 };
 
