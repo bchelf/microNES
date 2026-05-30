@@ -200,13 +200,16 @@ static volatile uint32_t s_hdmi_scanline_stalls;
 static volatile uint32_t s_hdmi_dma_double_hits;
 static volatile uint32_t s_hdmi_dma_race_rebuilds;
 static volatile uint32_t s_hdmi_dma_phase_corrections;
+static volatile uint32_t s_hdmi_dma_skipped_rebuilds;
 static volatile uint64_t s_hdmi_first_dbl_vf;
 static volatile uint32_t s_hdmi_scanline_submitted;
 static volatile uint32_t s_hdmi_scanline_expanded;
 static volatile uint32_t s_hdmi_scanline_max_level;
 static volatile uint32_t s_hdmi_frame_submitted;
 static volatile uint32_t s_hdmi_frame_expanded;
-static uint32_t s_last_isr_us;
+static uint32_t s_dma_start_us;
+static uint32_t s_ping_last_built;
+static uint32_t s_pong_last_built;
 
 /* --- HDMI data island cmd buffers --------------------------------------- */
 
@@ -583,30 +586,29 @@ static void __not_in_flash_func(video_hstx_audio_core1_entry)(void) {
 /* --- DMA / ISR --------------------------------------------------------- */
 
 /* Build a complete scanline into buf[]. Returns the word count written.
- * This function runs from SRAM (__scratch_x) since it is called from
- * the DMA ISR and must not stall on XIP cache misses. */
-static uint32_t __scratch_x("bld") hstx_build_scanline(
-        uint32_t *buf, uint32_t buf_idx) {
-    (void)buf_idx;
+ * Pure function: takes the scanline number explicitly and has no side
+ * effects on s_v_scanline / frames_presented / audio scheduler.  The ISR
+ * handles those separately based on wall-clock-derived phase.
+ *
+ * Runs from SRAM (__scratch_x) since it is called from the DMA ISR and
+ * must not stall on XIP cache misses. */
+static uint32_t __scratch_x("bld") hstx_build_scanline_at(
+        uint32_t *buf, uint32_t scanline) {
     uint32_t vbi_end = MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH;
     uint32_t *p = buf;
 
-#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-    hdmi_audio_scheduler_tick();
-#endif
-
-    if (s_v_scanline >= MODE_V_FRONT_PORCH &&
-        s_v_scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
+    if (scanline >= MODE_V_FRONT_PORCH &&
+        scanline < MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH) {
         /* VSYNC-on VBI line — copy the static cmdlist. */
         for (uint32_t i = 0u; i < count_of(s_vblank_line_vsync_on); ++i) {
             *p++ = s_vblank_line_vsync_on[i];
         }
-    } else if (s_v_scanline < vbi_end) {
+    } else if (scanline < vbi_end) {
         /* VBI line (vsync off) — may carry data islands. */
 #if MICRONES_HDMI_DATA_ISLANDS
-        if (s_v_scanline >= HDMI_CONTROL_VBI_LINE &&
-            s_v_scanline < HDMI_CONTROL_VBI_LINE + HDMI_CONTROL_PACKET_LINES) {
-            uint32_t line_idx = s_v_scanline - HDMI_CONTROL_VBI_LINE;
+        if (scanline >= HDMI_CONTROL_VBI_LINE &&
+            scanline < HDMI_CONTROL_VBI_LINE + HDMI_CONTROL_PACKET_LINES) {
+            uint32_t line_idx = scanline - HDMI_CONTROL_VBI_LINE;
             const uint32_t *src = s_hdmi_control_line_buf[line_idx];
             for (uint32_t i = 0u; i < HDMI_VBLANK_DI_LINE_WORDS; ++i) {
                 *p++ = src[i];
@@ -640,7 +642,7 @@ static uint32_t __scratch_x("bld") hstx_build_scanline(
 #endif
         /* Copy pixel data from framebuffer. Word-copy loop (not memcpy)
          * because this function must run entirely from SRAM. */
-        uint32_t active_y = s_v_scanline - vbi_end;
+        uint32_t active_y = scanline - vbi_end;
         uint32_t stored_y = active_y / NES_SCALE;
         const uint32_t *src = (const uint32_t *)&s_framebuf[stored_y * FRAMEBUF_LINE_BYTES];
         for (uint32_t i = 0u; i < FRAMEBUF_PIXEL_WORDS; ++i) {
@@ -648,16 +650,7 @@ static uint32_t __scratch_x("bld") hstx_build_scanline(
         }
     }
 
-    /* Advance to next scanline. */
-    uint32_t words = (uint32_t)(p - buf);
-    s_v_scanline = (s_v_scanline + 1u) % MODE_V_TOTAL_LINES;
-    if (s_v_scanline == 0u) {
-        ++s_stats.frames_presented;
-#if MICRONES_HDMI_DATA_ISLANDS && MICRONES_HDMI_AUDIO_PACKETS
-        s_hdmi_audio_packet_cursor = 0u;
-#endif
-    }
-    return words;
+    return (uint32_t)(p - buf);
 }
 
 /* Advance scanline counter and audio scheduler without building a buffer.
@@ -678,10 +671,20 @@ static void __scratch_x("adv") hstx_advance_scanline(void) {
 }
 
 static void __scratch_x("") hstx_dma_irq(void) {
-    /* Both ping and pong channels have IRQ enabled. When a channel
-     * completes, the other channel is already running (chained).
-     * We build the NEXT scanline into the buffer that just finished
-     * transmitting. */
+    /* Both ping and pong channels have IRQ enabled and chain to each
+     * other. The ISR's job: when a channel completes, rebuild its buffer
+     * with the right content for the scanline it will play next.
+     *
+     * Cascade mechanism: when s_v_scanline drifts even by 1 scanline
+     * from the TV's physical position, the buffer "type" (VBI vs active)
+     * stops matching what the HSTX FIFO needs to drain at pixel rate.
+     * DMA completes faster, ISR fires faster, counter drifts more.
+     * Positive feedback → 4x runaway.
+     *
+     * Fix: derive s_v_scanline from wall-clock on every ISR entry, not
+     * from per-call increments. The counter stays locked to physical
+     * phase regardless of ISR rate; buffer content always matches phase;
+     * no cascade trigger. */
     const uint32_t ping_mask = 1u << (uint32_t)s_dmach_ping;
     const uint32_t pong_mask = 1u << (uint32_t)s_dmach_pong;
     uint32_t ints = dma_hw->ints0;
@@ -691,59 +694,77 @@ static void __scratch_x("") hstx_dma_irq(void) {
     }
     dma_hw->intr = to_process;
 
-    uint32_t channels_to_handle =
-        (to_process == (ping_mask | pong_mask)) ? 2u : 1u;
-
-    if (channels_to_handle == 2u) {
+    if (to_process == (ping_mask | pong_mask)) {
         ++s_hdmi_dma_double_hits;
         if (s_hdmi_first_dbl_vf == 0u)
             s_hdmi_first_dbl_vf = s_stats.frames_presented;
     }
 
-    /* Resync scanline counter after IRQ blackouts (e.g. printf over USB).
-     * During a blackout the DMA chain replays stale buffers autonomously;
-     * IRQ flags are single bits, not counters, so no matter how many
-     * scanlines played we only see one IRQ per channel.  Use wall-clock
-     * time to compute how many scanlines the TV physically advanced and
-     * skip the counter forward to match. Without this, the counter falls
-     * permanently behind and builds VBI-sized buffers during active video
-     * (or vice-versa), cascading into a 4x drain. */
+    /* Derive the target scanline for the buffer we're about to build,
+     * from wall-clock time.  s_dma_start_us was captured immediately
+     * before dma_channel_start, at which point ping began transmitting
+     * scanline 2.  After elapsed µs, the scanline currently being
+     * played is (2 + elapsed/period).  The just-completed (non-busy)
+     * channel will play again one chain hop later, so the content we
+     * build into it is for scanline (current_playing + 1) =
+     * (elapsed/period + 3).
+     *
+     * Period = 800 pixels / 31.5 MHz ≈ 25.397 µs.  Using uint64 mul to
+     * avoid overflow; elapsed (uint32 µs) fits ~71 minutes. */
     uint32_t now = timer_hw->timerawl;
-    if (s_last_isr_us != 0u) {
-        uint32_t elapsed = now - s_last_isr_us;
-        /* Scanline period ≈ 25.4 µs (800 pixels / 31.5 MHz).
-         * Using 25 µs is conservative (at most 1 extra advance per
-         * blackout, which self-corrects on the next ISR). */
-        uint32_t expected = elapsed / 25u;
-        if (expected > channels_to_handle) {
-            uint32_t extra = expected - channels_to_handle;
-            if (extra > MODE_V_TOTAL_LINES)
-                extra = MODE_V_TOTAL_LINES;
-            s_hdmi_dma_phase_corrections += extra;
-            for (uint32_t i = 0u; i < extra; ++i)
-                hstx_advance_scanline();
+    uint32_t elapsed = now - s_dma_start_us;
+    uint32_t scanlines_elapsed = (uint32_t)(
+        ((uint64_t)elapsed * 31500ULL) / 800000ULL);
+    uint32_t target = (scanlines_elapsed + 3u) % MODE_V_TOTAL_LINES;
+
+    /* Advance s_v_scanline up to target, ticking audio + frame counter
+     * once per step.  Normal operation: delta == 1.  Cascade (ISR
+     * firing faster than scanline rate): delta == 0, skip ticks.
+     * Post-blackout: delta > 1, catch up audio/frame counter to match
+     * physical phase. */
+    uint32_t delta = (target + MODE_V_TOTAL_LINES - s_v_scanline) %
+                     MODE_V_TOTAL_LINES;
+    if (delta > MODE_V_TOTAL_LINES) {
+        delta = 1u; /* safety: shouldn't happen */
+    }
+    if (delta == 0u) {
+        ++s_hdmi_dma_skipped_rebuilds;
+    } else {
+        s_hdmi_dma_phase_corrections += delta;
+        for (uint32_t i = 0u; i < delta; ++i) {
+            hstx_advance_scanline();
         }
     }
-    s_last_isr_us = now;
 
+    /* Build the non-busy channel's buffer with scanline = s_v_scanline.
+     * Both channels' next play falls on (current_playing + 1) since the
+     * chain alternates; whichever just completed gets that scanline.
+     *
+     * Skip rebuild if:
+     *   (a) channel is currently busy (chain already wrapped — its old
+     *       content is being transmitted, can't safely overwrite), or
+     *   (b) we already built this scanline into that channel earlier in
+     *       the same physical scanline (prevents the cascade case from
+     *       repeatedly consuming audio packets via
+     *       hdmi_next_audio_island). */
     if (to_process & ping_mask) {
         if (dma_channel_is_busy(s_dmach_ping)) {
             ++s_hdmi_dma_race_rebuilds;
-            hstx_advance_scanline();
-        } else {
-            uint32_t words = hstx_build_scanline(s_line_buf[0], 0u);
+        } else if (s_ping_last_built != s_v_scanline) {
+            uint32_t words = hstx_build_scanline_at(s_line_buf[0], s_v_scanline);
             dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
             dma_hw->ch[s_dmach_ping].transfer_count = words;
+            s_ping_last_built = s_v_scanline;
         }
     }
     if (to_process & pong_mask) {
         if (dma_channel_is_busy(s_dmach_pong)) {
             ++s_hdmi_dma_race_rebuilds;
-            hstx_advance_scanline();
-        } else {
-            uint32_t words = hstx_build_scanline(s_line_buf[1], 1u);
+        } else if (s_pong_last_built != s_v_scanline) {
+            uint32_t words = hstx_build_scanline_at(s_line_buf[1], s_v_scanline);
             dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
             dma_hw->ch[s_dmach_pong].transfer_count = words;
+            s_pong_last_built = s_v_scanline;
         }
     }
 }
@@ -840,13 +861,16 @@ bool video_hstx_init(void) {
     s_hdmi_dma_double_hits = 0u;
     s_hdmi_dma_race_rebuilds = 0u;
     s_hdmi_dma_phase_corrections = 0u;
+    s_hdmi_dma_skipped_rebuilds = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
     s_hdmi_scanline_max_level = 0u;
     s_hdmi_frame_submitted = 0u;
     s_hdmi_frame_expanded = 0u;
-    s_last_isr_us = 0u;
-    s_v_scanline = 2u;
+    s_dma_start_us = 0u;
+    s_ping_last_built = 0xFFFFFFFFu;
+    s_pong_last_built = 0xFFFFFFFFu;
+    s_v_scanline = 3u;
     s_started = false;
     s_irq_configured = false;
     s_borders_dirty = true;
@@ -924,18 +948,24 @@ void video_hstx_start(void) {
     if (s_started) {
         return;
     }
-    s_v_scanline = 2u;
+    /* Pre-built ping=scanline 2 (plays first), pong=scanline 3.
+     * At elapsed=0 the wall-clock formula evaluates to target=3,
+     * matching pong's existing content so we skip rebuilding it on
+     * the very first ISR. */
+    s_v_scanline = 3u;
+    s_ping_last_built = 2u;
+    s_pong_last_built = 3u;
     s_hdmi_scanline_max_level = 0u;
     hstx_configure_peripheral();
     hstx_configure_dma();
     /* Pre-build the first two scanlines into the ping/pong buffers
      * so the chain has valid data from the start. */
     {
-        uint32_t words0 = hstx_build_scanline(s_line_buf[0], 0u);
+        uint32_t words0 = hstx_build_scanline_at(s_line_buf[0], 2u);
         dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
         dma_hw->ch[s_dmach_ping].transfer_count = words0;
 
-        uint32_t words1 = hstx_build_scanline(s_line_buf[1], 1u);
+        uint32_t words1 = hstx_build_scanline_at(s_line_buf[1], 3u);
         dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
         dma_hw->ch[s_dmach_pong].transfer_count = words1;
     }
@@ -945,6 +975,9 @@ void video_hstx_start(void) {
     multicore_launch_core1(video_hstx_audio_core1_entry);
 #endif
     s_started = true;
+    /* Capture the wall-clock anchor as close as possible to the moment
+     * ping starts transmitting scanline 2. */
+    s_dma_start_us = timer_hw->timerawl;
     dma_channel_start((uint)s_dmach_ping);
 }
 
@@ -1062,7 +1095,7 @@ void video_hstx_print_diag(void) {
     static uint32_t s_printf_max_us;
 
     uint32_t tp0 = timer_hw->timerawl;
-    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u start=%u worker=%u vf=%llu pcm=%lu q=%lu vq=%lu vmax=%lu dref=%lu dmiss=%lu dvsub=%lu dvexp=%lu dvstall=%lu vfsub=%lu vfexp=%lu underruns=%lu overruns=%lu pkts=%lu dbl=%lu race=%lu phase=%lu 1stdbl=%llu spinmax=%lu printmax=%lu\n",
+    printf("[hstx] sys=%lu hstx=%lu pixel=%lu CTS=%u N=%u tone=%u start=%u worker=%u vf=%llu pcm=%lu q=%lu vq=%lu vmax=%lu dref=%lu dmiss=%lu dvsub=%lu dvexp=%lu dvstall=%lu vfsub=%lu vfexp=%lu underruns=%lu overruns=%lu pkts=%lu dbl=%lu race=%lu phase=%lu skipped=%lu 1stdbl=%llu spinmax=%lu printmax=%lu\n",
            (unsigned long)s_diag_sys_hz,
            (unsigned long)s_diag_hstx_hz,
            (unsigned long)s_diag_pixel_hz,
@@ -1094,11 +1127,12 @@ void video_hstx_print_diag(void) {
            (unsigned long)s_hdmi_dma_double_hits,
            (unsigned long)s_hdmi_dma_race_rebuilds,
            (unsigned long)s_hdmi_dma_phase_corrections,
+           (unsigned long)s_hdmi_dma_skipped_rebuilds,
            (unsigned long long)s_hdmi_first_dbl_vf,
            (unsigned long)s_hdmi_push_max_spin_us,
            (unsigned long)s_printf_max_us
 #else
-           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0ULL, 0UL, 0UL, 0UL
+           0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0ULL, 0UL, 0UL, 0UL
 #endif
     );
     uint32_t tp1 = timer_hw->timerawl;
