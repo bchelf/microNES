@@ -201,6 +201,7 @@ static volatile uint32_t s_hdmi_dma_double_hits;
 static volatile uint32_t s_hdmi_dma_race_rebuilds;
 static volatile uint32_t s_hdmi_dma_phase_corrections;
 static volatile uint32_t s_hdmi_dma_skipped_rebuilds;
+static volatile uint32_t s_hdmi_dma_force_rebuilds;
 static volatile uint64_t s_hdmi_first_dbl_vf;
 static volatile uint32_t s_hdmi_scanline_submitted;
 static volatile uint32_t s_hdmi_scanline_expanded;
@@ -803,34 +804,55 @@ static void __scratch_x("") hstx_dma_irq(void) {
     }
 
     /* Build the non-busy channel's buffer with scanline = s_v_scanline.
-     * Both channels' next play falls on (current_playing + 1) since the
-     * chain alternates; whichever just completed gets that scanline.
      *
-     * Skip rebuild if:
-     *   (a) channel is currently busy (chain already wrapped — its old
-     *       content is being transmitted, can't safely overwrite), or
-     *   (b) we already built this scanline into that channel earlier in
-     *       the same physical scanline (prevents the cascade case from
-     *       repeatedly consuming audio packets via
-     *       hdmi_next_audio_island). */
+     * Cascade root cause (diagnosed from in-ISR snapshot):
+     *   When the chain wraps fast (e.g. the 2-line vsync window where
+     *   both buffers are 7 words and fit entirely in the HSTX FIFO),
+     *   a channel can be observed with BUSY=1 but TRANS_COUNT=0 — the
+     *   "awaiting trigger" sub-state.  If we skip the rebuild in this
+     *   state (treating it as a normal mid-transfer race), the next
+     *   chain trigger reloads the channel with TC=0 → instant complete
+     *   → another chain wrap → cascade.
+     *
+     *   Fix: treat the channel as safe-to-rebuild whenever it is NOT
+     *   actively transferring data (TC == 0), even if BUSY is asserted.
+     *   Writes to read_addr / transfer_count take effect on the next
+     *   chain trigger, never disturbing a real in-flight transfer.
+     *
+     * Skip rebuild only if:
+     *   (a) channel is genuinely mid-transfer (BUSY=1 AND TC>0), or
+     *   (b) we already built this scanline into that channel earlier
+     *       in the same physical scanline (last_built check prevents
+     *       repeated hdmi_next_audio_island() consumption from
+     *       over-draining the audio queue). */
     if (to_process & ping_mask) {
-        if (dma_channel_is_busy(s_dmach_ping)) {
+        bool ping_busy = dma_channel_is_busy(s_dmach_ping);
+        uint32_t ping_tc = dma_hw->ch[s_dmach_ping].transfer_count;
+        if (ping_busy && ping_tc > 0u) {
             ++s_hdmi_dma_race_rebuilds;
         } else if (s_ping_last_built != s_v_scanline) {
             uint32_t words = hstx_build_scanline_at(s_line_buf[0], s_v_scanline);
             dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
             dma_hw->ch[s_dmach_ping].transfer_count = words;
             s_ping_last_built = s_v_scanline;
+            if (ping_busy) {
+                ++s_hdmi_dma_force_rebuilds;
+            }
         }
     }
     if (to_process & pong_mask) {
-        if (dma_channel_is_busy(s_dmach_pong)) {
+        bool pong_busy = dma_channel_is_busy(s_dmach_pong);
+        uint32_t pong_tc = dma_hw->ch[s_dmach_pong].transfer_count;
+        if (pong_busy && pong_tc > 0u) {
             ++s_hdmi_dma_race_rebuilds;
         } else if (s_pong_last_built != s_v_scanline) {
             uint32_t words = hstx_build_scanline_at(s_line_buf[1], s_v_scanline);
             dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
             dma_hw->ch[s_dmach_pong].transfer_count = words;
             s_pong_last_built = s_v_scanline;
+            if (pong_busy) {
+                ++s_hdmi_dma_force_rebuilds;
+            }
         }
     }
 
@@ -938,6 +960,7 @@ bool video_hstx_init(void) {
     s_hdmi_dma_race_rebuilds = 0u;
     s_hdmi_dma_phase_corrections = 0u;
     s_hdmi_dma_skipped_rebuilds = 0u;
+    s_hdmi_dma_force_rebuilds = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
     s_hdmi_scanline_max_level = 0u;
@@ -1245,9 +1268,10 @@ void video_hstx_print_diag(void) {
     uint32_t csr_sticky_now = s_hstx_csr_sticky;
     s_hstx_csr_sticky = hstx_ctrl_hw->csr;
 
-    printf("[hstx2] isr=%lu isr_max=%lu p0_5=%lu p5_10=%lu p10_20=%lu p20_30=%lu p30_100=%lu p100_500=%lu p500_2k=%lu p2k=%lu bldVBI=%lu bldAct=%lu csr_sticky=%08lx\n",
+    printf("[hstx2] isr=%lu isr_max=%lu force=%lu p0_5=%lu p5_10=%lu p10_20=%lu p20_30=%lu p30_100=%lu p100_500=%lu p500_2k=%lu p2k=%lu bldVBI=%lu bldAct=%lu csr_sticky=%08lx\n",
            (unsigned long)(isr_now - prev_isr_calls),
            (unsigned long)s_isr_max_us,
+           (unsigned long)s_hdmi_dma_force_rebuilds,
            (unsigned long)(buckets_now[0] - prev_buckets[0]),
            (unsigned long)(buckets_now[1] - prev_buckets[1]),
            (unsigned long)(buckets_now[2] - prev_buckets[2]),
