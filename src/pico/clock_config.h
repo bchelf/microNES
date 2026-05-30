@@ -120,14 +120,22 @@
 
 /*
  * Audio PWM carrier — identical for all clock speeds.
- * clkdiv = 1.0, wrap = 255  →  f_carrier = sys_clk / 256
- *   315 MHz → 1,230,469 Hz
- *   250 MHz →   976,563 Hz
- *   157 MHz →   615,234 Hz
- * Resolution = 256 levels = 8 bits (sufficient for NES audio).
+ * clkdiv = 1.0, wrap = 1023  →  f_carrier = sys_clk / 1024
+ *   315 MHz → 307,617 Hz   (~51 dB rejection by the 15.9 kHz 2-pole RC filter)
+ *   250 MHz → 244,141 Hz   (~47 dB rejection)
+ *   157 MHz → 153,809 Hz   (~39 dB rejection)
+ * Resolution = 1024 levels = 10 bits.
+ *
+ * The carrier stays far above audio, so RC rejection (>=39 dB on every clock)
+ * keeps the original 48 kHz hum gone; the extra 2 bits over the previous 8-bit
+ * carrier restore fidelity that the old (raw >> 8) truncation discarded.
+ *
+ * NOTE: this is the free-running carrier only.  The 48 kHz sample-rate timer
+ * uses the independent MICRONES_AUDIO_PWM_CLKDIV_* / MICRONES_AUDIO_PWM_WRAP
+ * defines above and is unaffected by this resolution change.
  */
 #define MICRONES_AUDIO_PWM_CARRIER_CLKDIV_INT   1u
 #define MICRONES_AUDIO_PWM_CARRIER_CLKDIV_FRAC  0u
-#define MICRONES_AUDIO_PWM_CARRIER_WRAP         255u
+#define MICRONES_AUDIO_PWM_CARRIER_WRAP         1023u
 
 #endif /* MICRONES_CLOCK_CONFIG_H */

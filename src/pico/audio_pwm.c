@@ -4,20 +4,20 @@
  * Two PWM slices:
  *
  *   Carrier (GP from MICRONES_AUDIO_PIN, slice = pwm_gpio_to_slice_num):
- *     clkdiv = 1.0, wrap = 255  →  315 MHz / 256 ≈ 1.23 MHz
- *     Free-running, no interrupt.  8-bit resolution (sufficient for NES audio).
+ *     clkdiv = 1.0, wrap = 1023  →  315 MHz / 1024 ≈ 307.6 kHz
+ *     Free-running, no interrupt.  10-bit resolution.
  *
  *   Sample-rate timer (slice 0, no GPIO):
  *     clkdiv = 1.25, wrap = 5249  →  315 MHz / (1.25 × 5250) = 48,000 Hz
  *     Wrap interrupt pops one sample and writes the carrier level.
  *
- * The ~1.23 MHz carrier is attenuated >50 dB by the two-pole 15.9 kHz RC
- * filter, vs ~20 dB for the old 48 kHz carrier.
+ * The ~307.6 kHz carrier is attenuated ~51 dB by the two-pole 15.9 kHz RC
+ * filter, vs ~20 dB for the old 48 kHz carrier (which hummed).
  *
- * Sample conversion  int16 → PWM level:
- *   u8  = (uint8_t)((uint16_t)sample >> 8) ^ 0x80)
- *        maps [-32768..32767] → [0..255] with 128 = silence
- *   With wrap = 255, level = u8 directly (no further scaling needed).
+ * Sample conversion  int16 → PWM level (N = AUDIO_CARRIER_BITS = 10):
+ *   level = ((int32_t)sample + 32768) >> (16 - N)
+ *        maps [-32768..32767] → [0..1023] using the top N bits of every
+ *        16-bit sample (mid-scale 512 = silence).
  */
 
 #include "audio_pwm.h"
@@ -32,10 +32,17 @@
  * ========================================================================= */
 
 enum {
-    AUDIO_CARRIER_WRAP      = MICRONES_AUDIO_PWM_CARRIER_WRAP,  /* 255 */
+    AUDIO_CARRIER_WRAP       = MICRONES_AUDIO_PWM_CARRIER_WRAP,  /* 1023 = 10-bit */
+    AUDIO_CARRIER_BITS       = 10u,                  /* log2(AUDIO_CARRIER_WRAP + 1) */
+    AUDIO_CARRIER_SHIFT      = 16u - AUDIO_CARRIER_BITS,  /* int16 → top N bits (=6) */
+    AUDIO_LEVEL_SILENCE      = (AUDIO_CARRIER_WRAP + 1u) / 2u,  /* mid-scale (=512) */
     AUDIO_SAMPLE_TIMER_SLICE = 0u,   /* PWM slice 0: 48 kHz timer, no GPIO */
     AUDIO_BUF_SIZE           = 2048, /* ~42.7 ms at 48 kHz; power-of-2 for cheap modulo */
 };
+
+/* Keep the bit count in sync with the wrap define in clock_config.h. */
+_Static_assert((1u << AUDIO_CARRIER_BITS) - 1u == AUDIO_CARRIER_WRAP,
+               "AUDIO_CARRIER_BITS must match MICRONES_AUDIO_PWM_CARRIER_WRAP");
 
 /* =========================================================================
  * Ring buffer (single-producer Core 0 / single-consumer Core 0 IRQ)
@@ -47,7 +54,7 @@ static volatile uint32_t audio_buf_tail  = 0;    /* producer (main) write positi
 static volatile uint32_t audio_underruns = 0;
 
 static uint  s_audio_slice;
-static uint8_t s_audio_last_level = 128u;   /* sample-and-hold across underruns */
+static uint16_t s_audio_last_level = AUDIO_LEVEL_SILENCE;  /* sample-and-hold across underruns */
 
 /* =========================================================================
  * Sample-rate timer interrupt handler (Core 0)
@@ -72,18 +79,13 @@ static void __isr pwm_audio_irq_handler(void) {
         ++audio_underruns;
     } else {
         /*
-         * Convert int16 → unsigned 8-bit centred at 128.
-         *   raw = (uint16_t)sample            reinterpret bits
-         *   u8  = (raw >> 8) ^ 0x80           top byte, flip sign bit
-         *   Maps: -32768 → 0,  0 → 128,  32767 → 255
-         *
-         * With AUDIO_CARRIER_WRAP = 255, level = u8 directly.
+         * Convert int16 → unsigned PWM level using the top AUDIO_CARRIER_BITS.
+         *   level = ((int32_t)sample + 32768) >> (16 - AUDIO_CARRIER_BITS)
+         *   Maps: -32768 → 0,  0 → 512,  32767 → 1023
          */
-        uint16_t raw = (uint16_t)audio_buf[head];
-        uint8_t  u8  = (uint8_t)((raw >> 8u) ^ 0x80u);
-        level = ((uint32_t)u8 * ((uint32_t)AUDIO_CARRIER_WRAP + 1u)) >> 8u;
+        level = (uint32_t)((int32_t)audio_buf[head] + 32768) >> AUDIO_CARRIER_SHIFT;
 
-        s_audio_last_level = (uint8_t)u8;
+        s_audio_last_level = (uint16_t)level;
         audio_buf_head = (head + 1u) & (AUDIO_BUF_SIZE - 1u);
     }
 
@@ -109,12 +111,12 @@ void audio_pwm_init(uint32_t sample_rate) {
     pwm_init(s_audio_slice, &carrier_cfg, /*start=*/true);
 
     /* Initialise to mid-scale silence */
-    pwm_set_gpio_level(MICRONES_AUDIO_PIN, (AUDIO_CARRIER_WRAP + 1u) / 2u);
+    pwm_set_gpio_level(MICRONES_AUDIO_PIN, AUDIO_LEVEL_SILENCE);
 
     audio_buf_head     = 0;
     audio_buf_tail     = 0;
     audio_underruns    = 0;
-    s_audio_last_level = 128u;
+    s_audio_last_level = AUDIO_LEVEL_SILENCE;
 
     /* --- Sample-rate timer (slice 0, 48 kHz, interrupt-driven) ----------- */
     pwm_config timer_cfg = pwm_get_default_config();
