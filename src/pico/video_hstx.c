@@ -254,6 +254,24 @@ static volatile uint32_t s_first_dbl_hstx_csr;
 static volatile uint32_t s_first_dbl_prev_period;
 static volatile uint32_t s_first_dbl_ints0;
 
+/* Ring buffer of the last N ISR events.  At the first double-hit we
+ * freeze the buffer — the previous (ISR_RING_SIZE - 1) entries plus the
+ * dbl entry itself show the cascade lead-up.  Frozen snapshot is then
+ * printed every diag tick. */
+#define ISR_RING_SIZE 32u
+struct isr_event {
+    uint32_t period_us;   /* µs since previous ISR */
+    uint16_t scanline;    /* s_v_scanline at ISR entry */
+    uint16_t ping_tc;     /* DMA ping transfer_count at entry */
+    uint16_t pong_tc;     /* DMA pong transfer_count at entry */
+    uint8_t  flags;       /* b0:ping_irq b1:pong_irq b2:ping_bz b3:pong_bz */
+    uint8_t  _pad;
+};
+static struct isr_event s_isr_ring[ISR_RING_SIZE];
+static volatile uint32_t s_isr_ring_idx;     /* next write slot */
+static volatile uint32_t s_isr_ring_frozen;  /* 1 after first dbl */
+static volatile uint32_t s_isr_ring_frozen_idx; /* frozen write-cursor */
+
 /* --- HDMI data island cmd buffers --------------------------------------- */
 
 #if MICRONES_HDMI_DATA_ISLANDS
@@ -762,6 +780,28 @@ static void __scratch_x("") hstx_dma_irq(void) {
         ++s_isr_period_buckets[bucket];
     }
 
+    /* Write ring-buffer entry capturing the lead-up to any future
+     * cascade.  Stop writing once frozen so we keep the dbl-onset
+     * window intact for inspection. */
+    if (!s_isr_ring_frozen) {
+        bool ping_bz_now = dma_channel_is_busy(s_dmach_ping);
+        bool pong_bz_now = dma_channel_is_busy(s_dmach_pong);
+        uint32_t ping_tc_now = dma_hw->ch[s_dmach_ping].transfer_count;
+        uint32_t pong_tc_now = dma_hw->ch[s_dmach_pong].transfer_count;
+        uint32_t idx = s_isr_ring_idx;
+        s_isr_ring[idx].period_us = isr_period;
+        s_isr_ring[idx].scanline = (uint16_t)s_v_scanline;
+        s_isr_ring[idx].ping_tc = (uint16_t)ping_tc_now;
+        s_isr_ring[idx].pong_tc = (uint16_t)pong_tc_now;
+        s_isr_ring[idx].flags =
+            (uint8_t)(((to_process & ping_mask) ? 1u : 0u) |
+                      ((to_process & pong_mask) ? 2u : 0u) |
+                      (ping_bz_now ? 4u : 0u) |
+                      (pong_bz_now ? 8u : 0u));
+        s_isr_ring[idx]._pad = 0u;
+        s_isr_ring_idx = (idx + 1u) & (ISR_RING_SIZE - 1u);
+    }
+
     if (to_process == (ping_mask | pong_mask)) {
         ++s_hdmi_dma_double_hits;
         if (s_hdmi_first_dbl_vf == 0u) {
@@ -781,6 +821,10 @@ static void __scratch_x("") hstx_dma_irq(void) {
             s_first_dbl_prev_period = isr_period;
             s_first_dbl_ints0 = ints;
             s_first_dbl_filled = 1u;
+            /* Freeze the ring so the lead-up to this cascade onset
+             * stays intact for the diag printer. */
+            s_isr_ring_frozen_idx = s_isr_ring_idx;
+            s_isr_ring_frozen = 1u;
         }
     }
 
@@ -995,6 +1039,10 @@ bool video_hstx_init(void) {
     s_hstx_csr_sticky = 0u;
     s_prev_isr_us = 0u;
     s_first_dbl_filled = 0u;
+    s_isr_ring_idx = 0u;
+    s_isr_ring_frozen = 0u;
+    s_isr_ring_frozen_idx = 0u;
+    memset((void *)s_isr_ring, 0, sizeof(s_isr_ring));
     s_started = false;
     s_irq_configured = false;
     s_borders_dirty = true;
@@ -1314,6 +1362,28 @@ void video_hstx_print_diag(void) {
                (unsigned long)s_first_dbl_pong_ra,
                (unsigned long)s_first_dbl_hstx_csr,
                (unsigned long)s_first_dbl_ints0);
+    }
+
+    /* Dump the ring buffer of ISR lead-up events.  Oldest first.
+     * Each entry: dt=period_us io=flags(b0:pIRQ b1:gIRQ b2:pBZ b3:gBZ)
+     *             pt=ping_tc gt=pong_tc s=scanline.  The LAST entry
+     *             is the dbl-onset ISR itself (its io should be 0x3
+     *             = both IRQ flags set). */
+    if (s_isr_ring_frozen) {
+        uint32_t base = s_isr_ring_frozen_idx;
+        for (uint32_t row = 0u; row < 4u; ++row) {
+            printf("[ring%lu]", (unsigned long)row);
+            for (uint32_t col = 0u; col < 8u; ++col) {
+                uint32_t i = (base + row * 8u + col) & (ISR_RING_SIZE - 1u);
+                printf(" dt=%lu/io=%x/pt=%u/gt=%u/s=%u",
+                       (unsigned long)s_isr_ring[i].period_us,
+                       (unsigned)s_isr_ring[i].flags,
+                       (unsigned)s_isr_ring[i].ping_tc,
+                       (unsigned)s_isr_ring[i].pong_tc,
+                       (unsigned)s_isr_ring[i].scanline);
+            }
+            printf("\n");
+        }
     }
 
     prev_isr_calls = isr_now;
