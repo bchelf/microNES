@@ -218,17 +218,12 @@ static volatile uint32_t s_hdmi_dma_double_hits;
 static volatile uint32_t s_hdmi_dma_race_rebuilds;
 static volatile uint32_t s_hdmi_dma_phase_corrections;
 static volatile uint32_t s_hdmi_dma_skipped_rebuilds;
-static volatile uint32_t s_hdmi_dma_force_rebuilds;
-static volatile uint32_t s_hdmi_dma_cascade_resets;
 static volatile uint64_t s_hdmi_first_dbl_vf;
 static volatile uint32_t s_hdmi_scanline_submitted;
 static volatile uint32_t s_hdmi_scanline_expanded;
 static volatile uint32_t s_hdmi_scanline_max_level;
 static volatile uint32_t s_hdmi_frame_submitted;
 static volatile uint32_t s_hdmi_frame_expanded;
-static uint32_t s_dma_start_us;
-static uint32_t s_ping_last_built;
-static uint32_t s_pong_last_built;
 
 /* --- Cascade-investigation diagnostics --------------------------------- */
 static volatile uint32_t s_isr_period_buckets[8];
@@ -238,9 +233,6 @@ static volatile uint32_t s_built_vbi;
 static volatile uint32_t s_built_active;
 static volatile uint32_t s_hstx_csr_sticky;
 static uint32_t s_prev_isr_us;
-static uint32_t s_cascade_streak;
-#define CASCADE_PERIOD_THRESHOLD_US 10u
-#define CASCADE_STREAK_TRIGGER      64u
 
 /* Snapshot of all interesting state at the moment the first
  * double-hit is recorded. Populated exactly once; printed every diag
@@ -258,10 +250,18 @@ static volatile uint32_t s_first_dbl_hstx_csr;
 static volatile uint32_t s_first_dbl_prev_period;
 static volatile uint32_t s_first_dbl_ints0;
 
-/* Ring buffer of the last N ISR events.  At the first double-hit we
- * freeze the buffer — the previous (ISR_RING_SIZE - 1) entries plus the
- * dbl entry itself show the cascade lead-up.  Frozen snapshot is then
- * printed every diag tick. */
+/* --- Alarm-paced DMA triggering (cascade prevention) ------------------
+ * The DMA chain has been disabled (chain_to = self).  Instead, a
+ * hardware alarm fires at exact scanline boundaries (25.397µs avg)
+ * and triggers ping/pong alternately.  Because DMA never auto-chains,
+ * it cannot complete faster than the alarm allows — preventing the
+ * runaway pingpong that occurs when DREQ_HSTX stops throttling. */
+static int s_alarm_num = -1;
+static volatile uint32_t s_alarm_count;
+static volatile uint32_t s_alarm_target_us;
+static uint32_t s_alarm_frac_accum;
+static volatile uint32_t s_ping_playing_sl;
+static volatile uint32_t s_pong_playing_sl;
 #define ISR_RING_SIZE 32u
 struct isr_event {
     uint32_t period_us;   /* µs since previous ISR */
@@ -741,272 +741,91 @@ static void __scratch_x("adv") hstx_advance_scanline(void) {
     }
 }
 
-/* Emergency cascade reset.  Called from the ISR when consecutive
- * ISR periods stay below ~10 µs for an extended streak (the DREQ_HSTX
- * throttle has stopped pacing the DMA — chain is wrapping every µs).
- * Aborts both channels, rebuilds their buffers for the wall-clock
- * scanline, and restarts the chain by triggering ping.
- *
- * Lives in SRAM so it doesn't stall on XIP cache misses while running
- * from the highest-priority IRQ context. */
-static void __scratch_x("rst") hstx_chain_emergency_restart(void) {
-    const uint32_t mask = (1u << (uint32_t)s_dmach_ping) |
-                          (1u << (uint32_t)s_dmach_pong);
+/* Alarm IRQ — fires at every scanline boundary (~25.397 µs).  Triggers
+ * the channel whose turn it is to play, then bumps the scanline counter
+ * (audio + frames_presented).  Because the DMA chain is disabled, this
+ * is the ONLY way a channel ever gets triggered — DMA can never run
+ * faster than the alarm. */
+static void __scratch_x("alm") hstx_alarm_irq(void) {
+    uint32_t entry_us = timer_hw->timerawl;
+    timer_hw->intr = 1u << (uint32_t)s_alarm_num;
 
-    /* Abort both channels.  RP2350-E5: clear EN bits before abort to
-     * avoid the chained-channel hang documented in errata. */
-    hw_clear_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl,
-                  DMA_CH0_CTRL_TRIG_EN_BITS);
-    hw_clear_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl,
-                  DMA_CH0_CTRL_TRIG_EN_BITS);
-    dma_hw->abort = mask;
-    while ((dma_hw->ch[s_dmach_ping].al1_ctrl |
-            dma_hw->ch[s_dmach_pong].al1_ctrl) &
-           DMA_CH0_AL1_CTRL_BUSY_BITS) {
-        /* spin briefly */
+    /* Re-arm next alarm using a 397/1000 fractional accumulator so the
+     * average interval is exactly 25.397 µs (= 800 / 31.5 MHz). */
+    uint32_t period = 25u;
+    s_alarm_frac_accum += 397u;
+    if (s_alarm_frac_accum >= 1000u) {
+        period = 26u;
+        s_alarm_frac_accum -= 1000u;
     }
+    s_alarm_target_us += period;
+    timer_hw->alarm[s_alarm_num] = s_alarm_target_us;
 
-    /* Re-arm EN bits and clear any stale pending IRQ flags. */
-    hw_set_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl,
-                DMA_CH0_CTRL_TRIG_EN_BITS);
-    hw_set_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl,
-                DMA_CH0_CTRL_TRIG_EN_BITS);
-    dma_hw->intr = mask;
+    /* Trigger this scanline's channel.  Even alarm counts → ping (even
+     * scanlines 2,4,6,...); odd → pong (odd scanlines 3,5,7,...).
+     *
+     * If the previous channel is still mid-transfer (shouldn't happen
+     * in normal operation but could during transient bus contention),
+     * spin briefly until it's idle.  Two channels writing the HSTX
+     * FIFO simultaneously would interleave data and corrupt output. */
+    uint32_t k = s_alarm_count++;
+    int prev_chan = ((k & 1u) == 0u) ? s_dmach_pong : s_dmach_ping;
+    if (prev_chan >= 0) {
+        while (dma_channel_is_busy(prev_chan)) {
+            tight_loop_contents();
+        }
+    }
+    int curr_chan = ((k & 1u) == 0u) ? s_dmach_ping : s_dmach_pong;
+    dma_channel_start((uint)curr_chan);
 
-    /* Derive the scanline to play next from the wall clock.  Build ping
-     * for that scanline, pong for the next one (matches chain order). */
-    uint32_t now = timer_hw->timerawl;
-    uint32_t elapsed = now - s_dma_start_us;
-    uint32_t scanlines_elapsed = (uint32_t)(
-        ((uint64_t)elapsed * 31500ULL) / 800000ULL);
-    uint32_t ping_sl = (scanlines_elapsed + 3u) % MODE_V_TOTAL_LINES;
-    uint32_t pong_sl = (ping_sl + 1u) % MODE_V_TOTAL_LINES;
+    /* Advance counter / audio scheduler / frame counter (one scanline). */
+    hstx_advance_scanline();
 
-    uint32_t pwords = hstx_build_scanline_at(s_line_buf[0], ping_sl);
-    dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
-    dma_hw->ch[s_dmach_ping].transfer_count = pwords;
-    s_ping_last_built = ping_sl;
+    /* Diagnostics: period histogram and total. */
+    ++s_isr_calls;
+    uint32_t isr_period = entry_us - s_prev_isr_us;
+    s_prev_isr_us = entry_us;
+    uint32_t bucket;
+    if (isr_period < 5u)         bucket = 0u;
+    else if (isr_period < 10u)   bucket = 1u;
+    else if (isr_period < 20u)   bucket = 2u;
+    else if (isr_period < 30u)   bucket = 3u;
+    else if (isr_period < 100u)  bucket = 4u;
+    else if (isr_period < 500u)  bucket = 5u;
+    else if (isr_period < 2000u) bucket = 6u;
+    else                         bucket = 7u;
+    ++s_isr_period_buckets[bucket];
 
-    uint32_t gwords = hstx_build_scanline_at(s_line_buf[1], pong_sl);
-    dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
-    dma_hw->ch[s_dmach_pong].transfer_count = gwords;
-    s_pong_last_built = pong_sl;
-
-    /* Sync s_v_scanline with the rebuilt ping content so the next
-     * normal ISR sees delta=0 and doesn't re-tick audio. */
-    s_v_scanline = ping_sl;
-
-    /* Kick the chain back into motion by triggering ping. */
-    dma_channel_start((uint)s_dmach_ping);
-
-    ++s_hdmi_dma_cascade_resets;
+    uint32_t isr_dur = timer_hw->timerawl - entry_us;
+    if (isr_dur > s_isr_max_us) s_isr_max_us = isr_dur;
+    s_hstx_csr_sticky |= hstx_ctrl_hw->csr;
 }
 
+/* DMA completion IRQ — only purpose now is to rebuild a channel's
+ * buffer for its next play (2 alarms ahead).  Channel is safely idle
+ * at this point because the chain is disabled and the alarm hasn't
+ * re-triggered it yet. */
 static void __scratch_x("") hstx_dma_irq(void) {
-    /* Both ping and pong channels have IRQ enabled and chain to each
-     * other. The ISR's job: when a channel completes, rebuild its buffer
-     * with the right content for the scanline it will play next.
-     *
-     * Cascade mechanism: when s_v_scanline drifts even by 1 scanline
-     * from the TV's physical position, the buffer "type" (VBI vs active)
-     * stops matching what the HSTX FIFO needs to drain at pixel rate.
-     * DMA completes faster, ISR fires faster, counter drifts more.
-     * Positive feedback → 4x runaway.
-     *
-     * Fix: derive s_v_scanline from wall-clock on every ISR entry, not
-     * from per-call increments. The counter stays locked to physical
-     * phase regardless of ISR rate; buffer content always matches phase;
-     * no cascade trigger. */
-    uint32_t isr_entry_us = timer_hw->timerawl;
     const uint32_t ping_mask = 1u << (uint32_t)s_dmach_ping;
     const uint32_t pong_mask = 1u << (uint32_t)s_dmach_pong;
     uint32_t ints = dma_hw->ints0;
     uint32_t to_process = ints & (ping_mask | pong_mask);
-    if (to_process == 0u) {
-        return;
-    }
+    if (to_process == 0u) return;
     dma_hw->intr = to_process;
 
-    /* --- Cascade diagnostics: ISR period histogram + total count ---- */
-    ++s_isr_calls;
-    s_hstx_csr_sticky |= hstx_ctrl_hw->csr;
-    uint32_t isr_period = isr_entry_us - s_prev_isr_us;
-    s_prev_isr_us = isr_entry_us;
-    {
-        uint32_t bucket;
-        if (isr_period < 5u)         bucket = 0u;
-        else if (isr_period < 10u)   bucket = 1u;
-        else if (isr_period < 20u)   bucket = 2u;
-        else if (isr_period < 30u)   bucket = 3u;
-        else if (isr_period < 100u)  bucket = 4u;
-        else if (isr_period < 500u)  bucket = 5u;
-        else if (isr_period < 2000u) bucket = 6u;
-        else                         bucket = 7u;
-        ++s_isr_period_buckets[bucket];
-    }
-
-    /* Track consecutive short-period ISRs as a cascade signature.
-     * When DREQ_HSTX stops throttling DMA, ISRs fire every 1-2 µs
-     * instead of every ~25 µs.  Streak past the threshold = call
-     * the emergency restart helper. */
-    if (isr_period < CASCADE_PERIOD_THRESHOLD_US) {
-        ++s_cascade_streak;
-    } else {
-        s_cascade_streak = 0u;
-    }
-    if (s_cascade_streak > CASCADE_STREAK_TRIGGER) {
-        s_cascade_streak = 0u;
-        hstx_chain_emergency_restart();
-        /* Re-init prev so the next ISR sees a fresh baseline period. */
-        s_prev_isr_us = timer_hw->timerawl;
-        return; /* skip the rest of this ISR's per-channel logic */
-    }
-
-    /* Write ring-buffer entry capturing the lead-up to any future
-     * cascade.  Stop writing once frozen so we keep the dbl-onset
-     * window intact for inspection. */
-    if (!s_isr_ring_frozen) {
-        bool ping_bz_now = dma_channel_is_busy(s_dmach_ping);
-        bool pong_bz_now = dma_channel_is_busy(s_dmach_pong);
-        uint32_t ping_tc_now = dma_hw->ch[s_dmach_ping].transfer_count;
-        uint32_t pong_tc_now = dma_hw->ch[s_dmach_pong].transfer_count;
-        uint32_t idx = s_isr_ring_idx;
-        s_isr_ring[idx].period_us = isr_period;
-        s_isr_ring[idx].scanline = (uint16_t)s_v_scanline;
-        s_isr_ring[idx].ping_tc = (uint16_t)ping_tc_now;
-        s_isr_ring[idx].pong_tc = (uint16_t)pong_tc_now;
-        s_isr_ring[idx].flags =
-            (uint8_t)(((to_process & ping_mask) ? 1u : 0u) |
-                      ((to_process & pong_mask) ? 2u : 0u) |
-                      (ping_bz_now ? 4u : 0u) |
-                      (pong_bz_now ? 8u : 0u));
-        s_isr_ring[idx]._pad = 0u;
-        s_isr_ring_idx = (idx + 1u) & (ISR_RING_SIZE - 1u);
-    }
-
-    if (to_process == (ping_mask | pong_mask)) {
-        ++s_hdmi_dma_double_hits;
-        if (s_hdmi_first_dbl_vf == 0u) {
-            s_hdmi_first_dbl_vf = s_stats.frames_presented;
-            /* Capture deep snapshot at the moment of first cascade
-             * trigger.  Done in-ISR so DMA state is exactly what the
-             * hardware saw when both channels' IRQ flags coincided. */
-            s_first_dbl_elapsed_us = isr_entry_us - s_dma_start_us;
-            s_first_dbl_scanline = s_v_scanline;
-            s_first_dbl_ping_busy = dma_channel_is_busy(s_dmach_ping) ? 1u : 0u;
-            s_first_dbl_pong_busy = dma_channel_is_busy(s_dmach_pong) ? 1u : 0u;
-            s_first_dbl_ping_tc = dma_hw->ch[s_dmach_ping].transfer_count;
-            s_first_dbl_pong_tc = dma_hw->ch[s_dmach_pong].transfer_count;
-            s_first_dbl_ping_ra = dma_hw->ch[s_dmach_ping].read_addr;
-            s_first_dbl_pong_ra = dma_hw->ch[s_dmach_pong].read_addr;
-            s_first_dbl_hstx_csr = hstx_ctrl_hw->csr;
-            s_first_dbl_prev_period = isr_period;
-            s_first_dbl_ints0 = ints;
-            s_first_dbl_filled = 1u;
-            /* Freeze the ring so the lead-up to this cascade onset
-             * stays intact for the diag printer. */
-            s_isr_ring_frozen_idx = s_isr_ring_idx;
-            s_isr_ring_frozen = 1u;
-        }
-    }
-
-    /* Derive the target scanline for the buffer we're about to build,
-     * from wall-clock time.  s_dma_start_us was captured immediately
-     * before dma_channel_start, at which point ping began transmitting
-     * scanline 2.  After elapsed µs, the scanline currently being
-     * played is (2 + elapsed/period).  The just-completed (non-busy)
-     * channel will play again one chain hop later, so the content we
-     * build into it is for scanline (current_playing + 1) =
-     * (elapsed/period + 3).
-     *
-     * Period = 800 pixels / 31.5 MHz ≈ 25.397 µs.  Using uint64 mul to
-     * avoid overflow; elapsed (uint32 µs) fits ~71 minutes. */
-    uint32_t now = timer_hw->timerawl;
-    uint32_t elapsed = now - s_dma_start_us;
-    uint32_t scanlines_elapsed = (uint32_t)(
-        ((uint64_t)elapsed * 31500ULL) / 800000ULL);
-    uint32_t target = (scanlines_elapsed + 3u) % MODE_V_TOTAL_LINES;
-
-    /* Advance s_v_scanline up to target, ticking audio + frame counter
-     * once per step.  Normal operation: delta == 1.  Cascade (ISR
-     * firing faster than scanline rate): delta == 0, skip ticks.
-     * Post-blackout: delta > 1, catch up audio/frame counter to match
-     * physical phase. */
-    uint32_t delta = (target + MODE_V_TOTAL_LINES - s_v_scanline) %
-                     MODE_V_TOTAL_LINES;
-    if (delta > MODE_V_TOTAL_LINES) {
-        delta = 1u; /* safety: shouldn't happen */
-    }
-    if (delta == 0u) {
-        ++s_hdmi_dma_skipped_rebuilds;
-    } else {
-        s_hdmi_dma_phase_corrections += delta;
-        for (uint32_t i = 0u; i < delta; ++i) {
-            hstx_advance_scanline();
-        }
-    }
-
-    /* Build the non-busy channel's buffer with scanline = s_v_scanline.
-     *
-     * Cascade root cause (diagnosed from in-ISR snapshot):
-     *   When the chain wraps fast (e.g. the 2-line vsync window where
-     *   both buffers are 7 words and fit entirely in the HSTX FIFO),
-     *   a channel can be observed with BUSY=1 but TRANS_COUNT=0 — the
-     *   "awaiting trigger" sub-state.  If we skip the rebuild in this
-     *   state (treating it as a normal mid-transfer race), the next
-     *   chain trigger reloads the channel with TC=0 → instant complete
-     *   → another chain wrap → cascade.
-     *
-     *   Fix: treat the channel as safe-to-rebuild whenever it is NOT
-     *   actively transferring data (TC == 0), even if BUSY is asserted.
-     *   Writes to read_addr / transfer_count take effect on the next
-     *   chain trigger, never disturbing a real in-flight transfer.
-     *
-     * Skip rebuild only if:
-     *   (a) channel is genuinely mid-transfer (BUSY=1 AND TC>0), or
-     *   (b) we already built this scanline into that channel earlier
-     *       in the same physical scanline (last_built check prevents
-     *       repeated hdmi_next_audio_island() consumption from
-     *       over-draining the audio queue). */
     if (to_process & ping_mask) {
-        bool ping_busy = dma_channel_is_busy(s_dmach_ping);
-        uint32_t ping_tc = dma_hw->ch[s_dmach_ping].transfer_count;
-        if (ping_busy && ping_tc > 0u) {
-            ++s_hdmi_dma_race_rebuilds;
-        } else if (s_ping_last_built != s_v_scanline) {
-            uint32_t words = hstx_build_scanline_at(s_line_buf[0], s_v_scanline);
-            dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
-            dma_hw->ch[s_dmach_ping].transfer_count = words;
-            s_ping_last_built = s_v_scanline;
-            if (ping_busy) {
-                ++s_hdmi_dma_force_rebuilds;
-            }
-        }
+        uint32_t sl = (s_ping_playing_sl + 2u) % MODE_V_TOTAL_LINES;
+        s_ping_playing_sl = sl;
+        uint32_t words = hstx_build_scanline_at(s_line_buf[0], sl);
+        dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
+        dma_hw->ch[s_dmach_ping].transfer_count = words;
     }
     if (to_process & pong_mask) {
-        bool pong_busy = dma_channel_is_busy(s_dmach_pong);
-        uint32_t pong_tc = dma_hw->ch[s_dmach_pong].transfer_count;
-        if (pong_busy && pong_tc > 0u) {
-            ++s_hdmi_dma_race_rebuilds;
-        } else if (s_pong_last_built != s_v_scanline) {
-            uint32_t words = hstx_build_scanline_at(s_line_buf[1], s_v_scanline);
-            dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
-            dma_hw->ch[s_dmach_pong].transfer_count = words;
-            s_pong_last_built = s_v_scanline;
-            if (pong_busy) {
-                ++s_hdmi_dma_force_rebuilds;
-            }
-        }
-    }
-
-    /* Track ISR duration so we can see if the ISR work itself is
-     * growing (and possibly causing the cascade by spending more time
-     * in the handler than the scanline period). */
-    {
-        uint32_t isr_dur = timer_hw->timerawl - isr_entry_us;
-        if (isr_dur > s_isr_max_us) {
-            s_isr_max_us = isr_dur;
-        }
+        uint32_t sl = (s_pong_playing_sl + 2u) % MODE_V_TOTAL_LINES;
+        s_pong_playing_sl = sl;
+        uint32_t words = hstx_build_scanline_at(s_line_buf[1], sl);
+        dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
+        dma_hw->ch[s_dmach_pong].transfer_count = words;
     }
 }
 
@@ -1054,12 +873,15 @@ static void hstx_configure_peripheral(void) {
 }
 
 static void hstx_configure_dma(void) {
-    /* Chain: ping → pong → ping → ... */
+    /* Chain DISABLED (chain_to = self) — a hardware alarm at the
+     * scanline rate triggers ping/pong alternately, so DMA never
+     * auto-chains and cannot run faster than the alarm allows.
+     * This prevents the cascade we saw when DREQ_HSTX failed to
+     * throttle the chained channels. */
     dma_channel_config c;
 
-    /* Ping channel — chains to pong. */
     c = dma_channel_get_default_config((uint)s_dmach_ping);
-    channel_config_set_chain_to(&c, (uint)s_dmach_pong);
+    channel_config_set_chain_to(&c, (uint)s_dmach_ping); /* self => no chain */
     channel_config_set_dreq(&c, DREQ_HSTX);
     dma_channel_configure((uint)s_dmach_ping, &c,
                           &hstx_fifo_hw->fifo,
@@ -1067,9 +889,8 @@ static void hstx_configure_dma(void) {
                           count_of(s_vblank_line_vsync_off),
                           false);
 
-    /* Pong channel — chains to ping. */
     c = dma_channel_get_default_config((uint)s_dmach_pong);
-    channel_config_set_chain_to(&c, (uint)s_dmach_ping);
+    channel_config_set_chain_to(&c, (uint)s_dmach_pong); /* self => no chain */
     channel_config_set_dreq(&c, DREQ_HSTX);
     dma_channel_configure((uint)s_dmach_pong, &c,
                           &hstx_fifo_hw->fifo,
@@ -1103,17 +924,12 @@ bool video_hstx_init(void) {
     s_hdmi_dma_race_rebuilds = 0u;
     s_hdmi_dma_phase_corrections = 0u;
     s_hdmi_dma_skipped_rebuilds = 0u;
-    s_hdmi_dma_force_rebuilds = 0u;
-    s_hdmi_dma_cascade_resets = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
     s_hdmi_scanline_max_level = 0u;
     s_hdmi_frame_submitted = 0u;
     s_hdmi_frame_expanded = 0u;
-    s_dma_start_us = 0u;
-    s_ping_last_built = 0xFFFFFFFFu;
-    s_pong_last_built = 0xFFFFFFFFu;
-    s_v_scanline = 3u;
+    s_v_scanline = 2u;
     for (uint32_t i = 0u; i < 8u; ++i) s_isr_period_buckets[i] = 0u;
     s_isr_calls = 0u;
     s_isr_max_us = 0u;
@@ -1121,7 +937,6 @@ bool video_hstx_init(void) {
     s_built_active = 0u;
     s_hstx_csr_sticky = 0u;
     s_prev_isr_us = 0u;
-    s_cascade_streak = 0u;
     s_first_dbl_filled = 0u;
     s_isr_ring_idx = 0u;
     s_isr_ring_frozen = 0u;
@@ -1204,18 +1019,19 @@ void video_hstx_start(void) {
     if (s_started) {
         return;
     }
-    /* Pre-built ping=scanline 2 (plays first), pong=scanline 3.
-     * At elapsed=0 the wall-clock formula evaluates to target=3,
-     * matching pong's existing content so we skip rebuilding it on
-     * the very first ISR. */
-    s_v_scanline = 3u;
-    s_ping_last_built = 2u;
-    s_pong_last_built = 3u;
+    /* Pre-built ping=scanline 2 (alarm 0 will trigger it), pong=scanline 3
+     * (alarm 1 will trigger it).  s_v_scanline advances by one per alarm. */
+    s_v_scanline = 2u;
+    s_ping_playing_sl = 2u;
+    s_pong_playing_sl = 3u;
+    s_alarm_count = 0u;
+    s_alarm_frac_accum = 0u;
     s_hdmi_scanline_max_level = 0u;
     hstx_configure_peripheral();
     hstx_configure_dma();
-    /* Pre-build the first two scanlines into the ping/pong buffers
-     * so the chain has valid data from the start. */
+
+    /* Pre-build the first two scanlines so both channels have valid
+     * content from the first alarm. */
     {
         uint32_t words0 = hstx_build_scanline_at(s_line_buf[0], 2u);
         dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
@@ -1230,11 +1046,24 @@ void video_hstx_start(void) {
     s_hdmi_audio_worker_running = true;
     multicore_launch_core1(video_hstx_audio_core1_entry);
 #endif
+
+    /* Claim and set up the scanline-rate alarm. */
+    if (s_alarm_num < 0) {
+        s_alarm_num = (int)hardware_alarm_claim_unused(true);
+    }
+    irq_set_exclusive_handler(TIMER_IRQ_0 + (uint)s_alarm_num, hstx_alarm_irq);
+    irq_set_priority(TIMER_IRQ_0 + (uint)s_alarm_num, PICO_HIGHEST_IRQ_PRIORITY);
+    irq_set_enabled(TIMER_IRQ_0 + (uint)s_alarm_num, true);
+    hw_set_bits(&timer_hw->inte, 1u << (uint32_t)s_alarm_num);
+
     s_started = true;
-    /* Capture the wall-clock anchor as close as possible to the moment
-     * ping starts transmitting scanline 2. */
-    s_dma_start_us = timer_hw->timerawl;
-    dma_channel_start((uint)s_dmach_ping);
+    /* Capture the wall-clock anchor and schedule the first alarm to
+     * fire 1 µs from now (any further-future target would race the
+     * timer counter advance). */
+    uint32_t now_us = timer_hw->timerawl;
+    s_prev_isr_us = now_us;
+    s_alarm_target_us = now_us + 1u;
+    timer_hw->alarm[s_alarm_num] = s_alarm_target_us;
 }
 
 void video_hstx_stop(void) {
@@ -1244,6 +1073,11 @@ void video_hstx_stop(void) {
         return;
     }
 
+    /* Disable alarm IRQ first so it can't fire a stale trigger. */
+    if (s_alarm_num >= 0) {
+        hw_clear_bits(&timer_hw->inte, 1u << (uint32_t)s_alarm_num);
+        irq_set_enabled(TIMER_IRQ_0 + (uint)s_alarm_num, false);
+    }
     irq_set_enabled(DMA_IRQ_0, false);
     dma_hw->inte0 &= ~all_mask;
 
@@ -1255,7 +1089,7 @@ void video_hstx_stop(void) {
     }
 #endif
 
-    /* RP2350-E5: clear EN bits before aborting chained channels. */
+    /* RP2350-E5: clear EN bits before aborting. */
     hw_clear_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
     hw_clear_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
     dma_channel_abort((uint)s_dmach_ping);
@@ -1417,11 +1251,9 @@ void video_hstx_print_diag(void) {
     uint32_t csr_sticky_now = s_hstx_csr_sticky;
     s_hstx_csr_sticky = hstx_ctrl_hw->csr;
 
-    printf("[hstx2] isr=%lu isr_max=%lu force=%lu resets=%lu p0_5=%lu p5_10=%lu p10_20=%lu p20_30=%lu p30_100=%lu p100_500=%lu p500_2k=%lu p2k=%lu bldVBI=%lu bldAct=%lu csr_sticky=%08lx\n",
+    printf("[hstx2] isr=%lu isr_max=%lu p0_5=%lu p5_10=%lu p10_20=%lu p20_30=%lu p30_100=%lu p100_500=%lu p500_2k=%lu p2k=%lu bldVBI=%lu bldAct=%lu csr_sticky=%08lx\n",
            (unsigned long)(isr_now - prev_isr_calls),
            (unsigned long)s_isr_max_us,
-           (unsigned long)s_hdmi_dma_force_rebuilds,
-           (unsigned long)s_hdmi_dma_cascade_resets,
            (unsigned long)(buckets_now[0] - prev_buckets[0]),
            (unsigned long)(buckets_now[1] - prev_buckets[1]),
            (unsigned long)(buckets_now[2] - prev_buckets[2]),
