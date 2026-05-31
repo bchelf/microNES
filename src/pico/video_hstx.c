@@ -219,6 +219,7 @@ static volatile uint32_t s_hdmi_dma_race_rebuilds;
 static volatile uint32_t s_hdmi_dma_phase_corrections;
 static volatile uint32_t s_hdmi_dma_skipped_rebuilds;
 static volatile uint32_t s_hdmi_dma_force_rebuilds;
+static volatile uint32_t s_hdmi_dma_cascade_resets;
 static volatile uint64_t s_hdmi_first_dbl_vf;
 static volatile uint32_t s_hdmi_scanline_submitted;
 static volatile uint32_t s_hdmi_scanline_expanded;
@@ -237,6 +238,9 @@ static volatile uint32_t s_built_vbi;
 static volatile uint32_t s_built_active;
 static volatile uint32_t s_hstx_csr_sticky;
 static uint32_t s_prev_isr_us;
+static uint32_t s_cascade_streak;
+#define CASCADE_PERIOD_THRESHOLD_US 10u
+#define CASCADE_STREAK_TRIGGER      64u
 
 /* Snapshot of all interesting state at the moment the first
  * double-hit is recorded. Populated exactly once; printed every diag
@@ -737,6 +741,67 @@ static void __scratch_x("adv") hstx_advance_scanline(void) {
     }
 }
 
+/* Emergency cascade reset.  Called from the ISR when consecutive
+ * ISR periods stay below ~10 µs for an extended streak (the DREQ_HSTX
+ * throttle has stopped pacing the DMA — chain is wrapping every µs).
+ * Aborts both channels, rebuilds their buffers for the wall-clock
+ * scanline, and restarts the chain by triggering ping.
+ *
+ * Lives in SRAM so it doesn't stall on XIP cache misses while running
+ * from the highest-priority IRQ context. */
+static void __scratch_x("rst") hstx_chain_emergency_restart(void) {
+    const uint32_t mask = (1u << (uint32_t)s_dmach_ping) |
+                          (1u << (uint32_t)s_dmach_pong);
+
+    /* Abort both channels.  RP2350-E5: clear EN bits before abort to
+     * avoid the chained-channel hang documented in errata. */
+    hw_clear_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl,
+                  DMA_CH0_CTRL_TRIG_EN_BITS);
+    hw_clear_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl,
+                  DMA_CH0_CTRL_TRIG_EN_BITS);
+    dma_hw->abort = mask;
+    while ((dma_hw->ch[s_dmach_ping].al1_ctrl |
+            dma_hw->ch[s_dmach_pong].al1_ctrl) &
+           DMA_CH0_AL1_CTRL_BUSY_BITS) {
+        /* spin briefly */
+    }
+
+    /* Re-arm EN bits and clear any stale pending IRQ flags. */
+    hw_set_bits(&dma_hw->ch[s_dmach_ping].al1_ctrl,
+                DMA_CH0_CTRL_TRIG_EN_BITS);
+    hw_set_bits(&dma_hw->ch[s_dmach_pong].al1_ctrl,
+                DMA_CH0_CTRL_TRIG_EN_BITS);
+    dma_hw->intr = mask;
+
+    /* Derive the scanline to play next from the wall clock.  Build ping
+     * for that scanline, pong for the next one (matches chain order). */
+    uint32_t now = timer_hw->timerawl;
+    uint32_t elapsed = now - s_dma_start_us;
+    uint32_t scanlines_elapsed = (uint32_t)(
+        ((uint64_t)elapsed * 31500ULL) / 800000ULL);
+    uint32_t ping_sl = (scanlines_elapsed + 3u) % MODE_V_TOTAL_LINES;
+    uint32_t pong_sl = (ping_sl + 1u) % MODE_V_TOTAL_LINES;
+
+    uint32_t pwords = hstx_build_scanline_at(s_line_buf[0], ping_sl);
+    dma_hw->ch[s_dmach_ping].read_addr = (uintptr_t)s_line_buf[0];
+    dma_hw->ch[s_dmach_ping].transfer_count = pwords;
+    s_ping_last_built = ping_sl;
+
+    uint32_t gwords = hstx_build_scanline_at(s_line_buf[1], pong_sl);
+    dma_hw->ch[s_dmach_pong].read_addr = (uintptr_t)s_line_buf[1];
+    dma_hw->ch[s_dmach_pong].transfer_count = gwords;
+    s_pong_last_built = pong_sl;
+
+    /* Sync s_v_scanline with the rebuilt ping content so the next
+     * normal ISR sees delta=0 and doesn't re-tick audio. */
+    s_v_scanline = ping_sl;
+
+    /* Kick the chain back into motion by triggering ping. */
+    dma_channel_start((uint)s_dmach_ping);
+
+    ++s_hdmi_dma_cascade_resets;
+}
+
 static void __scratch_x("") hstx_dma_irq(void) {
     /* Both ping and pong channels have IRQ enabled and chain to each
      * other. The ISR's job: when a channel completes, rebuild its buffer
@@ -778,6 +843,23 @@ static void __scratch_x("") hstx_dma_irq(void) {
         else if (isr_period < 2000u) bucket = 6u;
         else                         bucket = 7u;
         ++s_isr_period_buckets[bucket];
+    }
+
+    /* Track consecutive short-period ISRs as a cascade signature.
+     * When DREQ_HSTX stops throttling DMA, ISRs fire every 1-2 µs
+     * instead of every ~25 µs.  Streak past the threshold = call
+     * the emergency restart helper. */
+    if (isr_period < CASCADE_PERIOD_THRESHOLD_US) {
+        ++s_cascade_streak;
+    } else {
+        s_cascade_streak = 0u;
+    }
+    if (s_cascade_streak > CASCADE_STREAK_TRIGGER) {
+        s_cascade_streak = 0u;
+        hstx_chain_emergency_restart();
+        /* Re-init prev so the next ISR sees a fresh baseline period. */
+        s_prev_isr_us = timer_hw->timerawl;
+        return; /* skip the rest of this ISR's per-channel logic */
     }
 
     /* Write ring-buffer entry capturing the lead-up to any future
@@ -1022,6 +1104,7 @@ bool video_hstx_init(void) {
     s_hdmi_dma_phase_corrections = 0u;
     s_hdmi_dma_skipped_rebuilds = 0u;
     s_hdmi_dma_force_rebuilds = 0u;
+    s_hdmi_dma_cascade_resets = 0u;
     s_hdmi_scanline_submitted = 0u;
     s_hdmi_scanline_expanded = 0u;
     s_hdmi_scanline_max_level = 0u;
@@ -1038,6 +1121,7 @@ bool video_hstx_init(void) {
     s_built_active = 0u;
     s_hstx_csr_sticky = 0u;
     s_prev_isr_us = 0u;
+    s_cascade_streak = 0u;
     s_first_dbl_filled = 0u;
     s_isr_ring_idx = 0u;
     s_isr_ring_frozen = 0u;
@@ -1333,10 +1417,11 @@ void video_hstx_print_diag(void) {
     uint32_t csr_sticky_now = s_hstx_csr_sticky;
     s_hstx_csr_sticky = hstx_ctrl_hw->csr;
 
-    printf("[hstx2] isr=%lu isr_max=%lu force=%lu p0_5=%lu p5_10=%lu p10_20=%lu p20_30=%lu p30_100=%lu p100_500=%lu p500_2k=%lu p2k=%lu bldVBI=%lu bldAct=%lu csr_sticky=%08lx\n",
+    printf("[hstx2] isr=%lu isr_max=%lu force=%lu resets=%lu p0_5=%lu p5_10=%lu p10_20=%lu p20_30=%lu p30_100=%lu p100_500=%lu p500_2k=%lu p2k=%lu bldVBI=%lu bldAct=%lu csr_sticky=%08lx\n",
            (unsigned long)(isr_now - prev_isr_calls),
            (unsigned long)s_isr_max_us,
            (unsigned long)s_hdmi_dma_force_rebuilds,
+           (unsigned long)s_hdmi_dma_cascade_resets,
            (unsigned long)(buckets_now[0] - prev_buckets[0]),
            (unsigned long)(buckets_now[1] - prev_buckets[1]),
            (unsigned long)(buckets_now[2] - prev_buckets[2]),
