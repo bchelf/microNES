@@ -1,139 +1,139 @@
 [
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o -c /home/runner/work/microNES/microNES/src/common/apu_micrones.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o -c /home/runner/work/microNES/microNES/src/common/apu_micrones.c",
   "file": "/home/runner/work/microNES/microNES/src/common/apu_micrones.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/apu_micrones.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/app_shell.c.o -c /home/runner/work/microNES/microNES/src/common/app_shell.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/app_shell.c.o -c /home/runner/work/microNES/microNES/src/common/app_shell.c",
   "file": "/home/runner/work/microNES/microNES/src/common/app_shell.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/app_shell.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/axrom.c.o -c /home/runner/work/microNES/microNES/src/common/axrom.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/axrom.c.o -c /home/runner/work/microNES/microNES/src/common/axrom.c",
   "file": "/home/runner/work/microNES/microNES/src/common/axrom.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/axrom.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cart.c.o -c /home/runner/work/microNES/microNES/src/common/cart.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cart.c.o -c /home/runner/work/microNES/microNES/src/common/cart.c",
   "file": "/home/runner/work/microNES/microNES/src/common/cart.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/cart.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cnrom.c.o -c /home/runner/work/microNES/microNES/src/common/cnrom.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cnrom.c.o -c /home/runner/work/microNES/microNES/src/common/cnrom.c",
   "file": "/home/runner/work/microNES/microNES/src/common/cnrom.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/cnrom.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/colordreams.c.o -c /home/runner/work/microNES/microNES/src/common/colordreams.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/colordreams.c.o -c /home/runner/work/microNES/microNES/src/common/colordreams.c",
   "file": "/home/runner/work/microNES/microNES/src/common/colordreams.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/colordreams.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502.c",
   "file": "/home/runner/work/microNES/microNES/src/common/cpu6502.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/cpu6502.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o -c /home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c",
   "file": "/home/runner/work/microNES/microNES/src/common/cpu6502_opcode.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/cpu6502_opcode.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/font_5x7.c.o -c /home/runner/work/microNES/microNES/src/common/font_5x7.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/font_5x7.c.o -c /home/runner/work/microNES/microNES/src/common/font_5x7.c",
   "file": "/home/runner/work/microNES/microNES/src/common/font_5x7.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/font_5x7.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o -c /home/runner/work/microNES/microNES/src/common/frame_pacer.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o -c /home/runner/work/microNES/microNES/src/common/frame_pacer.c",
   "file": "/home/runner/work/microNES/microNES/src/common/frame_pacer.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/frame_pacer.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/gxrom.c.o -c /home/runner/work/microNES/microNES/src/common/gxrom.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/gxrom.c.o -c /home/runner/work/microNES/microNES/src/common/gxrom.c",
   "file": "/home/runner/work/microNES/microNES/src/common/gxrom.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/gxrom.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/input.c.o -c /home/runner/work/microNES/microNES/src/common/input.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/input.c.o -c /home/runner/work/microNES/microNES/src/common/input.c",
   "file": "/home/runner/work/microNES/microNES/src/common/input.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/input.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mapper40.c.o -c /home/runner/work/microNES/microNES/src/common/mapper40.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mapper40.c.o -c /home/runner/work/microNES/microNES/src/common/mapper40.c",
   "file": "/home/runner/work/microNES/microNES/src/common/mapper40.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/mapper40.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mmc1.c.o -c /home/runner/work/microNES/microNES/src/common/mmc1.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mmc1.c.o -c /home/runner/work/microNES/microNES/src/common/mmc1.c",
   "file": "/home/runner/work/microNES/microNES/src/common/mmc1.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/mmc1.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mmc2.c.o -c /home/runner/work/microNES/microNES/src/common/mmc2.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mmc2.c.o -c /home/runner/work/microNES/microNES/src/common/mmc2.c",
   "file": "/home/runner/work/microNES/microNES/src/common/mmc2.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/mmc2.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mmc3.c.o -c /home/runner/work/microNES/microNES/src/common/mmc3.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/mmc3.c.o -c /home/runner/work/microNES/microNES/src/common/mmc3.c",
   "file": "/home/runner/work/microNES/microNES/src/common/mmc3.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/mmc3.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/nes.c.o -c /home/runner/work/microNES/microNES/src/common/nes.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/nes.c.o -c /home/runner/work/microNES/microNES/src/common/nes.c",
   "file": "/home/runner/work/microNES/microNES/src/common/nes.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/nes.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/nrom.c.o -c /home/runner/work/microNES/microNES/src/common/nrom.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/nrom.c.o -c /home/runner/work/microNES/microNES/src/common/nrom.c",
   "file": "/home/runner/work/microNES/microNES/src/common/nrom.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/nrom.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/ppu.c.o -c /home/runner/work/microNES/microNES/src/common/ppu.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/ppu.c.o -c /home/runner/work/microNES/microNES/src/common/ppu.c",
   "file": "/home/runner/work/microNES/microNES/src/common/ppu.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/ppu.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o -c /home/runner/work/microNES/microNES/src/common/rom_menu.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o -c /home/runner/work/microNES/microNES/src/common/rom_menu.c",
   "file": "/home/runner/work/microNES/microNES/src/common/rom_menu.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o -c /home/runner/work/microNES/microNES/src/common/smb1_bg_classifier.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o -c /home/runner/work/microNES/microNES/src/common/smb1_bg_classifier.c",
   "file": "/home/runner/work/microNES/microNES/src/common/smb1_bg_classifier.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/uxrom.c.o -c /home/runner/work/microNES/microNES/src/common/uxrom.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_core.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_core.dir/src/common/uxrom.c.o -c /home/runner/work/microNES/microNES/src/common/uxrom.c",
   "file": "/home/runner/work/microNES/microNES/src/common/uxrom.c",
   "output": "CMakeFiles/micrones_core.dir/src/common/uxrom.c.o"
 },
 {
   "directory": "/home/runner/work/microNES/microNES/build-web",
-  "command": "/home/runner/work/_temp/645abfd6-fab2-47dc-af19-7f9f70a0d159/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_wasm.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o -c /home/runner/work/microNES/microNES/src/web/web_main.c",
+  "command": "/home/runner/work/_temp/765d8284-2d02-4882-a399-22822ea3acb7/emsdk-main/upstream/emscripten/emcc -DMICRONES_APU_ENGINE_MICRONES=1 @CMakeFiles/micrones_wasm.dir/includes_C.rsp -std=gnu11 -o CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o -c /home/runner/work/microNES/microNES/src/web/web_main.c",
   "file": "/home/runner/work/microNES/microNES/src/web/web_main.c",
   "output": "CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o"
 }
