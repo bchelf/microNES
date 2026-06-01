@@ -12,3 +12,4 @@ src/esp32s3/sdkconfig
 .DS_Store
 .aider*
 .claude/
+hardware/microNES_pcb_v0.1/microNES_pcb_v0.1-backups
