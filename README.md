@@ -1,150 +1,100 @@
 # microNES
 
-`microNES` is a narrow NES runtime project aimed at running the original Super Mario Bros on RP2350 / Raspberry Pi Pico 2.
+<p align="center">
+  <img src="hero-image.jpeg" alt="microNES RP2350 NES emulator hardware" width="900">
+</p>
 
-It is intentionally not a general NES emulator.
+`microNES` is a small RP2350-based NES emulator project with custom hardware,
+portable emulator code, and host-side development tools.
 
-Current project goals:
+The repo now includes a complete KiCad implementation of an RP2350 console-style
+board, plus firmware for composite video, HDMI output, SD-card ROM loading,
+controller input, and audio. It also includes host tools for building, running,
+capturing, and validating the same emulator core on a desktop.
 
-- keep the emulator core portable and deterministic
-- use the real SMB1 ROM, not a hand-ported rewrite
-- validate behavior on the host first
-- reuse the same core later on RP2350
+ROM images are not included.
+
+## What This Repo Does
+
+- Runs NES ROMs through a shared C emulator core.
+- Targets RP2350 / Raspberry Pi Pico 2-class hardware.
+- Provides a fully functional KiCad PCB design under `hardware/microNES_pcb_v0.1`.
+- Outputs analog composite video from the RP2350 using PIO/DMA timing.
+- Outputs HDMI/DVI-style video using the RP2350 HSTX path.
+- Loads ROMs at runtime from SD card, with an optional flash/XIP cache.
+- Supports NES controller input.
+- Produces audio through PWM on the Pico targets, with a MAX98357 I2S path for
+  the TFT audio target.
+- Builds host tools for smoke tests, SDL play, PNG frame dumps, WAV dumps, and
+  ffmpeg video capture.
+- Includes an ESP32-S3 frontend as a separate reference platform.
+- Includes an Emscripten/WebAssembly target stub for browser experiments.
 
 ## Current Status
 
-The repo now has three active pieces:
+The project has moved beyond the original SMB1-only bring-up. The core still
+prioritizes pragmatic compatibility over perfect NES accuracy, but the repo now
+contains support for several common mapper families:
 
-- a shared portable NES/SMB1 core in `src/common`
-- host-side tooling in `src/host`
-- an RP2350 / Pico 2 firmware target in `src/pico`
+- NROM / mapper 0
+- MMC1
+- UxROM
+- CNROM
+- AxROM
+- GxROM
+- Color Dreams
+- MMC2
+- MMC3
+- mapper 40
 
-What is working now:
+The hardware and firmware path is centered on the RP2350 board in
+`hardware/microNES_pcb_v0.1`, with composite and HDMI firmware targets in
+`src/pico`. The host path remains the fastest way to validate emulator behavior
+before testing on hardware.
 
-- SMB1 ROM loading for mapper 0 / NROM
-- deterministic CPU execution for SMB1
-- background rendering and minimal sprite composition
-- working sprite-0 hit, including the later gameplay case
-- a visible `256x240` framebuffer in the shared core
-- host smoke validation with hashes and diagnostics
-- host PNG export
-- host ffmpeg video capture
-- host SDL interactive window
-- host keyboard input for SMB1
-- host approximate color presentation
-- shared-core PCM sample generation
-- host SDL audio playback
+## Hardware
 
-The host-side project is now good enough to:
+The KiCad project lives here:
 
-- boot and run SMB1
-- inspect frames and video captures
-- play the game locally in a window
-- hear recognizable SMB audio
-- debug rendering and audio behavior with instrumentation
+```text
+hardware/microNES_pcb_v0.1/
+```
+
+It includes:
+
+- KiCad schematic and PCB files
+- custom symbols and footprints
+- RP2350 QFN footprint and 3D model support
+- microSD slot support
+- USB-C support
+- NES controller connector footprint
+- composite output hardware
+- production outputs, BOM, placement files, and Gerbers
+
+The older breadboard composite schematic is documented in `SCHEMATIC.md`. The
+PCB target is selected in firmware with:
+
+```sh
+-DMICRONES_BOARD=v0_1
+```
 
 ## Repo Layout
 
 ```text
-.
-|-- AGENT.md
-|-- CMakeLists.txt
-|-- pico_sdk_import.cmake
-|-- README.md
-`-- src
-    |-- common
-    |   |-- apu.c
-    |   |-- apu.h
-    |   |-- cart.c
-    |   |-- cart.h
-    |   |-- cpu6502.c
-    |   |-- cpu6502.h
-    |   |-- cpu6502_opcode.c
-    |   |-- cpu6502_opcode.h
-    |   |-- frame_pacer.c
-    |   |-- frame_pacer.h
-    |   |-- framebuffer.h
-    |   |-- input.c
-    |   |-- input.h
-    |   |-- nes.c
-    |   |-- nes.h
-    |   |-- nrom.c
-    |   |-- nrom.h
-    |   |-- ppu.c
-    |   |-- ppu.h
-    |   `-- scanline.h
-    |-- host
-    |   |-- audio_sdl.c
-    |   |-- audio_sdl.h
-    |   |-- png_write.c
-    |   |-- png_write.h
-    |   |-- run_main.c
-    |   |-- smoke_main.c
-    |   |-- video_capture.c
-    |   |-- video_capture.h
-    |   |-- wav_write.c
-    |   |-- wav_write.h
-    |   |-- window_sdl.c
-    |   `-- window_sdl.h
-    `-- pico
-        |-- audio_pwm.c
-        |-- audio_pwm.h
-        |-- main.c
-        |-- pico_time.c
-        |-- pico_time.h
-        |-- video_ntsc.c
-        |-- video_ntsc.h
-        `-- video_ntsc.pio
+src/common/      Portable emulator core, ROM menu, mappers, CPU, PPU, APU, input
+src/host/        Desktop smoke runner, SDL runner, PNG/WAV/video tooling
+src/pico/        RP2350 firmware, composite, HDMI, TFT, SD, flash cache, audio
+src/esp32s3/     Separate ESP32-S3 frontend/reference implementation
+src/web/         Emscripten/WebAssembly browser frontend
+hardware/        KiCad PCB design, production files, Gerbers, BOMs
+tests/           Emulator test ROMs and menu smoke tests
 ```
-
-## Architecture
-
-### Shared Core
-
-`src/common` contains the portable emulator/runtime logic:
-
-- `nes.c` owns the top-level NES state, bus, reset, stepping, and public API
-- `cpu6502.c` executes SMB1 against the NES bus
-- `cart.c` and `nrom.c` handle iNES loading and mapper 0
-- `ppu.c` owns PPU registers, VRAM/OAM/palette state, frame timing, background rendering, sprite composition, and sprite-0 hit behavior
-- `apu.c` owns audio timing, channel state, PCM sample generation, and audio debug instrumentation
-- `frame_pacer.c` provides portable pacing/timing policy
-- `input.c` handles controller latch/shift behavior
-
-The shared core does not depend on:
-
-- SDL
-- Pico SDK
-- host-only file/image/audio/window APIs
-
-### Host Side
-
-`src/host` contains tools and adapters only for local development:
-
-- `micrones_smoke`
-  - deterministic validation
-  - state and frame hashes
-  - debug summaries
-  - PNG output
-  - ffmpeg video capture
-- `micrones_run`
-  - live SDL window
-  - keyboard input
-  - host-side color mapping
-  - SDL audio playback
-  - WAV dumping
-  - APU diagnostics
-
-### Pico Side
-
-`src/pico` is still a separate RP2350 target. It builds successfully and remains useful as the hardware-specific path for later integration work.
 
 ## Build
 
 ### Host
 
 ```sh
-cd /Users/bchelf/microNES
 cmake -S . -B build-host -DMICRONES_PLATFORM=host
 cmake --build build-host -j
 ```
@@ -152,214 +102,120 @@ cmake --build build-host -j
 This builds:
 
 - `build-host/micrones_smoke`
-- `build-host/micrones_run`
+- `build-host/micrones_menu_smoke`
+- `build-host/micrones` when SDL3 is available
 
-### Pico
+Run a ROM locally:
 
 ```sh
-cd /Users/bchelf/microNES
-source ~/.zshrc
-cmake -S . -B build-pico \
-  -DMICRONES_PLATFORM=pico \
-  -DMICRONES_PICO_VIDEO_MODE=emulator \
-  -DMICRONES_PICO_ROM_PATH=/Users/bchelf/microNES/roms/smb1.nes \
-  -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
-cmake --build build-pico --target micrones_pico_analog -j
-cmake --build build-pico --target micrones_pico_tft -j
-cmake --build build-pico --target micrones_pico_tft_max98357 -j
+./build-host/micrones roms/smb1.nes
 ```
 
-This builds:
-
-- `build-pico/micrones_pico_analog.uf2`
-- `build-pico/micrones_pico_analog.elf`
-- `build-pico/micrones_pico_tft.uf2`
-- `build-pico/micrones_pico_tft.elf`
-- `build-pico/micrones_pico_tft_max98357.uf2`
-- `build-pico/micrones_pico_tft_max98357.elf`
-
-The Pico firmware is split into explicit targets:
-
-- `micrones_pico_analog`
-  - original 5-pin analog composite DAC path on `GP0-GP4`
-  - PWM audio on `GP9`
-  - builds and links the NTSC PIO/DMA backend only
-- `micrones_pico_tft`
-  - SPI ILI9341 TFT path on `GP18/19/17/20/21/22`
-  - PWM audio on `GP9`
-  - builds and links the SPI TFT backend only
-- `micrones_pico_tft_max98357`
-  - SPI ILI9341 TFT path on `GP18/19/17/20/21/22`
-  - MAX98357 digital audio backend
-  - I2S-style audio wiring:
-    - `GP10` -> `BCLK`
-    - `GP11` -> `DIN`
-    - `GP12` -> `LRC` / `LRCLK` / `WS`
-    - `3V3(OUT)` -> `VIN`
-    - `GND` -> `GND`
-    - amplifier `OUT+` / `OUT-` -> speaker
-
-## Useful Host Commands
-
-### Smoke Validation
-
-Run a deterministic bounded validation:
+Run deterministic smoke validation:
 
 ```sh
 ./build-host/micrones_smoke roms/smb1.nes
 ```
 
-Run longer and dump a frame:
+Capture a frame or video:
 
 ```sh
 ./build-host/micrones_smoke roms/smb1.nes 6200000 /tmp/micrones_10s.png
+./build-host/micrones_smoke roms/smb1.nes --steps 17670500 --video-out build-host/capture.mp4
 ```
 
-Capture video through ffmpeg:
+### RP2350 / Pico
+
+Configure the firmware for the emulator and the custom PCB:
 
 ```sh
-./build-host/micrones_smoke roms/smb1.nes --steps 17670500 --video-out build-host/smb_30s.mp4
+cmake -S . -B build-pico \
+  -DMICRONES_PLATFORM=pico \
+  -DMICRONES_PICO_VIDEO_MODE=emulator \
+  -DMICRONES_BOARD=v0_1 \
+  -Dpicotool_DIR=/Users/bchelf/microNES/build/_deps/picotool
 ```
 
-### Interactive Runner
-
-Run the SDL window:
+Build composite output:
 
 ```sh
-./build-host/micrones_run roms/smb1.nes
+cmake --build build-pico --target micrones_pico_analog -j
 ```
 
-Helpful options:
+Build HDMI output:
 
 ```sh
-./build-host/micrones_run roms/smb1.nes --vsync
-./build-host/micrones_run roms/smb1.nes --no-vsync --unthrottled
-./build-host/micrones_run roms/smb1.nes --scale 5
-./build-host/micrones_run roms/smb1.nes --max-frames 600
+cmake --build build-pico --target micrones_pico_hdmi -j
 ```
 
-Keyboard mapping:
-
-- `Up` or `W` = Up
-- `Down` or `S` = Down
-- `Left` or `A` = Left
-- `Right` or `D` = Right
-- `L` = A
-- `K` = B
-- `Return` = Start
-- `Tab` or `Right Shift` = Select
-
-Host-side input conflict handling:
-
-- `left + right` becomes no-op
-- `up + down` becomes no-op
-
-The host runner now also polls input much more frequently than once per frame, which reduces the control lag that earlier versions had.
-
-## Audio Diagnostics Harness
-
-The repo now includes a small audio debug harness to make APU changes measurable instead of subjective.
-
-Available capabilities:
-
-- per-channel solo / mute in the final mix
-- forced test tones
-- pre-SDL WAV dumping
-- per-channel and final mix amplitude statistics
-- APU register write summaries
-- compact channel state summaries
-
-Examples:
-
-Dump a short gameplay window to WAV:
+Other firmware targets:
 
 ```sh
-./build-host/micrones_run roms/smb1.nes --dump-wav /tmp/smb_gameplay.wav --dump-wav-seconds 2
+cmake --build build-pico --target micrones_pico_tft -j
+cmake --build build-pico --target micrones_pico_tft_max98357 -j
+cmake --build build-pico --target micrones_pico_hdmi_test_pattern -j
 ```
 
-Solo a channel:
+The Pico firmware loads ROMs from SD at runtime. `MICRONES_PICO_ROM_PATH` is no
+longer needed for normal Pico builds.
+
+### Web
 
 ```sh
-./build-host/micrones_run roms/smb1.nes --audio-solo pulse1 --apu-stats
-./build-host/micrones_run roms/smb1.nes --audio-solo triangle --apu-stats
+emcmake cmake -S . -B build-web -DMICRONES_PLATFORM=web
+cmake --build build-web -j
 ```
 
-Mute a channel:
+The build copies `src/web/index.html` next to the generated JS/WASM output.
+
+### ESP32-S3
 
 ```sh
-./build-host/micrones_run roms/smb1.nes --audio-mute triangle --apu-stats
+cd src/esp32s3
+. $IDF_PATH/export.sh
+idf.py build
 ```
 
-Forced validation tones:
+## Host Controls
+
+For the SDL runner:
+
+- Arrow keys or `WASD`: D-pad
+- `L`: A
+- `K`: B
+- `Return`: Start
+- `Tab` or right shift: Select
+
+Useful runner options:
 
 ```sh
-./build-host/micrones_run roms/smb1.nes --audio-solo pulse1 --apu-test-tone pulse1 --dump-wav /tmp/pulse1.wav --dump-wav-seconds 1 --apu-stats
-./build-host/micrones_run roms/smb1.nes --audio-solo triangle --apu-test-tone triangle --dump-wav /tmp/triangle.wav --dump-wav-seconds 1 --apu-stats
+./build-host/micrones roms/smb1.nes --vsync
+./build-host/micrones roms/smb1.nes --no-vsync --unthrottled
+./build-host/micrones roms/smb1.nes --scale 5
+./build-host/micrones roms/smb1.nes --dump-wav /tmp/gameplay.wav --dump-wav-seconds 2
 ```
-
-Write summary:
-
-```sh
-./build-host/micrones_run roms/smb1.nes --apu-write-summary
-```
-
-Current main conclusion from the harness:
-
-- the shared PCM path and host playback path are real and testable
-- earlier “no audible difference” checks were partly misleading because some short no-input SMB windows did not meaningfully drive the audible channels
-
-## Important Rendering / Debugging Findings
-
-Some of the major issues already diagnosed and fixed:
-
-- early SMB1 progress was blocked by missing sprite-0 hit behavior
-- a later gameplay stall was caused by incorrect background/scroll/address derivation, not by sprite corruption
-- a later visible HUD/title-card artifact was traced to visible-scanline scroll writes being ignored by the deferred scanline renderer
-
-Those fixes were kept narrow and SMB-focused rather than turning the project into a broad emulator rewrite.
 
 ## Known Limitations
 
-This is still an intentionally incomplete SMB-focused runtime.
+`microNES` is still an emulator under active development, not a fully accurate
+general-purpose NES implementation.
 
-### CPU / Cartridge
+- PPU timing is practical rather than fully cycle-accurate.
+- Sprite overflow and exact secondary OAM behavior are incomplete.
+- APU fidelity is improved but still not perfect.
+- Mapper support exists for several common boards, but compatibility is not
+  expected to match mature NES emulators.
+- Some RP2350 SD-to-flash-cache ROM load paths can still disturb video output
+  and are an active debugging area.
 
-- only mapper 0 / NROM is supported
-- not all 6502 behavior is implemented for arbitrary ROMs
-- SMB1 is the target, not broad emulator compatibility
+## Development Notes
 
-### PPU
+Keep platform boundaries clean:
 
-- not cycle-accurate
-- no exact secondary OAM behavior
-- no sprite overflow behavior
-- no full final NES palette implementation in the shared core
-- host color display is still an approximation layered over the shared framebuffer
+- `src/common` should stay portable.
+- Host-only SDL, PNG, WAV, and ffmpeg code belongs in `src/host`.
+- Pico SDK, PIO, DMA, HSTX, SD, and flash code belongs in `src/pico`.
+- ESP-IDF code belongs in `src/esp32s3`.
 
-### APU
-
-- audible SMB audio exists, but fidelity is still incomplete
-- bass / triangle behavior is still not where it should be
-- some sound effects still feel clipped or abbreviated
-- the next APU work should use the diagnostics harness rather than more blind tuning
-
-### Host Timing
-
-- the SDL runner is much more playable now, but pacing and vsync tradeoffs still matter
-- `--vsync` usually looks better
-- `--no-vsync --unthrottled` is still useful for perf/debug work
-
-## Next Steps
-
-Highest-value next work:
-
-1. Use the audio diagnostics harness during real gameplay windows to identify which channel behavior is still missing or too approximate.
-2. Improve the APU with evidence, especially:
-   - triangle behavior
-   - envelope / length timing
-   - noise / fuller SMB effects
-3. Keep tightening SMB-relevant PPU correctness only where new evidence shows it is needed.
-4. Reuse the shared PCM and pacing abstractions for the future Pico runtime path.
-5. Move toward RP2350 integration only after host-side validation remains strong.
-
-The project is now beyond early bring-up. The main remaining work is no longer “make it boot”; it is “make SMB behavior and output more faithful while preserving the narrow, portable architecture.”
+The recommended workflow is still host-first: validate behavior with
+`micrones_smoke` and the SDL runner, then test the same core on RP2350 hardware.
