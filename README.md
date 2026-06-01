@@ -68,8 +68,14 @@ It includes:
 - microSD slot support
 - USB-C support
 - NES controller connector footprint
+- custom KiCad footprints for original Nintendo console parts
 - composite output hardware
 - production outputs, BOM, placement files, and Gerbers
+
+The board is designed around harvested original NES console hardware for the
+user-facing controls and controller interface. It uses the original Nintendo
+power switch assembly and original NES controller input ports, with custom KiCad
+footprints made specifically for those salvaged parts.
 
 The older breadboard composite schematic is documented in `SCHEMATIC.md`. The
 PCB target is selected in firmware with:
