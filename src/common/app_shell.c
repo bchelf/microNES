@@ -1,10 +1,19 @@
 #include "app_shell.h"
 
+#include "save_state.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
-#define EXIT_COMBO_MASK (NES_BUTTON_DOWN | NES_BUTTON_START)
+#define EXIT_COMBO_MASK   (NES_BUTTON_DOWN | NES_BUTTON_START)
+#define SAVE_COMBO_MASK   (NES_BUTTON_UP   | NES_BUTTON_START)
+
+/* Scratch buffer for save-state capture/apply.  SaveStateBlob is ~21KB,
+ * far larger than the default Pico per-core stack (a few KB), so it must
+ * never be a stack-local in shell_create_save_state() or
+ * app_shell_begin_frame(); both run on the Pico's tiny main-loop stack. */
+static SaveStateBlob s_save_state_scratch;
 
 static void shell_set_status(AppShell *shell, const char *fmt, ...) {
     if (shell == NULL) {
@@ -99,11 +108,58 @@ static bool shell_launch(AppShell *shell, int index) {
 
     shell->running_index = index;
     shell->state = APP_SHELL_STATE_RUNNING;
-    /* Latch the exit combo so the user pressing Start to launch and still
-     * holding Down doesn't immediately bounce back to the menu. */
+    /* Latch the exit/save combos so the user pressing Start to launch and
+     * still holding Down/Up doesn't immediately re-trigger. */
     shell->exit_combo_latched = true;
+    shell->save_combo_latched = true;
+    /* A fresh launch starts from the ROM's reset state, not a save. */
+    shell->loaded_from_save = false;
+    shell->loaded_save_elapsed_seconds = 0;
     shell_set_status(shell, "");
     return true;
+}
+
+/* CRC32 over the currently-loaded ROM image, for SaveStateHeader.rom_checksum.
+ * Returns 0 if no ROM is loaded (current_rom_buf == NULL). */
+static uint32_t shell_rom_checksum(const AppShell *shell) {
+    if (shell == NULL || shell->current_rom_buf == NULL) {
+        return 0;
+    }
+    return save_state_crc32(shell->current_rom_buf, shell->current_rom_size);
+}
+
+/* Capture and persist a new save state for the running ROM. */
+static void shell_create_save_state(AppShell *shell) {
+    if (shell == NULL || shell->nes == NULL || shell->save_store == NULL ||
+        shell->source == NULL || shell->running_index < 0) {
+        return;
+    }
+    const RomSourceEntry *entry = shell->source->entry(shell->source, (size_t)shell->running_index);
+    if (entry == NULL) {
+        return;
+    }
+
+    uint32_t rom_checksum   = shell_rom_checksum(shell);
+    uint32_t rom_image_size = (uint32_t)shell->current_rom_size;
+    uint32_t elapsed_seconds = (uint32_t)(nes_frame_count(shell->nes) / 60u);
+
+    SaveStateBlob *blob = &s_save_state_scratch;
+    save_state_capture(shell->nes, rom_checksum, rom_image_size, elapsed_seconds, blob);
+
+    shell->save_store->refresh(shell->save_store, entry->name);
+    if (shell->save_store->save(shell->save_store, blob)) {
+        /* save() may have shifted header.elapsed_seconds (and crc32) to
+         * resolve a filename collision with an existing entry; use the
+         * post-save value so the save menu highlights the entry that was
+         * actually written, not the pre-collision time. */
+        shell->loaded_from_save = true;
+        shell->loaded_save_elapsed_seconds = blob->header.elapsed_seconds;
+        char label[12];
+        save_state_format_elapsed(blob->header.elapsed_seconds, label, sizeof(label));
+        shell_set_status(shell, "Saved %s", label);
+    } else {
+        shell_set_status(shell, "Save failed");
+    }
 }
 
 static void shell_decide_state(AppShell *shell) {
@@ -116,6 +172,15 @@ static void shell_decide_state(AppShell *shell) {
     }
 }
 
+static const char *shell_save_menu_rom_name(AppShell *shell) {
+    if (shell->save_menu_rom_index < 0 || shell->source == NULL) {
+        return "";
+    }
+    const RomSourceEntry *e = shell->source->entry(shell->source,
+                                                    (size_t)shell->save_menu_rom_index);
+    return e != NULL ? e->name : "";
+}
+
 static void shell_render_current(AppShell *shell) {
     if (shell->state == APP_SHELL_STATE_IMPORT) {
         rom_menu_render_import(&shell->menu, shell->import_source,
@@ -124,6 +189,26 @@ static void shell_render_current(AppShell *shell) {
         rom_menu_render_confirm(&shell->menu_fb,
                                 "Erase all ROMs from flash?",
                                 "This cannot be undone.");
+    } else if (shell->state == APP_SHELL_STATE_SAVE_MENU) {
+        save_menu_render(&shell->save_menu, shell->save_store, &shell->menu_fb,
+                         shell_save_menu_rom_name(shell), shell->status);
+    } else if (shell->state == APP_SHELL_STATE_CONFIRM_CLEAR_SAVES) {
+        rom_menu_render_confirm(&shell->menu_fb,
+                                "Clear all save states?",
+                                "This cannot be undone.");
+    } else if (shell->state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE) {
+        const SaveStateEntry *e = shell->save_store != NULL
+            ? shell->save_store->entry(shell->save_store, (size_t)shell->pending_delete_index)
+            : NULL;
+        char detail[32];
+        if (e != NULL) {
+            snprintf(detail, sizeof(detail), "Save: %s", e->label);
+        } else {
+            detail[0] = '\0';
+        }
+        rom_menu_render_confirm(&shell->menu_fb,
+                                "Delete this save state?",
+                                detail);
     } else {
         rom_menu_render(&shell->menu, shell->source,
                         &shell->menu_fb, shell->status);
@@ -165,6 +250,64 @@ static void shell_return_to_menu(AppShell *shell, uint8_t buttons) {
     shell_render_current(shell);
 }
 
+/* Exit the running ROM via the Down+Start combo.  If the ROM has save
+ * states, go to the save-state list (defaulting to the entry the running
+ * ROM was loaded from, if any) instead of the main ROM menu. */
+static void shell_exit_running(AppShell *shell, uint8_t buttons) {
+    if (shell == NULL) {
+        return;
+    }
+
+    int previous_index = shell->running_index;
+    char rom_name[ROM_SOURCE_NAME_MAX];
+    rom_name[0] = '\0';
+    if (previous_index >= 0 && shell->source != NULL) {
+        const RomSourceEntry *e = shell->source->entry(shell->source, (size_t)previous_index);
+        if (e != NULL) {
+            snprintf(rom_name, sizeof(rom_name), "%s", e->name);
+        }
+    }
+
+    bool     loaded_from_save  = shell->loaded_from_save;
+    uint32_t loaded_elapsed    = shell->loaded_save_elapsed_seconds;
+
+    size_t save_count = 0;
+    if (shell->save_store != NULL && rom_name[0] != '\0') {
+        save_count = shell->save_store->refresh(shell->save_store, rom_name);
+    }
+
+    if (save_count == 0) {
+        shell_return_to_menu(shell, buttons);
+        return;
+    }
+
+    shell_unload_running(shell);
+    shell_set_status(shell, "");
+    shell->save_menu_rom_index = previous_index;
+    if (loaded_from_save) {
+        save_menu_select_elapsed(&shell->save_menu, shell->save_store, loaded_elapsed);
+    } else {
+        save_menu_init(&shell->save_menu);
+    }
+    /* The exit combo (Down+Start) is typically still held on the frame the
+     * save menu appears.  save_menu_step() treats a held Up/Down as a fresh
+     * press whenever it differs from hold_dir, which (after the memset above
+     * reset hold_dir to 0) would immediately bump the selection by one --
+     * landing on "the next" entry instead of the one we just selected.  Seed
+     * hold_dir/hold_frames as if that hold had already been registered, so
+     * the next save_menu_step() call treats it as a continuing hold (subject
+     * to the normal repeat delay) instead of a new navigation press. */
+    if ((buttons & NES_BUTTON_DOWN) != 0u) {
+        shell->save_menu.hold_dir = 1;
+        shell->save_menu.hold_frames = 1;
+    } else if ((buttons & NES_BUTTON_UP) != 0u) {
+        shell->save_menu.hold_dir = -1;
+        shell->save_menu.hold_frames = 1;
+    }
+    shell->state = APP_SHELL_STATE_SAVE_MENU;
+    shell_render_current(shell);
+}
+
 void app_shell_init(AppShell *shell, RomSource *source, Nes *nes) {
     if (shell == NULL) {
         return;
@@ -173,6 +316,7 @@ void app_shell_init(AppShell *shell, RomSource *source, Nes *nes) {
     shell->source = source;
     shell->nes = nes;
     shell->running_index = -1;
+    shell->save_menu_rom_index = -1;
     shell->prev_buttons = 0xFFu;
     rom_menu_init(&shell->menu);
     if (source != NULL && source->refresh != NULL) {
@@ -208,6 +352,11 @@ void app_shell_set_erase(AppShell *shell,
     shell_render_current(shell);
 }
 
+void app_shell_set_save_store(AppShell *shell, SaveStateStore *save_store) {
+    if (shell == NULL) return;
+    shell->save_store = save_store;
+}
+
 void app_shell_destroy(AppShell *shell) {
     if (shell == NULL) {
         return;
@@ -220,7 +369,10 @@ void app_shell_destroy(AppShell *shell) {
 bool app_shell_in_menu(const AppShell *shell) {
     return shell != NULL && (shell->state == APP_SHELL_STATE_MENU ||
                              shell->state == APP_SHELL_STATE_IMPORT ||
-                             shell->state == APP_SHELL_STATE_CONFIRM_ERASE);
+                             shell->state == APP_SHELL_STATE_CONFIRM_ERASE ||
+                             shell->state == APP_SHELL_STATE_SAVE_MENU ||
+                             shell->state == APP_SHELL_STATE_CONFIRM_CLEAR_SAVES ||
+                             shell->state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE);
 }
 
 const NesFrameBuffer *app_shell_menu_framebuffer(const AppShell *shell) {
@@ -289,6 +441,92 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         } else if ((pressed & NES_BUTTON_B) != 0u) {
             shell_set_status(shell, "");
             shell->state = APP_SHELL_STATE_MENU;
+        }
+        shell_render_current(shell);
+        shell->prev_buttons = curr;
+        return out;
+    }
+
+    if (shell->state == APP_SHELL_STATE_CONFIRM_CLEAR_SAVES) {
+        uint8_t pressed = (uint8_t)(~prev & curr);
+        if ((pressed & NES_BUTTON_A) != 0u) {
+            if (shell->save_store != NULL) {
+                shell->save_store->clear_all(shell->save_store);
+            }
+            shell->loaded_from_save = false;
+            shell_set_status(shell, "Save states cleared");
+            shell_decide_state(shell);
+            if (shell->state == APP_SHELL_STATE_MENU) {
+                rom_menu_select(&shell->menu, shell->source, shell->save_menu_rom_index);
+            }
+        } else if ((pressed & NES_BUTTON_B) != 0u) {
+            shell_set_status(shell, "");
+            shell->state = APP_SHELL_STATE_SAVE_MENU;
+        }
+        shell_render_current(shell);
+        shell->prev_buttons = curr;
+        return out;
+    }
+
+    if (shell->state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE) {
+        uint8_t pressed = (uint8_t)(~prev & curr);
+        if ((pressed & NES_BUTTON_A) != 0u) {
+            bool ok = shell->save_store != NULL &&
+                shell->save_store->delete_entry(shell->save_store,
+                                                 (size_t)shell->pending_delete_index);
+            shell_set_status(shell, ok ? "Save state deleted" : "Delete failed");
+            shell->state = APP_SHELL_STATE_SAVE_MENU;
+            /* Keep the selection visible even if the deleted entry was at
+             * the bottom of a scrolled list. */
+            if (shell->save_menu.top > shell->save_menu.selected) {
+                shell->save_menu.top = shell->save_menu.selected;
+            }
+        } else if ((pressed & NES_BUTTON_B) != 0u) {
+            shell_set_status(shell, "");
+            shell->state = APP_SHELL_STATE_SAVE_MENU;
+        }
+        shell_render_current(shell);
+        shell->prev_buttons = curr;
+        return out;
+    }
+
+    if (shell->state == APP_SHELL_STATE_SAVE_MENU) {
+        int chosen = -1;
+        SaveMenuResult r = save_menu_step(&shell->save_menu, shell->save_store,
+                                          prev, curr, &chosen);
+        if (r == SAVE_MENU_RESULT_LOAD) {
+            SaveStateBlob *blob = &s_save_state_scratch;
+            bool load_ok = shell->save_store != NULL &&
+                shell->save_store->load(shell->save_store, (size_t)chosen, blob);
+            if (load_ok && shell_launch(shell, shell->save_menu_rom_index)) {
+                uint32_t rom_checksum   = shell_rom_checksum(shell);
+                uint32_t rom_image_size = (uint32_t)shell->current_rom_size;
+                if (save_state_apply(shell->nes, blob, rom_checksum, rom_image_size)) {
+                    shell->loaded_from_save = true;
+                    shell->loaded_save_elapsed_seconds = blob->header.elapsed_seconds;
+                    out.just_entered_run = true;
+                    out.stepping_nes = true;
+                    NesControllerState forwarded = { 0 };
+                    out.forwarded = forwarded;
+                } else {
+                    shell_unload_running(shell);
+                    shell->state = APP_SHELL_STATE_SAVE_MENU;
+                    shell_set_status(shell, "Load failed: bad save");
+                }
+            } else {
+                shell_set_status(shell, "Load failed");
+            }
+        } else if (r == SAVE_MENU_RESULT_DELETE) {
+            shell->pending_delete_index = chosen;
+            shell->state = APP_SHELL_STATE_CONFIRM_DELETE_SAVE;
+        } else if (r == SAVE_MENU_RESULT_CLEAR_ALL) {
+            shell->state = APP_SHELL_STATE_CONFIRM_CLEAR_SAVES;
+        } else if (r == SAVE_MENU_RESULT_BACK) {
+            shell_set_status(shell, "");
+            shell_decide_state(shell);
+            if (shell->state == APP_SHELL_STATE_MENU) {
+                rom_menu_select(&shell->menu, shell->source, shell->save_menu_rom_index);
+            }
         }
         shell_render_current(shell);
         shell->prev_buttons = curr;
@@ -379,7 +617,7 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         return out;
     }
 
-    /* RUNNING state: detect exit combo. */
+    /* RUNNING state: detect exit and save combos. */
     bool combo_now = (curr & EXIT_COMBO_MASK) == EXIT_COMBO_MASK;
     bool combo_prev = (prev & EXIT_COMBO_MASK) == EXIT_COMBO_MASK;
 
@@ -392,7 +630,7 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         }
     } else if (combo_now && !combo_prev) {
         /* Edge-trigger the exit. */
-        shell_return_to_menu(shell, curr);
+        shell_exit_running(shell, curr);
         out.just_entered_menu = true;
         out.stepping_nes = false;
         NesControllerState forwarded = { 0 };
@@ -401,11 +639,34 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         return out;
     }
 
+    bool save_combo_now = (curr & SAVE_COMBO_MASK) == SAVE_COMBO_MASK;
+    bool save_combo_prev = (prev & SAVE_COMBO_MASK) == SAVE_COMBO_MASK;
+
+    if (shell->save_store != NULL) {
+        if (shell->save_combo_latched) {
+            /* Same "wait for release" latch as the exit combo. */
+            if (!save_combo_now) {
+                shell->save_combo_latched = false;
+            }
+        } else if (save_combo_now && !save_combo_prev) {
+            /* Edge-trigger creating a save state. */
+            shell_create_save_state(shell);
+            shell->save_combo_latched = true;
+            out.stepping_nes = true;
+            out.forwarded.buttons = (uint8_t)(curr & ~SAVE_COMBO_MASK);
+            shell->prev_buttons = curr;
+            return out;
+        }
+    }
+
     out.stepping_nes = true;
-    /* Mask out the combo bits while it's held so the game doesn't see a
-     * spurious Down+Start. */
+    /* Mask out the combo bits while held so the game doesn't see a spurious
+     * Down+Start or Up+Start. */
     if (combo_now) {
-        out.forwarded.buttons = (uint8_t)(curr & ~EXIT_COMBO_MASK);
+        out.forwarded.buttons = (uint8_t)(out.forwarded.buttons & ~EXIT_COMBO_MASK);
+    }
+    if (shell->save_store != NULL && save_combo_now) {
+        out.forwarded.buttons = (uint8_t)(out.forwarded.buttons & ~SAVE_COMBO_MASK);
     }
 
     shell->prev_buttons = curr;

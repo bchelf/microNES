@@ -3,6 +3,7 @@
 
 #include "framebuffer.h"
 #include "rom_source.h"
+#include "save_state_store.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -66,5 +67,48 @@ void rom_menu_render_confirm(NesFrameBuffer *fb,
 /* Draw a modal loading-bar overlay on top of the current framebuffer.
  * pct is 0-100.  name (may be NULL) is displayed above the bar. */
 void rom_menu_render_loading(NesFrameBuffer *fb, const char *name, int pct);
+
+/* Save-state list menu: shown when the user backs out of a running ROM that
+ * has save states.  Lists the ROM's save states (newest first, from
+ * `store`), followed by "Clear all save states" and "Back to ROM menu". */
+typedef struct {
+    int      selected;
+    int      top;
+    int      hold_dir;     /* -1 = up, 0 = none, +1 = down */
+    uint32_t hold_frames;  /* frames the dir has been held */
+} SaveMenu;
+
+typedef enum {
+    SAVE_MENU_RESULT_NONE = 0,
+    SAVE_MENU_RESULT_LOAD,      /* user picked a save state; *out_index set */
+    SAVE_MENU_RESULT_DELETE,    /* user pressed Select on a save state; *out_index set */
+    SAVE_MENU_RESULT_CLEAR_ALL, /* user picked "Clear all save states" */
+    SAVE_MENU_RESULT_BACK,      /* user picked "Back to ROM menu" (or B) */
+} SaveMenuResult;
+
+void save_menu_init(SaveMenu *menu);
+
+/* Move the cursor to the entry whose elapsed_seconds matches (used when
+ * returning to the save menu for a save state that was just loaded).  Falls
+ * back to entry 0 if no match is found. */
+void save_menu_select_elapsed(SaveMenu *menu, SaveStateStore *store,
+                              uint32_t elapsed_seconds);
+
+/* Process one frame of input.  On SAVE_MENU_RESULT_LOAD or
+ * SAVE_MENU_RESULT_DELETE, *out_index receives the save-state entry index
+ * (0..store->count()-1). */
+SaveMenuResult save_menu_step(SaveMenu *menu,
+                              SaveStateStore *store,
+                              uint8_t prev_buttons,
+                              uint8_t curr_buttons,
+                              int *out_index);
+
+/* Paint the save-state list into fb.  status (may be NULL) is shown above
+ * the footer. */
+void save_menu_render(const SaveMenu *menu,
+                      SaveStateStore *store,
+                      NesFrameBuffer *fb,
+                      const char *rom_name,
+                      const char *status);
 
 #endif

@@ -12,6 +12,7 @@
 #include "rom_source_flash_fs.h"
 #include "rom_source.h"
 #include "rom_source_sd.h"
+#include "save_state_store_sd.h"
 #if defined(MICRONES_PICO_VIDEO_BACKEND_TFT)
 #include "display/video_tft.h"
 #endif
@@ -68,6 +69,7 @@ int main(void) {
     static AppShell                 shell;
     static RomSource                sd_rom_source;
     static RomSource                rom_source;
+    static SaveStateStore           save_store;
     MicronesFramePacer frame_pacer;
 #if MICRONES_ENABLE_PERF_LOG
     uint64_t report_started_us = 0;
@@ -167,6 +169,10 @@ int main(void) {
         bool sd_ok = rom_source_sd_init(&sd_rom_source);
 
         app_shell_init(&shell, &rom_source, &emulator_video.nes);
+
+        if (sd_ok && save_state_store_sd_init(&save_store)) {
+            app_shell_set_save_store(&shell, &save_store);
+        }
 
 #if MICRONES_PICO_ENABLE_FLASH_ROM_CACHE
         {

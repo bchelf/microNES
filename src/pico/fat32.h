@@ -69,4 +69,31 @@ void fat32_open_file(Fat32File *f, const Fat32Entry *e);
  * than requested when EOF or on error. */
 size_t fat32_read(Fat32File *f, uint8_t *buf, size_t size);
 
+/* --- Write support ---
+ *
+ * All of the functions below operate on 8.3 short names only (e.g.
+ * "SUPERMAR" or "00001234.SAV") and never create or read LFN entries.
+ * `dir_cluster == 0` means the root directory. */
+
+/* Find a subdirectory of dir_cluster by 8.3 name (case-insensitive).
+ * Returns its first cluster, or 0 if not found. */
+uint32_t fat32_find_dir(uint32_t dir_cluster, const char *name83);
+
+/* Find or create a subdirectory of dir_cluster with the given 8.3 name.
+ * Returns its first cluster, or 0 on error. */
+uint32_t fat32_find_or_create_dir(uint32_t dir_cluster, const char *name83);
+
+/* Find a file by 8.3 name (case-insensitive) within dir_cluster.  On
+ * success fills *out and returns true. */
+bool fat32_find_file(uint32_t dir_cluster, const char *name83, Fat32Entry *out);
+
+/* Create or overwrite a file with the given 8.3 name inside dir_cluster,
+ * writing `size` bytes from `data`.  Returns true on success. */
+bool fat32_write_file(uint32_t dir_cluster, const char *name83,
+                      const uint8_t *data, uint32_t size);
+
+/* Delete a file by 8.3 name inside dir_cluster, freeing its cluster chain.
+ * Returns true if deleted or if it did not exist. */
+bool fat32_delete_file(uint32_t dir_cluster, const char *name83);
+
 #endif

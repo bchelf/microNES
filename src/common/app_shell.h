@@ -14,6 +14,9 @@ typedef enum {
     APP_SHELL_STATE_RUNNING,
     APP_SHELL_STATE_IMPORT,
     APP_SHELL_STATE_CONFIRM_ERASE,
+    APP_SHELL_STATE_SAVE_MENU,
+    APP_SHELL_STATE_CONFIRM_CLEAR_SAVES,
+    APP_SHELL_STATE_CONFIRM_DELETE_SAVE,
 } AppShellState;
 
 typedef bool (*AppShellImportFn)(RomSource *flash_source,
@@ -34,9 +37,28 @@ typedef struct {
     /* The exit combo (Down+Start) latches "wait for release" so we don't
      * immediately re-trigger when the user lets go after returning. */
     bool          exit_combo_latched;
+    /* The create-save-state combo (Up+Start) latches the same way. */
+    bool          save_combo_latched;
 
     /* Index of the running ROM, -1 when nothing is running. */
     int           running_index;
+
+    /* Save-state storage (may be NULL to disable save states entirely). */
+    SaveStateStore *save_store;
+    /* Save-state list menu, shown in APP_SHELL_STATE_SAVE_MENU. */
+    SaveMenu        save_menu;
+    /* Index into `source` of the ROM whose save-state list is shown in
+     * SAVE_MENU / CONFIRM_CLEAR_SAVES. */
+    int             save_menu_rom_index;
+    /* Save-state entry index (0..save_store->count()-1) pending deletion in
+     * APP_SHELL_STATE_CONFIRM_DELETE_SAVE. */
+    int             pending_delete_index;
+    /* True if the running ROM was launched by loading a save state (vs. a
+     * fresh launch).  loaded_save_elapsed_seconds is then the elapsed time
+     * recorded in that save, used to re-select it if the user returns to
+     * the save-state menu. */
+    bool            loaded_from_save;
+    uint32_t        loaded_save_elapsed_seconds;
 
     /* The cart was loaded zero-copy via nes_load_cartridge_const_memory and
      * the cart's prg_rom/chr_data pointers alias into this buffer.  Held
@@ -74,6 +96,11 @@ void app_shell_set_import(AppShell *shell,
 void app_shell_set_erase(AppShell *shell,
                          AppShellEraseFn erase_fn,
                          void *erase_fn_user);
+
+/* Provide a save-state store.  May be left unset (NULL) to disable
+ * save-state support: Down+Start then always returns straight to the ROM
+ * menu (the pre-save-state behavior) and Up+Start is a no-op. */
+void app_shell_set_save_store(AppShell *shell, SaveStateStore *save_store);
 
 /* Tear down the shell, freeing any in-flight ROM buffer.  Does not destroy
  * the NES (caller owns it). */

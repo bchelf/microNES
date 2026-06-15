@@ -110,6 +110,19 @@ static bool cart_build_chr_row_cache(NesCartridge *cartridge, char *error, size_
     return true;
 }
 
+void cart_rebuild_chr_row_cache(NesCartridge *cartridge) {
+    if (cartridge->chr_row_pixels == NULL || cartridge->chr_size == 0) {
+        return;
+    }
+
+    for (size_t tile = 0; tile < cartridge->chr_size / 16u; ++tile) {
+        size_t tile_base = tile * 16u;
+        for (size_t row = 0; row < 8u; ++row) {
+            cart_decode_chr_row(cartridge, tile_base + row);
+        }
+    }
+}
+
 // transfer_ownership: if true, cartridge->rom_image is set to rom_image and
 // cart_unload() will free it.  Pass false when rom_image points into flash or
 // another non-heap buffer – cart_unload's free(NULL) is then a safe no-op.
