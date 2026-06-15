@@ -666,6 +666,13 @@ SaveMenuResult save_menu_step(SaveMenu *menu,
         return SAVE_MENU_RESULT_BACK;
     }
 
+    if ((pressed & NES_BUTTON_SELECT) != 0u && menu->selected < (int)count) {
+        if (out_index != NULL) {
+            *out_index = menu->selected;
+        }
+        return SAVE_MENU_RESULT_DELETE;
+    }
+
     return SAVE_MENU_RESULT_NONE;
 }
 
@@ -760,7 +767,7 @@ void save_menu_render(const SaveMenu *menu,
         draw_centered_text(fb, MENU_STATUS_Y, status, MENU_TEXT_ERROR);
     }
 
-    const char *footer = "Up/Down move  Start/A load  B back";
+    const char *footer = "Up/Down move  A load  Sel del  B back";
     draw_centered_text(fb, MENU_FOOTER_Y, footer, MENU_TEXT_FAINT);
 }
 

@@ -16,6 +16,7 @@ typedef enum {
     APP_SHELL_STATE_CONFIRM_ERASE,
     APP_SHELL_STATE_SAVE_MENU,
     APP_SHELL_STATE_CONFIRM_CLEAR_SAVES,
+    APP_SHELL_STATE_CONFIRM_DELETE_SAVE,
 } AppShellState;
 
 typedef bool (*AppShellImportFn)(RomSource *flash_source,
@@ -49,6 +50,9 @@ typedef struct {
     /* Index into `source` of the ROM whose save-state list is shown in
      * SAVE_MENU / CONFIRM_CLEAR_SAVES. */
     int             save_menu_rom_index;
+    /* Save-state entry index (0..save_store->count()-1) pending deletion in
+     * APP_SHELL_STATE_CONFIRM_DELETE_SAVE. */
+    int             pending_delete_index;
     /* True if the running ROM was launched by loading a save state (vs. a
      * fresh launch).  loaded_save_elapsed_seconds is then the elapsed time
      * recorded in that save, used to re-select it if the user returns to

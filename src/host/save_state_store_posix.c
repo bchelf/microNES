@@ -48,17 +48,14 @@ static bool parse_save_name(const char *name, uint32_t *out_elapsed) {
     return true;
 }
 
-static size_t posix_ss_refresh(SaveStateStore *self, const char *rom_name) {
-    PosixSaveState *st = (PosixSaveState *)self->user;
+/* Re-scan st->rom_dir for "<digits>.SAV" entries into st->entries, sorted
+ * newest-first.  Leaves entry_count == 0 if the directory doesn't exist. */
+static void posix_rescan_entries(PosixSaveState *st) {
     st->entry_count = 0;
-
-    char dir_name[9];
-    save_state_store_dir_name(rom_name, dir_name);
-    snprintf(st->rom_dir, sizeof(st->rom_dir), "%s/%s", st->base_dir, dir_name);
 
     DIR *dir = opendir(st->rom_dir);
     if (dir == NULL) {
-        return 0;
+        return;
     }
 
     struct dirent *de;
@@ -75,6 +72,16 @@ static size_t posix_ss_refresh(SaveStateStore *self, const char *rom_name) {
     closedir(dir);
 
     qsort(st->entries, st->entry_count, sizeof(*st->entries), compare_entry_desc);
+}
+
+static size_t posix_ss_refresh(SaveStateStore *self, const char *rom_name) {
+    PosixSaveState *st = (PosixSaveState *)self->user;
+
+    char dir_name[9];
+    save_state_store_dir_name(rom_name, dir_name);
+    snprintf(st->rom_dir, sizeof(st->rom_dir), "%s/%s", st->base_dir, dir_name);
+
+    posix_rescan_entries(st);
     return st->entry_count;
 }
 
@@ -149,22 +156,23 @@ static bool posix_ss_save(SaveStateStore *self, SaveStateBlob *blob) {
 
     /* Re-scan rom_dir (already set by the most recent refresh()) so
      * count()/entry() reflect the newly written file. */
-    st->entry_count = 0;
-    DIR *dir = opendir(st->rom_dir);
-    if (dir != NULL) {
-        struct dirent *de;
-        while (st->entry_count < SAVE_STATE_STORE_MAX_ENTRIES &&
-               (de = readdir(dir)) != NULL) {
-            uint32_t e;
-            if (!parse_save_name(de->d_name, &e)) continue;
-            st->entries[st->entry_count].elapsed_seconds = e;
-            save_state_format_elapsed(e, st->entries[st->entry_count].label,
-                                      sizeof(st->entries[st->entry_count].label));
-            ++st->entry_count;
-        }
-        closedir(dir);
-    }
-    qsort(st->entries, st->entry_count, sizeof(*st->entries), compare_entry_desc);
+    posix_rescan_entries(st);
+    return true;
+}
+
+static bool posix_ss_delete(SaveStateStore *self, size_t index) {
+    PosixSaveState *st = (PosixSaveState *)self->user;
+    if (index >= st->entry_count) return false;
+
+    char file_name[13];
+    save_state_store_file_name(st->entries[index].elapsed_seconds, file_name);
+
+    char path[POSIX_SS_DIR_MAX + 14];
+    snprintf(path, sizeof(path), "%s/%s", st->rom_dir, file_name);
+
+    if (remove(path) != 0) return false;
+
+    posix_rescan_entries(st);
     return true;
 }
 
@@ -216,6 +224,7 @@ bool save_state_store_posix_init(SaveStateStore *out, const char *base_dir) {
     out->load      = posix_ss_load;
     out->save      = posix_ss_save;
     out->clear_all = posix_ss_clear_all;
+    out->delete_entry = posix_ss_delete;
     return true;
 }
 

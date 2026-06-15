@@ -196,6 +196,19 @@ static void shell_render_current(AppShell *shell) {
         rom_menu_render_confirm(&shell->menu_fb,
                                 "Clear all save states?",
                                 "This cannot be undone.");
+    } else if (shell->state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE) {
+        const SaveStateEntry *e = shell->save_store != NULL
+            ? shell->save_store->entry(shell->save_store, (size_t)shell->pending_delete_index)
+            : NULL;
+        char detail[32];
+        if (e != NULL) {
+            snprintf(detail, sizeof(detail), "Save: %s", e->label);
+        } else {
+            detail[0] = '\0';
+        }
+        rom_menu_render_confirm(&shell->menu_fb,
+                                "Delete this save state?",
+                                detail);
     } else {
         rom_menu_render(&shell->menu, shell->source,
                         &shell->menu_fb, shell->status);
@@ -343,7 +356,8 @@ bool app_shell_in_menu(const AppShell *shell) {
                              shell->state == APP_SHELL_STATE_IMPORT ||
                              shell->state == APP_SHELL_STATE_CONFIRM_ERASE ||
                              shell->state == APP_SHELL_STATE_SAVE_MENU ||
-                             shell->state == APP_SHELL_STATE_CONFIRM_CLEAR_SAVES);
+                             shell->state == APP_SHELL_STATE_CONFIRM_CLEAR_SAVES ||
+                             shell->state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE);
 }
 
 const NesFrameBuffer *app_shell_menu_framebuffer(const AppShell *shell) {
@@ -439,6 +453,28 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         return out;
     }
 
+    if (shell->state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE) {
+        uint8_t pressed = (uint8_t)(~prev & curr);
+        if ((pressed & NES_BUTTON_A) != 0u) {
+            bool ok = shell->save_store != NULL &&
+                shell->save_store->delete_entry(shell->save_store,
+                                                 (size_t)shell->pending_delete_index);
+            shell_set_status(shell, ok ? "Save state deleted" : "Delete failed");
+            shell->state = APP_SHELL_STATE_SAVE_MENU;
+            /* Keep the selection visible even if the deleted entry was at
+             * the bottom of a scrolled list. */
+            if (shell->save_menu.top > shell->save_menu.selected) {
+                shell->save_menu.top = shell->save_menu.selected;
+            }
+        } else if ((pressed & NES_BUTTON_B) != 0u) {
+            shell_set_status(shell, "");
+            shell->state = APP_SHELL_STATE_SAVE_MENU;
+        }
+        shell_render_current(shell);
+        shell->prev_buttons = curr;
+        return out;
+    }
+
     if (shell->state == APP_SHELL_STATE_SAVE_MENU) {
         int chosen = -1;
         SaveMenuResult r = save_menu_step(&shell->save_menu, shell->save_store,
@@ -465,6 +501,9 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
             } else {
                 shell_set_status(shell, "Load failed");
             }
+        } else if (r == SAVE_MENU_RESULT_DELETE) {
+            shell->pending_delete_index = chosen;
+            shell->state = APP_SHELL_STATE_CONFIRM_DELETE_SAVE;
         } else if (r == SAVE_MENU_RESULT_CLEAR_ALL) {
             shell->state = APP_SHELL_STATE_CONFIRM_CLEAR_SAVES;
         } else if (r == SAVE_MENU_RESULT_BACK) {

@@ -71,6 +71,12 @@ struct SaveStateStore {
      * call.  Returns true on success, including when there was nothing to
      * delete.  On success, count() becomes 0. */
     bool (*clear_all)(SaveStateStore *self);
+
+    /* Delete the save state at index (0..count()-1) for the ROM named in the
+     * most recent refresh() call.  On success, re-scans so count()/entry()
+     * reflect the removal.  Returns false if index is out of range or the
+     * delete fails. */
+    bool (*delete_entry)(SaveStateStore *self, size_t index);
 };
 
 /* Derive an 8.3-safe, uppercase directory name from a ROM's display name:

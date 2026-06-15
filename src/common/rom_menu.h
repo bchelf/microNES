@@ -81,6 +81,7 @@ typedef struct {
 typedef enum {
     SAVE_MENU_RESULT_NONE = 0,
     SAVE_MENU_RESULT_LOAD,      /* user picked a save state; *out_index set */
+    SAVE_MENU_RESULT_DELETE,    /* user pressed Select on a save state; *out_index set */
     SAVE_MENU_RESULT_CLEAR_ALL, /* user picked "Clear all save states" */
     SAVE_MENU_RESULT_BACK,      /* user picked "Back to ROM menu" (or B) */
 } SaveMenuResult;
@@ -93,8 +94,9 @@ void save_menu_init(SaveMenu *menu);
 void save_menu_select_elapsed(SaveMenu *menu, SaveStateStore *store,
                               uint32_t elapsed_seconds);
 
-/* Process one frame of input.  On SAVE_MENU_RESULT_LOAD, *out_index receives
- * the save-state entry index (0..store->count()-1). */
+/* Process one frame of input.  On SAVE_MENU_RESULT_LOAD or
+ * SAVE_MENU_RESULT_DELETE, *out_index receives the save-state entry index
+ * (0..store->count()-1). */
 SaveMenuResult save_menu_step(SaveMenu *menu,
                               SaveStateStore *store,
                               uint8_t prev_buttons,

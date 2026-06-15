@@ -161,6 +161,19 @@ static bool sd_ss_save(SaveStateStore *self, SaveStateBlob *blob) {
     return true;
 }
 
+static bool sd_ss_delete(SaveStateStore *self, size_t index) {
+    SdSaveState *st = (SdSaveState *)self->user;
+    if (index >= st->entry_count || st->rom_dir_cluster == 0u) return false;
+
+    char file_name[13];
+    save_state_store_file_name(st->entries[index].elapsed_seconds, file_name);
+
+    if (!fat32_delete_file(st->rom_dir_cluster, file_name)) return false;
+
+    rescan_entries(st);
+    return true;
+}
+
 static bool sd_ss_clear_all(SaveStateStore *self) {
     SdSaveState *st = (SdSaveState *)self->user;
     if (st->rom_dir_cluster == 0u) {
@@ -193,5 +206,6 @@ bool save_state_store_sd_init(SaveStateStore *out) {
     out->load      = sd_ss_load;
     out->save      = sd_ss_save;
     out->clear_all = sd_ss_clear_all;
+    out->delete_entry = sd_ss_delete;
     return true;
 }

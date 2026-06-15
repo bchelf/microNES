@@ -220,6 +220,15 @@ static void test_posix_store_roundtrip(void) {
     EXPECT(c0 != NULL && c0->elapsed_seconds == 101u,
            "entry 0 is now the colliding save (101)");
 
+    /* delete_entry removes just the targeted entry and re-scans. */
+    EXPECT(store.delete_entry(&store, 1), "delete_entry index 1 (elapsed=100)");
+    EXPECT(store.count(&store) == 2, "count == 2 after delete_entry");
+    const SaveStateEntry *d0 = store.entry(&store, 0);
+    const SaveStateEntry *d1 = store.entry(&store, 1);
+    EXPECT(d0 != NULL && d0->elapsed_seconds == 101u, "entry 0 still 101 after delete");
+    EXPECT(d1 != NULL && d1->elapsed_seconds == 50u, "entry 1 is now 50 after delete");
+    EXPECT(!store.delete_entry(&store, 5), "delete_entry out of range fails");
+
     EXPECT(store.clear_all(&store), "clear_all");
     EXPECT(store.count(&store) == 0, "count == 0 after clear_all");
 
@@ -321,6 +330,29 @@ static void test_save_menu_navigation(void) {
     /* Fall back to 0 when no entry matches. */
     save_menu_select_elapsed(&menu, &store, 999999u);
     EXPECT(menu.selected == 0, "select_elapsed falls back to 0 on no match");
+
+    save_tick(&menu, &store, &prev, 0, &idx);
+
+    /* Select on a save-state entry (selected == 0) returns DELETE with
+     * out_index set. */
+    idx = -1;
+    r = save_tick(&menu, &store, &prev, NES_BUTTON_SELECT, &idx);
+    EXPECT(r == SAVE_MENU_RESULT_DELETE, "select on save entry returns DELETE");
+    EXPECT(idx == 0, "delete index == 0");
+    save_tick(&menu, &store, &prev, 0, &idx);
+
+    /* Navigate to "Clear all save states" (index 3); Select there is a
+     * no-op since it's not a save-state entry. */
+    for (int i = 0; i < 3; ++i) {
+        save_tick(&menu, &store, &prev, NES_BUTTON_DOWN, &idx);
+        save_tick(&menu, &store, &prev, 0, &idx);
+    }
+    EXPECT(menu.selected == 3, "navigated to Clear all save states");
+    idx = -1;
+    r = save_tick(&menu, &store, &prev, NES_BUTTON_SELECT, &idx);
+    EXPECT(r == SAVE_MENU_RESULT_NONE, "select on Clear all is a no-op");
+    EXPECT(idx == -1, "out_index untouched for non-DELETE result");
+    save_tick(&menu, &store, &prev, 0, &idx);
 
     EXPECT(store.clear_all(&store), "clear_all (menu test)");
 
@@ -458,6 +490,111 @@ static void test_app_shell_save_flow(uint8_t *rom, size_t rom_size) {
     rmdir(tmpdir);
 }
 
+/* --- Section E: AppShell Select-to-delete confirmation flow --- */
+
+static void test_app_shell_delete_save_state(uint8_t *rom, size_t rom_size) {
+    char tmpl[] = "/tmp/micrones_ss_e_XXXXXX";
+    char *tmpdir = mkdtemp(tmpl);
+    EXPECT(tmpdir != NULL, "mkdtemp for delete-confirm test");
+    if (tmpdir == NULL) return;
+
+    SaveStateStore store;
+    EXPECT(save_state_store_posix_init(&store, tmpdir), "posix store init (delete test)");
+
+    FakeSource src;
+    RomSource  rom_source;
+    fake_init(&src, &rom_source, rom, rom_size);
+
+    Nes nes;
+    nes_init(&nes);
+
+    AppShell shell;
+    app_shell_init(&shell, &rom_source, &nes);
+    app_shell_set_save_store(&shell, &store);
+
+    /* Frame 1: release everything so prev_buttons becomes 0. */
+    shell_tick(&shell, 0);
+
+    /* Frame 2: Start launches the (only, supported) entry. */
+    AppShellFrame f = shell_tick(&shell, NES_BUTTON_START);
+    EXPECT(f.just_entered_run, "start launches rom");
+
+    for (int i = 0; i < 3; ++i) {
+        EXPECT(nes_step_frame(shell.nes), "step running nes");
+    }
+
+    /* Frame 3: release (unlatches exit/save combos). */
+    shell_tick(&shell, 0);
+
+    /* Frame 4: Up+Start creates the first save state (elapsed == 0). */
+    shell_tick(&shell, (uint8_t)(NES_BUTTON_UP | NES_BUTTON_START));
+
+    /* Frame 5: release (unlatches save combo). */
+    shell_tick(&shell, 0);
+
+    /* Frame 6: Up+Start creates a second save state.  It collides with
+     * elapsed == 0 and is rewritten to elapsed == 1. */
+    shell_tick(&shell, (uint8_t)(NES_BUTTON_UP | NES_BUTTON_START));
+    EXPECT(shell.loaded_save_elapsed_seconds == 1u, "second save resolves to elapsed=1");
+
+    /* Frame 7: release (unlatches save combo). */
+    shell_tick(&shell, 0);
+
+    /* Frame 8: Down+Start exits to the save-state menu (two saves present). */
+    f = shell_tick(&shell, (uint8_t)(NES_BUTTON_DOWN | NES_BUTTON_START));
+    EXPECT(f.just_entered_menu, "exit combo fires");
+    EXPECT(shell.state == APP_SHELL_STATE_SAVE_MENU, "shell now SAVE_MENU");
+    EXPECT(store.refresh(&store, "Test Rom") == 2, "two save states on disk");
+    EXPECT(shell.save_menu.selected == 0, "save menu defaults to the just-made save (elapsed=1)");
+
+    /* Frame 9: release. */
+    shell_tick(&shell, 0);
+
+    /* Frame 10: Select on entry 0 -> confirm-delete modal. */
+    shell_tick(&shell, NES_BUTTON_SELECT);
+    EXPECT(shell.state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE, "confirm-delete modal shown");
+    EXPECT(shell.pending_delete_index == 0, "pending delete index == 0");
+
+    /* Frame 11: release. */
+    shell_tick(&shell, 0);
+
+    /* Frame 12: B cancels back to SAVE_MENU without deleting. */
+    shell_tick(&shell, NES_BUTTON_B);
+    EXPECT(shell.state == APP_SHELL_STATE_SAVE_MENU, "B cancels back to SAVE_MENU");
+    EXPECT(store.refresh(&store, "Test Rom") == 2, "both saves survive cancel");
+
+    /* Frame 13: release. */
+    shell_tick(&shell, 0);
+
+    /* Frame 14: Select on entry 0 again -> confirm-delete modal. */
+    shell_tick(&shell, NES_BUTTON_SELECT);
+    EXPECT(shell.state == APP_SHELL_STATE_CONFIRM_DELETE_SAVE, "confirm-delete modal shown again");
+
+    /* Frame 15: release. */
+    shell_tick(&shell, 0);
+
+    /* Frame 16: A confirms -> deletes entry 0 (elapsed=1) and returns to SAVE_MENU. */
+    shell_tick(&shell, NES_BUTTON_A);
+    EXPECT(shell.state == APP_SHELL_STATE_SAVE_MENU, "A returns to SAVE_MENU");
+    EXPECT(store.refresh(&store, "Test Rom") == 1, "one save state remains after delete");
+    {
+        const SaveStateEntry *e0 = store.entry(&store, 0);
+        EXPECT(e0 != NULL && e0->elapsed_seconds == 0u, "remaining save is elapsed=0");
+    }
+
+    app_shell_destroy(&shell);
+    nes_destroy(&nes);
+    EXPECT(store.clear_all(&store), "clear_all (delete test)");
+    save_state_store_posix_destroy(&store);
+
+    char dir_name[9];
+    save_state_store_dir_name("Test Rom", dir_name);
+    char rom_dir_path[1100];
+    snprintf(rom_dir_path, sizeof(rom_dir_path), "%s/%s", tmpdir, dir_name);
+    rmdir(rom_dir_path);
+    rmdir(tmpdir);
+}
+
 int main(void) {
     static uint8_t rom[16 + 32768];
     build_synthetic_rom(rom, sizeof(rom));
@@ -466,6 +603,7 @@ int main(void) {
     test_posix_store_roundtrip();
     test_save_menu_navigation();
     test_app_shell_save_flow(rom, sizeof(rom));
+    test_app_shell_delete_save_state(rom, sizeof(rom));
 
     if (g_failures == 0) {
         printf("save_state_smoke: OK\n");
