@@ -2,6 +2,7 @@
 
 #include "sd_spi.h"
 
+#include <ctype.h>
 #include <string.h>
 
 typedef struct {
@@ -23,6 +24,12 @@ typedef struct {
     uint32_t fat_cached_sector;
     uint8_t  fat_cache[512];
     bool     fat_cache_valid;
+
+    /* Write support: total data clusters (for free-cluster scans) and a
+     * "search from here" hint to avoid rescanning from cluster 2 every
+     * time. */
+    uint32_t total_clusters;
+    uint32_t next_free_hint;
 } Fat32State;
 
 static Fat32State s_fs;
@@ -88,6 +95,12 @@ static bool parse_bpb(const uint8_t *bpb, uint32_t partition_lba) {
     s_fs.partition_lba = partition_lba;
     s_fs.fat_lba       = partition_lba + s_fs.reserved_sectors;
     s_fs.data_lba      = s_fs.fat_lba + (uint32_t)s_fs.num_fats * s_fs.sectors_per_fat;
+
+    uint32_t total_sectors = rd32(&bpb[32]);
+    uint32_t reserved_for_fats = s_fs.reserved_sectors + (uint32_t)s_fs.num_fats * s_fs.sectors_per_fat;
+    uint32_t data_sectors = (total_sectors > reserved_for_fats) ? total_sectors - reserved_for_fats : 0u;
+    s_fs.total_clusters = data_sectors / s_fs.sectors_per_cluster;
+    s_fs.next_free_hint = 2u;
     return true;
 }
 
@@ -362,4 +375,439 @@ size_t fat32_read(Fat32File *f, uint8_t *buf, size_t size) {
     }
 
     return total_read;
+}
+
+/* ------------------------------------------------------------------ */
+/* Write support                                                        */
+/* ------------------------------------------------------------------ */
+
+static bool write_sector(uint32_t lba, const uint8_t *buf) {
+    return sd_write_block(lba, buf) == SD_OK;
+}
+
+static void wr16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+}
+
+static void wr32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+}
+
+/* Write a FAT32 entry (low 28 bits of `value`, high 4 bits of the existing
+ * entry preserved), mirrored across all `num_fats` copies.  Keeps the
+ * one-sector FAT read cache coherent. */
+static bool fat_set_entry(uint32_t cluster, uint32_t value) {
+    uint32_t fat_offset     = cluster * 4u;
+    uint32_t sector_in_fat  = fat_offset / s_fs.bytes_per_sector;
+    uint32_t entry_offset   = fat_offset % s_fs.bytes_per_sector;
+    uint32_t primary_sector = s_fs.fat_lba + sector_in_fat;
+
+    uint8_t sec[512];
+    if (s_fs.fat_cache_valid && s_fs.fat_cached_sector == primary_sector) {
+        memcpy(sec, s_fs.fat_cache, sizeof(sec));
+    } else {
+        if (!read_sector(primary_sector, sec)) return false;
+    }
+
+    uint32_t old = rd32(&sec[entry_offset]);
+    uint32_t updated = (old & 0xF0000000u) | (value & 0x0FFFFFFFu);
+    wr32(&sec[entry_offset], updated);
+
+    for (uint8_t i = 0; i < s_fs.num_fats; ++i) {
+        uint32_t sector = s_fs.fat_lba + (uint32_t)i * s_fs.sectors_per_fat + sector_in_fat;
+        if (!write_sector(sector, sec)) return false;
+    }
+
+    s_fs.fat_cached_sector = primary_sector;
+    memcpy(s_fs.fat_cache, sec, sizeof(sec));
+    s_fs.fat_cache_valid = true;
+    return true;
+}
+
+/* Zero every sector of `cluster`'s data. */
+static bool zero_cluster(uint32_t cluster) {
+    uint8_t zero[512] = { 0 };
+    uint32_t lba = cluster_first_lba(cluster);
+    for (uint8_t i = 0; i < s_fs.sectors_per_cluster; ++i) {
+        if (!write_sector(lba + i, zero)) return false;
+    }
+    return true;
+}
+
+/* Find a free (unallocated, FAT entry == 0) cluster, searching from
+ * next_free_hint and wrapping around.  Returns 0 if the volume is full. */
+static uint32_t find_free_cluster(void) {
+    uint32_t start = (s_fs.next_free_hint >= 2u) ? s_fs.next_free_hint : 2u;
+    uint32_t limit = s_fs.total_clusters + 2u;
+
+    for (uint32_t c = start; c < limit; ++c) {
+        if (fat_entry(c) == 0u) {
+            s_fs.next_free_hint = c + 1u;
+            return c;
+        }
+    }
+    for (uint32_t c = 2u; c < start; ++c) {
+        if (fat_entry(c) == 0u) {
+            s_fs.next_free_hint = c + 1u;
+            return c;
+        }
+    }
+    return 0u;
+}
+
+/* Free every cluster in the chain starting at `first` (no-op if first < 2
+ * or already EOF). */
+static bool free_cluster_chain(uint32_t first) {
+    uint32_t c = first;
+    bool first_iter = true;
+    while (c >= 2u && !cluster_is_eof(c)) {
+        uint32_t next = fat_entry(c);
+        if (!fat_set_entry(c, 0u)) return false;
+        if (first_iter) {
+            if (c < s_fs.next_free_hint) s_fs.next_free_hint = c;
+            first_iter = false;
+        }
+        if (cluster_is_eof(next)) break;
+        c = next;
+    }
+    return true;
+}
+
+/* Allocate a chain of `count` freshly-zeroed clusters, terminated with an
+ * EOF marker.  On failure, frees any clusters already allocated for this
+ * chain and returns false. */
+static bool alloc_cluster_chain(uint32_t count, uint32_t *out_first) {
+    uint32_t first = 0u, prev = 0u;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t c = find_free_cluster();
+        if (c == 0u || !zero_cluster(c) || !fat_set_entry(c, 0x0FFFFFFFu)) {
+            if (first != 0u) free_cluster_chain(first);
+            return false;
+        }
+        if (prev != 0u) {
+            if (!fat_set_entry(prev, c)) {
+                free_cluster_chain(first);
+                return false;
+            }
+        } else {
+            first = c;
+        }
+        prev = c;
+    }
+    *out_first = first;
+    return true;
+}
+
+/* Convert a name like "SUPERMAR" or "00001234.SAV" into the fixed 11-byte
+ * (8.3, space-padded, uppercase) on-disk form. */
+static void to_fat_name(const char *name, uint8_t out[11]) {
+    memset(out, ' ', 11);
+
+    const char *dot = strchr(name, '.');
+    size_t name_len = dot != NULL ? (size_t)(dot - name) : strlen(name);
+    if (name_len > 8u) name_len = 8u;
+    for (size_t i = 0; i < name_len; ++i) {
+        out[i] = (uint8_t)toupper((unsigned char)name[i]);
+    }
+
+    if (dot != NULL) {
+        const char *ext = dot + 1;
+        size_t ext_len = strlen(ext);
+        if (ext_len > 3u) ext_len = 3u;
+        for (size_t i = 0; i < ext_len; ++i) {
+            out[8u + i] = (uint8_t)toupper((unsigned char)ext[i]);
+        }
+    }
+}
+
+static void build_dir_entry(uint8_t entry[32], const uint8_t name83[11], uint8_t attr,
+                            uint32_t first_cluster, uint32_t size) {
+    memset(entry, 0, 32);
+    memcpy(entry, name83, 11);
+    entry[11] = attr;
+    wr16(&entry[20], (uint16_t)(first_cluster >> 16));
+    wr16(&entry[26], (uint16_t)(first_cluster & 0xFFFFu));
+    wr32(&entry[28], size);
+}
+
+typedef struct {
+    uint32_t lba;
+    uint32_t offset; /* byte offset of the 32-byte entry within sector `lba` */
+} DirSlot;
+
+/* Advance (cluster, sector_in_cluster) to the next sector in a cluster
+ * chain.  Returns false at end-of-chain. */
+typedef struct {
+    uint32_t cluster;
+    uint32_t sector_in_cluster;
+} ChainPos;
+
+static bool chain_pos_advance(ChainPos *pos) {
+    ++pos->sector_in_cluster;
+    if (pos->sector_in_cluster < s_fs.sectors_per_cluster) {
+        return true;
+    }
+    pos->sector_in_cluster = 0u;
+    uint32_t next = fat_entry(pos->cluster);
+    if (cluster_is_eof(next)) return false;
+    pos->cluster = next;
+    return true;
+}
+
+/* Search dir_cluster (0 = root) for an entry whose raw 11-byte name matches
+ * name83.  Skips free/deleted/LFN/volume-id entries.  On success, fills
+ * *out_slot (if non-NULL) with its on-disk location and *out_entry (if
+ * non-NULL) with its parsed contents. */
+static bool dir_find_entry_slot(uint32_t dir_cluster, const uint8_t name83[11],
+                                DirSlot *out_slot, Fat32Entry *out_entry) {
+    ChainPos pos = { (dir_cluster == 0u) ? s_fs.root_cluster : dir_cluster, 0u };
+    uint8_t sec[512];
+
+    for (;;) {
+        uint32_t lba = cluster_first_lba(pos.cluster) + pos.sector_in_cluster;
+        if (!read_sector(lba, sec)) return false;
+
+        for (int i = 0; i < 16; ++i) {
+            const uint8_t *e = &sec[i * 32];
+            if (e[0] == 0x00u) return false; /* end of directory */
+            if (e[0] == 0xE5u) continue;
+            if (e[11] == FAT32_ATTR_LFN) continue;
+            if ((e[11] & FAT32_ATTR_VOLUME_ID) != 0u) continue;
+
+            if (memcmp(e, name83, 11) == 0) {
+                if (out_slot != NULL) {
+                    out_slot->lba    = lba;
+                    out_slot->offset = (uint32_t)i * 32u;
+                }
+                if (out_entry != NULL) {
+                    memset(out_entry, 0, sizeof(*out_entry));
+                    out_entry->attr = e[11];
+                    out_entry->size = rd32(&e[28]);
+                    uint32_t hi = rd16(&e[20]);
+                    uint32_t lo = rd16(&e[26]);
+                    out_entry->first_cluster = (hi << 16) | lo;
+                    format_short_name(e, out_entry->name);
+                }
+                return true;
+            }
+        }
+
+        if (!chain_pos_advance(&pos)) return false;
+    }
+}
+
+/* Find the first free (0x00 or 0xE5) directory entry slot in dir_cluster
+ * (0 = root), extending the directory's cluster chain with a fresh zeroed
+ * cluster if it is full.  Returns false only on allocation/IO failure. */
+static bool dir_find_free_slot(uint32_t dir_cluster, DirSlot *out) {
+    ChainPos pos = { (dir_cluster == 0u) ? s_fs.root_cluster : dir_cluster, 0u };
+    uint8_t sec[512];
+
+    for (;;) {
+        uint32_t lba = cluster_first_lba(pos.cluster) + pos.sector_in_cluster;
+        if (!read_sector(lba, sec)) return false;
+
+        for (int i = 0; i < 16; ++i) {
+            uint8_t b = sec[i * 32];
+            if (b == 0x00u || b == 0xE5u) {
+                out->lba    = lba;
+                out->offset = (uint32_t)i * 32u;
+                return true;
+            }
+        }
+
+        if (!chain_pos_advance(&pos)) {
+            uint32_t new_cluster;
+            if (!alloc_cluster_chain(1u, &new_cluster)) return false;
+            if (!fat_set_entry(pos.cluster, new_cluster)) return false;
+
+            out->lba    = cluster_first_lba(new_cluster);
+            out->offset = 0u;
+            return true;
+        }
+    }
+}
+
+static bool write_dir_slot(const DirSlot *slot, const uint8_t entry[32]) {
+    uint8_t sec[512];
+    if (!read_sector(slot->lba, sec)) return false;
+    memcpy(&sec[slot->offset], entry, 32);
+    return write_sector(slot->lba, sec);
+}
+
+uint32_t fat32_find_dir(uint32_t dir_cluster, const char *name83) {
+    if (!s_fs.mounted) return 0u;
+
+    uint8_t raw[11];
+    to_fat_name(name83, raw);
+
+    Fat32Entry e;
+    if (dir_find_entry_slot(dir_cluster, raw, NULL, &e) &&
+        (e.attr & FAT32_ATTR_DIRECTORY) != 0u) {
+        return e.first_cluster;
+    }
+    return 0u;
+}
+
+uint32_t fat32_find_or_create_dir(uint32_t dir_cluster, const char *name83) {
+    if (!s_fs.mounted) return 0u;
+
+    uint8_t raw[11];
+    to_fat_name(name83, raw);
+
+    Fat32Entry existing;
+    if (dir_find_entry_slot(dir_cluster, raw, NULL, &existing)) {
+        return (existing.attr & FAT32_ATTR_DIRECTORY) != 0u ? existing.first_cluster : 0u;
+    }
+
+    uint32_t new_cluster;
+    if (!alloc_cluster_chain(1u, &new_cluster)) return 0u;
+
+    /* "." and ".." entries.  ".." points at cluster 0 when the parent is
+     * the root directory, per the FAT32 convention. */
+    uint8_t dot[11], dotdot[11];
+    memset(dot, ' ', sizeof(dot));
+    memset(dotdot, ' ', sizeof(dotdot));
+    dot[0] = '.';
+    dotdot[0] = '.';
+    dotdot[1] = '.';
+
+    uint32_t parent_for_dotdot =
+        (dir_cluster == 0u || dir_cluster == s_fs.root_cluster) ? 0u : dir_cluster;
+
+    uint8_t sec[512];
+    memset(sec, 0, sizeof(sec));
+    build_dir_entry(&sec[0],  dot,    FAT32_ATTR_DIRECTORY, new_cluster, 0u);
+    build_dir_entry(&sec[32], dotdot, FAT32_ATTR_DIRECTORY, parent_for_dotdot, 0u);
+    if (!write_sector(cluster_first_lba(new_cluster), sec)) {
+        free_cluster_chain(new_cluster);
+        return 0u;
+    }
+
+    DirSlot slot;
+    if (!dir_find_free_slot(dir_cluster, &slot)) {
+        free_cluster_chain(new_cluster);
+        return 0u;
+    }
+
+    uint8_t entry[32];
+    build_dir_entry(entry, raw, FAT32_ATTR_DIRECTORY, new_cluster, 0u);
+    if (!write_dir_slot(&slot, entry)) {
+        free_cluster_chain(new_cluster);
+        return 0u;
+    }
+
+    return new_cluster;
+}
+
+bool fat32_find_file(uint32_t dir_cluster, const char *name83, Fat32Entry *out) {
+    if (!s_fs.mounted) return false;
+
+    uint8_t raw[11];
+    to_fat_name(name83, raw);
+
+    Fat32Entry e;
+    if (dir_find_entry_slot(dir_cluster, raw, NULL, &e) &&
+        (e.attr & FAT32_ATTR_DIRECTORY) == 0u) {
+        if (out != NULL) *out = e;
+        return true;
+    }
+    return false;
+}
+
+bool fat32_write_file(uint32_t dir_cluster, const char *name83,
+                      const uint8_t *data, uint32_t size) {
+    if (!s_fs.mounted) return false;
+
+    uint8_t raw[11];
+    to_fat_name(name83, raw);
+
+    uint32_t cluster_bytes = (uint32_t)s_fs.sectors_per_cluster * 512u;
+    uint32_t clusters_needed = (size + cluster_bytes - 1u) / cluster_bytes;
+    if (clusters_needed == 0u) clusters_needed = 1u;
+
+    Fat32Entry existing;
+    DirSlot slot;
+    bool exists = dir_find_entry_slot(dir_cluster, raw, &slot, &existing);
+    if (exists && (existing.attr & FAT32_ATTR_DIRECTORY) != 0u) {
+        return false; /* name collides with a directory */
+    }
+
+    if (exists && existing.first_cluster >= 2u) {
+        if (!free_cluster_chain(existing.first_cluster)) return false;
+    }
+
+    uint32_t first_cluster;
+    if (!alloc_cluster_chain(clusters_needed, &first_cluster)) return false;
+
+    uint32_t cluster  = first_cluster;
+    uint32_t written  = 0u;
+    uint8_t  buf[512];
+    while (written < size) {
+        for (uint8_t s = 0; s < s_fs.sectors_per_cluster && written < size; ++s) {
+            uint32_t chunk = size - written;
+            uint32_t lba = cluster_first_lba(cluster) + s;
+            if (chunk >= 512u) {
+                if (!write_sector(lba, data + written)) {
+                    free_cluster_chain(first_cluster);
+                    return false;
+                }
+                written += 512u;
+            } else {
+                memset(buf, 0, sizeof(buf));
+                memcpy(buf, data + written, chunk);
+                if (!write_sector(lba, buf)) {
+                    free_cluster_chain(first_cluster);
+                    return false;
+                }
+                written += chunk;
+            }
+        }
+        if (written < size) {
+            cluster = fat_entry(cluster);
+            if (cluster_is_eof(cluster)) break;
+        }
+    }
+
+    uint8_t entry[32];
+    if (exists) {
+        build_dir_entry(entry, raw, existing.attr, first_cluster, size);
+        return write_dir_slot(&slot, entry);
+    }
+
+    if (!dir_find_free_slot(dir_cluster, &slot)) {
+        free_cluster_chain(first_cluster);
+        return false;
+    }
+    build_dir_entry(entry, raw, FAT32_ATTR_ARCHIVE, first_cluster, size);
+    return write_dir_slot(&slot, entry);
+}
+
+bool fat32_delete_file(uint32_t dir_cluster, const char *name83) {
+    if (!s_fs.mounted) return false;
+
+    uint8_t raw[11];
+    to_fat_name(name83, raw);
+
+    Fat32Entry existing;
+    DirSlot slot;
+    if (!dir_find_entry_slot(dir_cluster, raw, &slot, &existing)) {
+        return true; /* nothing to delete */
+    }
+    if ((existing.attr & FAT32_ATTR_DIRECTORY) != 0u) {
+        return false; /* refuse to delete directories */
+    }
+
+    if (existing.first_cluster >= 2u) {
+        if (!free_cluster_chain(existing.first_cluster)) return false;
+    }
+
+    uint8_t sec[512];
+    if (!read_sector(slot.lba, sec)) return false;
+    sec[slot.offset] = 0xE5u;
+    return write_sector(slot.lba, sec);
 }

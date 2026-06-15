@@ -548,6 +548,222 @@ void rom_menu_render_confirm(NesFrameBuffer *fb,
     draw_centered_text(fb, BOX_Y + 38, "A = confirm   B = cancel", MENU_TEXT_FAINT);
 }
 
+void save_menu_init(SaveMenu *menu) {
+    if (menu == NULL) {
+        return;
+    }
+    memset(menu, 0, sizeof(*menu));
+}
+
+static int save_menu_total_items(SaveStateStore *store) {
+    size_t n = store != NULL ? store->count(store) : 0;
+    return (int)n + 2; /* "Clear all save states" + "Back to ROM menu" */
+}
+
+static void save_menu_clamp_top(SaveMenu *menu, int n) {
+    int max_top = n > MENU_VISIBLE_ROWS ? n - MENU_VISIBLE_ROWS : 0;
+    menu->top = clamp_int(menu->top, 0, max_top);
+}
+
+static void save_menu_move_selection(SaveMenu *menu, SaveStateStore *store, int dir) {
+    int n = save_menu_total_items(store);
+    if (n <= 0) {
+        menu->selected = 0;
+        menu->top = 0;
+        return;
+    }
+    int next = menu->selected + dir;
+    if (next < 0) {
+        next = n - 1;  /* wrap to bottom */
+    } else if (next >= n) {
+        next = 0;      /* wrap to top */
+    }
+    menu->selected = next;
+
+    if (menu->selected < menu->top) {
+        menu->top = menu->selected;
+    } else if (menu->selected >= menu->top + MENU_VISIBLE_ROWS) {
+        menu->top = menu->selected - (MENU_VISIBLE_ROWS - 1);
+    }
+    save_menu_clamp_top(menu, n);
+}
+
+void save_menu_select_elapsed(SaveMenu *menu, SaveStateStore *store,
+                              uint32_t elapsed_seconds) {
+    if (menu == NULL) {
+        return;
+    }
+    memset(menu, 0, sizeof(*menu));
+
+    size_t count = store != NULL ? store->count(store) : 0;
+    for (size_t i = 0; i < count; ++i) {
+        const SaveStateEntry *e = store->entry(store, i);
+        if (e != NULL && e->elapsed_seconds == elapsed_seconds) {
+            menu->selected = (int)i;
+            break;
+        }
+    }
+
+    if (menu->selected >= MENU_VISIBLE_ROWS) {
+        menu->top = menu->selected - (MENU_VISIBLE_ROWS - 1);
+    }
+    save_menu_clamp_top(menu, save_menu_total_items(store));
+}
+
+SaveMenuResult save_menu_step(SaveMenu *menu,
+                              SaveStateStore *store,
+                              uint8_t prev_buttons,
+                              uint8_t curr_buttons,
+                              int *out_index) {
+    if (menu == NULL) {
+        return SAVE_MENU_RESULT_NONE;
+    }
+
+    uint8_t pressed = (uint8_t)(~prev_buttons & curr_buttons);
+
+    bool up_held   = (curr_buttons & NES_BUTTON_UP)   != 0;
+    bool down_held = (curr_buttons & NES_BUTTON_DOWN) != 0;
+    int  dir = 0;
+    if (up_held && !down_held)        dir = -1;
+    else if (down_held && !up_held)   dir = +1;
+
+    if (dir == 0) {
+        menu->hold_dir = 0;
+        menu->hold_frames = 0;
+    } else if (dir != menu->hold_dir) {
+        save_menu_move_selection(menu, store, dir);
+        menu->hold_dir = dir;
+        menu->hold_frames = 1;
+    } else {
+        ++menu->hold_frames;
+        if (menu->hold_frames >= (uint32_t)MENU_HOLD_INITIAL_DELAY) {
+            uint32_t since = menu->hold_frames - (uint32_t)MENU_HOLD_INITIAL_DELAY;
+            if ((since % (uint32_t)MENU_HOLD_REPEAT_RATE) == 0u) {
+                save_menu_move_selection(menu, store, dir);
+            }
+        }
+    }
+
+    size_t count = store != NULL ? store->count(store) : 0;
+    int n = (int)count + 2;
+    menu->selected = clamp_int(menu->selected, 0, n - 1);
+    save_menu_clamp_top(menu, n);
+
+    if ((pressed & (NES_BUTTON_START | NES_BUTTON_A)) != 0u) {
+        if (menu->selected == (int)count) {
+            return SAVE_MENU_RESULT_CLEAR_ALL;
+        }
+        if (menu->selected == (int)count + 1) {
+            return SAVE_MENU_RESULT_BACK;
+        }
+        if (out_index != NULL) {
+            *out_index = menu->selected;
+        }
+        return SAVE_MENU_RESULT_LOAD;
+    }
+
+    if ((pressed & NES_BUTTON_B) != 0u) {
+        return SAVE_MENU_RESULT_BACK;
+    }
+
+    return SAVE_MENU_RESULT_NONE;
+}
+
+void save_menu_render(const SaveMenu *menu,
+                      SaveStateStore *store,
+                      NesFrameBuffer *fb,
+                      const char *rom_name,
+                      const char *status) {
+    if (fb == NULL) {
+        return;
+    }
+
+    clear_fb(fb, MENU_BG);
+
+    fill_rect(fb, MENU_SAFE_LEFT, MENU_HEADER_TOP_Y,
+              MENU_SAFE_WIDTH, MENU_HEADER_H, MENU_BAR);
+    font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, MENU_HEADER_TOP_Y + 4,
+                      "Save States", MENU_TEXT);
+
+    if (rom_name != NULL && rom_name[0] != '\0') {
+        char trim[ROM_SOURCE_NAME_MAX];
+        snprintf(trim, sizeof(trim), "%s", rom_name);
+        int max_chars = (MENU_SAFE_WIDTH / 2) / FONT5X7_CELL_W;
+        if (max_chars < 1) max_chars = 1;
+        if ((int)strlen(trim) > max_chars) {
+            trim[max_chars] = '\0';
+        }
+        int w = font5x7_text_width(trim);
+        font5x7_draw_text(fb, MENU_SAFE_RIGHT - w - 4, MENU_HEADER_TOP_Y + 4, trim, MENU_TEXT);
+    }
+
+    font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, MENU_COL_HDR_Y, "Elapsed Time", MENU_TEXT_FAINT);
+
+    size_t count = store != NULL ? store->count(store) : 0;
+    int total_items = (int)count + 2;
+
+    int top = menu != NULL ? menu->top : 0;
+    int selected = menu != NULL ? menu->selected : 0;
+    int rows_to_draw = total_items - top;
+    if (rows_to_draw > MENU_VISIBLE_ROWS) {
+        rows_to_draw = MENU_VISIBLE_ROWS;
+    }
+
+    enum { SAVE_ACTION_H = MENU_ITEM_H + 2 };
+
+    for (int row = 0; row < rows_to_draw; ++row) {
+        int idx = top + row;
+        int y = MENU_LIST_TOP_Y;
+        for (int r = 0; r < row; ++r) {
+            int ri = top + r;
+            y += (ri >= (int)count) ? SAVE_ACTION_H : MENU_ITEM_H;
+        }
+        bool is_selected = (idx == selected);
+        int item_h = (idx >= (int)count) ? SAVE_ACTION_H : MENU_ITEM_H;
+
+        if (idx >= (int)count) {
+            if (idx == (int)count) {
+                fill_rect(fb, MENU_SAFE_LEFT + 4, y, MENU_SAFE_WIDTH - 8, 1, MENU_TEXT_DIM);
+                y += 2;
+            }
+            if (is_selected) {
+                fill_rect(fb, MENU_SAFE_LEFT, y, MENU_SAFE_WIDTH, item_h, MENU_BAR);
+            }
+            const char *label;
+            uint8_t color;
+            if (idx == (int)count) {
+                label = "Clear all save states";
+                color = is_selected ? MENU_TEXT : MENU_TEXT_ERROR;
+            } else {
+                label = "Back to ROM menu";
+                color = is_selected ? MENU_TEXT : MENU_TEXT_FAINT;
+            }
+            font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, y + 2, label, color);
+            continue;
+        }
+
+        if (is_selected) {
+            fill_rect(fb, MENU_SAFE_LEFT, y, MENU_SAFE_WIDTH, MENU_ITEM_H, MENU_BAR);
+        }
+
+        const SaveStateEntry *e = store->entry(store, (size_t)idx);
+        char label[32];
+        if (e != NULL) {
+            snprintf(label, sizeof(label), "Save %d - %s", (int)idx + 1, e->label);
+        } else {
+            snprintf(label, sizeof(label), "Save %d", (int)idx + 1);
+        }
+        font5x7_draw_text(fb, MENU_SAFE_LEFT + 4, y + 1, label, MENU_TEXT);
+    }
+
+    if (status != NULL && status[0] != '\0') {
+        draw_centered_text(fb, MENU_STATUS_Y, status, MENU_TEXT_ERROR);
+    }
+
+    const char *footer = "Up/Down move  Start/A load  B back";
+    draw_centered_text(fb, MENU_FOOTER_Y, footer, MENU_TEXT_FAINT);
+}
+
 void rom_menu_render_loading(NesFrameBuffer *fb, const char *name, int pct) {
     if (fb == NULL) {
         return;

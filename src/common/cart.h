@@ -94,4 +94,10 @@ bool cart_load_ines_const_memory(
 void cart_unload(NesCartridge *cartridge);
 bool cart_is_loaded(const NesCartridge *cartridge);
 
+// Recompute chr_row_pixels from the current chr_data contents, reusing the
+// existing chr_row_pixels allocation.  Call after restoring CHR RAM contents
+// (e.g. from a save state) so cached tile pixels match the new chr_data.
+// No-op if chr_row_pixels is NULL or chr_size is 0.
+void cart_rebuild_chr_row_cache(NesCartridge *cartridge);
+
 #endif

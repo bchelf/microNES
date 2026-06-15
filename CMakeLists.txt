@@ -65,6 +65,7 @@ set(MICRONES_COMMON_SOURCES
     src/common/nrom.c
     src/common/ppu.c
     src/common/rom_menu.c
+    src/common/save_state.c
     src/common/smb1_bg_classifier.c
     src/common/uxrom.c
 )
@@ -108,6 +109,19 @@ if (MICRONES_PLATFORM STREQUAL "host")
         micrones_core
     )
 
+    add_executable(micrones_save_state_smoke
+        src/host/save_state_store_posix.c
+        tests/save_state_smoke.c
+    )
+
+    target_include_directories(micrones_save_state_smoke PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/src/host
+    )
+
+    target_link_libraries(micrones_save_state_smoke PRIVATE
+        micrones_core
+    )
+
     if (SDL3_FOUND)
         add_executable(micrones
             src/host/audio_sdl.c
@@ -140,6 +154,7 @@ elseif (MICRONES_PLATFORM STREQUAL "pico")
         src/pico/rom_source_flash_cache.c
         src/pico/rom_source_flash_fs.c
         src/pico/rom_source_sd.c
+        src/pico/save_state_store_sd.c
         src/pico/sd_spi.c
     )
     set(MICRONES_PICO_COMMON_LIBS
