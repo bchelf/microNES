@@ -9,6 +9,12 @@
 #define EXIT_COMBO_MASK   (NES_BUTTON_DOWN | NES_BUTTON_START)
 #define SAVE_COMBO_MASK   (NES_BUTTON_UP   | NES_BUTTON_START)
 
+/* Scratch buffer for save-state capture/apply.  SaveStateBlob is ~21KB,
+ * far larger than the default Pico per-core stack (a few KB), so it must
+ * never be a stack-local in shell_create_save_state() or
+ * app_shell_begin_frame(); both run on the Pico's tiny main-loop stack. */
+static SaveStateBlob s_save_state_scratch;
+
 static void shell_set_status(AppShell *shell, const char *fmt, ...) {
     if (shell == NULL) {
         return;
@@ -137,18 +143,25 @@ static void shell_create_save_state(AppShell *shell) {
     uint32_t rom_image_size = (uint32_t)shell->current_rom_size;
     uint32_t elapsed_seconds = (uint32_t)(nes_frame_count(shell->nes) / 60u);
 
-    SaveStateBlob blob;
-    save_state_capture(shell->nes, rom_checksum, rom_image_size, elapsed_seconds, &blob);
+    SaveStateBlob *blob = &s_save_state_scratch;
+    save_state_capture(shell->nes, rom_checksum, rom_image_size, elapsed_seconds, blob);
 
     shell->save_store->refresh(shell->save_store, entry->name);
-    if (shell->save_store->save(shell->save_store, &blob)) {
+    if (shell->save_store->save(shell->save_store, blob)) {
         shell->loaded_from_save = true;
         shell->loaded_save_elapsed_seconds = elapsed_seconds;
         char label[12];
         save_state_format_elapsed(elapsed_seconds, label, sizeof(label));
         shell_set_status(shell, "Saved %s", label);
+        printf("[save_state] create: rom=\"%s\" elapsed=%u checksum=0x%08x size=%u -> OK\n",
+               entry->name, (unsigned)elapsed_seconds, (unsigned)rom_checksum,
+               (unsigned)rom_image_size);
     } else {
         shell_set_status(shell, "Save failed");
+        printf("[save_state] create: rom=\"%s\" elapsed=%u checksum=0x%08x size=%u -> "
+               "save_store->save FAILED\n",
+               entry->name, (unsigned)elapsed_seconds, (unsigned)rom_checksum,
+               (unsigned)rom_image_size);
     }
 }
 
@@ -434,26 +447,33 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
         SaveMenuResult r = save_menu_step(&shell->save_menu, shell->save_store,
                                           prev, curr, &chosen);
         if (r == SAVE_MENU_RESULT_LOAD) {
-            SaveStateBlob blob;
-            if (shell->save_store != NULL &&
-                shell->save_store->load(shell->save_store, (size_t)chosen, &blob) &&
-                shell_launch(shell, shell->save_menu_rom_index)) {
+            SaveStateBlob *blob = &s_save_state_scratch;
+            bool load_ok = shell->save_store != NULL &&
+                shell->save_store->load(shell->save_store, (size_t)chosen, blob);
+            if (load_ok && shell_launch(shell, shell->save_menu_rom_index)) {
                 uint32_t rom_checksum   = shell_rom_checksum(shell);
                 uint32_t rom_image_size = (uint32_t)shell->current_rom_size;
-                if (save_state_apply(shell->nes, &blob, rom_checksum, rom_image_size)) {
+                if (save_state_apply(shell->nes, blob, rom_checksum, rom_image_size)) {
                     shell->loaded_from_save = true;
-                    shell->loaded_save_elapsed_seconds = blob.header.elapsed_seconds;
+                    shell->loaded_save_elapsed_seconds = blob->header.elapsed_seconds;
                     out.just_entered_run = true;
                     out.stepping_nes = true;
                     NesControllerState forwarded = { 0 };
                     out.forwarded = forwarded;
+                    printf("[save_state] load: index=%d elapsed=%u -> OK\n",
+                           chosen, (unsigned)blob->header.elapsed_seconds);
                 } else {
+                    printf("[save_state] load: index=%d -> save_state_apply rejected blob "
+                           "(rom_checksum=0x%08x rom_image_size=%u)\n",
+                           chosen, (unsigned)rom_checksum, (unsigned)rom_image_size);
                     shell_unload_running(shell);
                     shell->state = APP_SHELL_STATE_SAVE_MENU;
                     shell_set_status(shell, "Load failed: bad save");
                 }
             } else {
                 shell_set_status(shell, "Load failed");
+                printf("[save_state] load: index=%d -> %s\n", chosen,
+                       !load_ok ? "save_store->load FAILED" : "shell_launch FAILED");
             }
         } else if (r == SAVE_MENU_RESULT_CLEAR_ALL) {
             shell->state = APP_SHELL_STATE_CONFIRM_CLEAR_SAVES;
