@@ -60,8 +60,12 @@ struct SaveStateStore {
 
     /* Write a new save-state blob for the ROM named in the most recent
      * refresh() call.  On success, re-scans so count()/entry() reflect the
-     * new state. */
-    bool (*save)(SaveStateStore *self, const SaveStateBlob *blob);
+     * new state.  If writing collides with an existing save's filename,
+     * blob->header.elapsed_seconds (and its crc32) are updated in place to
+     * match the elapsed time actually recorded on disk, so callers should
+     * re-read blob->header.elapsed_seconds afterward rather than assuming
+     * it is unchanged. */
+    bool (*save)(SaveStateStore *self, SaveStateBlob *blob);
 
     /* Delete all save states for the ROM named in the most recent refresh()
      * call.  Returns true on success, including when there was nothing to

@@ -13,6 +13,7 @@
 #include "save_state_store.h"
 #include "save_state_store_posix.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,6 +201,24 @@ static void test_posix_store_roundtrip(void) {
     SaveStateBlob loaded;
     EXPECT(store.load(&store, 0, &loaded), "load entry 0");
     EXPECT(loaded.header.elapsed_seconds == 100u, "loaded entry 0 has elapsed=100");
+
+    /* A third save colliding with the existing elapsed=100 entry should be
+     * written as elapsed=101, and save() must update the blob in place
+     * (header.elapsed_seconds + crc32) so the caller highlights the entry
+     * that was actually written, not the pre-collision time. */
+    SaveStateBlob blob_c = blob_a;
+    blob_c.header.elapsed_seconds = 100u;
+    EXPECT(store.save(&store, &blob_c), "save colliding elapsed=100");
+    EXPECT(blob_c.header.elapsed_seconds == 101u,
+           "colliding save rewrites elapsed_seconds to 101");
+    EXPECT(blob_c.crc32 == save_state_crc32((const uint8_t *)&blob_c,
+                                             offsetof(SaveStateBlob, crc32)),
+           "colliding save recomputes crc32");
+    EXPECT(store.count(&store) == 3, "count == 3 after colliding save");
+
+    const SaveStateEntry *c0 = store.entry(&store, 0);
+    EXPECT(c0 != NULL && c0->elapsed_seconds == 101u,
+           "entry 0 is now the colliding save (101)");
 
     EXPECT(store.clear_all(&store), "clear_all");
     EXPECT(store.count(&store) == 0, "count == 0 after clear_all");

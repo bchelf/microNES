@@ -241,25 +241,15 @@ bool save_state_apply(Nes *nes, const SaveStateBlob *blob,
     }
     if (blob->header.magic != SAVE_STATE_MAGIC ||
         blob->header.version != SAVE_STATE_VERSION) {
-        printf("[save_state] apply: bad header (magic=0x%08x version=%u, "
-               "expected magic=0x%08x version=%u)\n",
-               (unsigned)blob->header.magic, (unsigned)blob->header.version,
-               (unsigned)SAVE_STATE_MAGIC, (unsigned)SAVE_STATE_VERSION);
         return false;
     }
     uint32_t crc = save_state_crc32((const uint8_t *)blob,
                                      offsetof(SaveStateBlob, crc32));
     if (crc != blob->crc32) {
-        printf("[save_state] apply: CRC mismatch (computed=0x%08x stored=0x%08x)\n",
-               (unsigned)crc, (unsigned)blob->crc32);
         return false;
     }
     if (blob->header.rom_checksum != rom_checksum ||
         blob->header.rom_image_size != rom_image_size) {
-        printf("[save_state] apply: ROM mismatch (blob checksum=0x%08x size=%u, "
-               "current checksum=0x%08x size=%u)\n",
-               (unsigned)blob->header.rom_checksum, (unsigned)blob->header.rom_image_size,
-               (unsigned)rom_checksum, (unsigned)rom_image_size);
         return false;
     }
 

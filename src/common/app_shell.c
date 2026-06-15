@@ -148,20 +148,17 @@ static void shell_create_save_state(AppShell *shell) {
 
     shell->save_store->refresh(shell->save_store, entry->name);
     if (shell->save_store->save(shell->save_store, blob)) {
+        /* save() may have shifted header.elapsed_seconds (and crc32) to
+         * resolve a filename collision with an existing entry; use the
+         * post-save value so the save menu highlights the entry that was
+         * actually written, not the pre-collision time. */
         shell->loaded_from_save = true;
-        shell->loaded_save_elapsed_seconds = elapsed_seconds;
+        shell->loaded_save_elapsed_seconds = blob->header.elapsed_seconds;
         char label[12];
-        save_state_format_elapsed(elapsed_seconds, label, sizeof(label));
+        save_state_format_elapsed(blob->header.elapsed_seconds, label, sizeof(label));
         shell_set_status(shell, "Saved %s", label);
-        printf("[save_state] create: rom=\"%s\" elapsed=%u checksum=0x%08x size=%u -> OK\n",
-               entry->name, (unsigned)elapsed_seconds, (unsigned)rom_checksum,
-               (unsigned)rom_image_size);
     } else {
         shell_set_status(shell, "Save failed");
-        printf("[save_state] create: rom=\"%s\" elapsed=%u checksum=0x%08x size=%u -> "
-               "save_store->save FAILED\n",
-               entry->name, (unsigned)elapsed_seconds, (unsigned)rom_checksum,
-               (unsigned)rom_image_size);
     }
 }
 
@@ -460,20 +457,13 @@ AppShellFrame app_shell_begin_frame(AppShell *shell, NesControllerState input) {
                     out.stepping_nes = true;
                     NesControllerState forwarded = { 0 };
                     out.forwarded = forwarded;
-                    printf("[save_state] load: index=%d elapsed=%u -> OK\n",
-                           chosen, (unsigned)blob->header.elapsed_seconds);
                 } else {
-                    printf("[save_state] load: index=%d -> save_state_apply rejected blob "
-                           "(rom_checksum=0x%08x rom_image_size=%u)\n",
-                           chosen, (unsigned)rom_checksum, (unsigned)rom_image_size);
                     shell_unload_running(shell);
                     shell->state = APP_SHELL_STATE_SAVE_MENU;
                     shell_set_status(shell, "Load failed: bad save");
                 }
             } else {
                 shell_set_status(shell, "Load failed");
-                printf("[save_state] load: index=%d -> %s\n", chosen,
-                       !load_ok ? "save_store->load FAILED" : "shell_launch FAILED");
             }
         } else if (r == SAVE_MENU_RESULT_CLEAR_ALL) {
             shell->state = APP_SHELL_STATE_CONFIRM_CLEAR_SAVES;

@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,7 +106,7 @@ static bool posix_ss_load(SaveStateStore *self, size_t index, SaveStateBlob *out
     return got == sizeof(*out);
 }
 
-static bool posix_ss_save(SaveStateStore *self, const SaveStateBlob *blob) {
+static bool posix_ss_save(SaveStateStore *self, SaveStateBlob *blob) {
     PosixSaveState *st = (PosixSaveState *)self->user;
     if (st->rom_dir[0] == '\0') return false;
 
@@ -113,14 +114,16 @@ static bool posix_ss_save(SaveStateStore *self, const SaveStateBlob *blob) {
     mkdir(st->rom_dir, 0755);
 
     uint32_t elapsed = blob->header.elapsed_seconds;
+    uint32_t candidate = elapsed;
     char path[POSIX_SS_DIR_MAX + 14];
 
     /* Resolve filename collisions (multiple saves within the same second) by
      * trying elapsed, elapsed+1, ... elapsed+59 for a free name.  Falls back
      * to overwriting the last-tried name if all are taken. */
     for (int delta = 0; delta < 60; ++delta) {
+        candidate = elapsed + (uint32_t)delta;
         char file_name[13];
-        save_state_store_file_name(elapsed + (uint32_t)delta, file_name);
+        save_state_store_file_name(candidate, file_name);
         snprintf(path, sizeof(path), "%s/%s", st->rom_dir, file_name);
 
         FILE *probe = fopen(path, "rb");
@@ -128,6 +131,14 @@ static bool posix_ss_save(SaveStateStore *self, const SaveStateBlob *blob) {
             break;
         }
         fclose(probe);
+    }
+
+    /* If a collision pushed the on-disk filename's elapsed time away from
+     * the blob's recorded value, update the blob (and its CRC) to match so
+     * the save menu highlights the entry that was actually written. */
+    if (candidate != elapsed) {
+        blob->header.elapsed_seconds = candidate;
+        blob->crc32 = save_state_crc32((const uint8_t *)blob, offsetof(SaveStateBlob, crc32));
     }
 
     FILE *fp = fopen(path, "wb");

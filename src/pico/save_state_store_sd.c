@@ -3,7 +3,7 @@
 #include "fat32.h"
 
 #include <ctype.h>
-#include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -82,11 +82,6 @@ static size_t sd_ss_refresh(SaveStateStore *self, const char *rom_name) {
         : 0u;
 
     rescan_entries(st);
-    printf("[save_state_sd] refresh: rom=\"%s\" dir=\"%s\" saves_root=%u rom_dir=%u "
-           "entries=%u\n",
-           rom_name != NULL ? rom_name : "", st->rom_dir_name,
-           (unsigned)saves_root, (unsigned)st->rom_dir_cluster,
-           (unsigned)st->entry_count);
     return st->entry_count;
 }
 
@@ -103,68 +98,40 @@ static const SaveStateEntry *sd_ss_entry(SaveStateStore *self, size_t index) {
 
 static bool sd_ss_load(SaveStateStore *self, size_t index, SaveStateBlob *out) {
     SdSaveState *st = (SdSaveState *)self->user;
-    if (index >= st->entry_count || st->rom_dir_cluster == 0u) {
-        printf("[save_state_sd] load: index=%u rejected (entry_count=%u rom_dir=%u)\n",
-               (unsigned)index, (unsigned)st->entry_count, (unsigned)st->rom_dir_cluster);
-        return false;
-    }
+    if (index >= st->entry_count || st->rom_dir_cluster == 0u) return false;
 
     char file_name[13];
     save_state_store_file_name(st->entries[index].elapsed_seconds, file_name);
 
     Fat32Entry fe;
-    if (!fat32_find_file(st->rom_dir_cluster, file_name, &fe)) {
-        printf("[save_state_sd] load: index=%u file \"%s\" not found in dir=%u\n",
-               (unsigned)index, file_name, (unsigned)st->rom_dir_cluster);
-        return false;
-    }
-    if (fe.size != sizeof(*out)) {
-        printf("[save_state_sd] load: index=%u file \"%s\" size mismatch "
-               "(file=%u expected=%u)\n",
-               (unsigned)index, file_name, (unsigned)fe.size, (unsigned)sizeof(*out));
-        return false;
-    }
+    if (!fat32_find_file(st->rom_dir_cluster, file_name, &fe)) return false;
+    if (fe.size != sizeof(*out)) return false;
 
     Fat32File f;
     fat32_open_file(&f, &fe);
-    size_t n = fat32_read(&f, (uint8_t *)out, sizeof(*out));
-    if (n != sizeof(*out)) {
-        printf("[save_state_sd] load: index=%u file \"%s\" short read (%u of %u bytes)\n",
-               (unsigned)index, file_name, (unsigned)n, (unsigned)sizeof(*out));
-        return false;
-    }
-    printf("[save_state_sd] load: index=%u file \"%s\" -> OK (%u bytes)\n",
-           (unsigned)index, file_name, (unsigned)n);
-    return true;
+    return fat32_read(&f, (uint8_t *)out, sizeof(*out)) == sizeof(*out);
 }
 
-static bool sd_ss_save(SaveStateStore *self, const SaveStateBlob *blob) {
+static bool sd_ss_save(SaveStateStore *self, SaveStateBlob *blob) {
     SdSaveState *st = (SdSaveState *)self->user;
 
     uint32_t saves_root = fat32_find_or_create_dir(0u, SAVES_ROOT_DIR);
-    if (saves_root == 0u) {
-        printf("[save_state_sd] save: fat32_find_or_create_dir(\"%s\") failed\n",
-               SAVES_ROOT_DIR);
-        return false;
-    }
+    if (saves_root == 0u) return false;
 
     if (st->rom_dir_cluster == 0u) {
         st->rom_dir_cluster = fat32_find_or_create_dir(saves_root, st->rom_dir_name);
-        if (st->rom_dir_cluster == 0u) {
-            printf("[save_state_sd] save: fat32_find_or_create_dir(\"%s\") failed\n",
-                   st->rom_dir_name);
-            return false;
-        }
+        if (st->rom_dir_cluster == 0u) return false;
     }
 
     uint32_t elapsed = blob->header.elapsed_seconds;
+    uint32_t candidate = elapsed;
     char file_name[13];
 
     /* Resolve filename collisions the same way as the host store: try
      * elapsed, elapsed+1, ... elapsed+59 for a name not already listed.
      * Falls back to overwriting the last-tried name if all are taken. */
     for (int delta = 0; delta < 60; ++delta) {
-        uint32_t candidate = elapsed + (uint32_t)delta;
+        candidate = elapsed + (uint32_t)delta;
         save_state_store_file_name(candidate, file_name);
 
         bool taken = false;
@@ -177,15 +144,19 @@ static bool sd_ss_save(SaveStateStore *self, const SaveStateBlob *blob) {
         if (!taken) break;
     }
 
+    /* If a collision pushed the on-disk filename's elapsed time away from
+     * the blob's recorded value, update the blob (and its CRC) to match so
+     * the save menu highlights the entry that was actually written. */
+    if (candidate != elapsed) {
+        blob->header.elapsed_seconds = candidate;
+        blob->crc32 = save_state_crc32((const uint8_t *)blob, offsetof(SaveStateBlob, crc32));
+    }
+
     if (!fat32_write_file(st->rom_dir_cluster, file_name,
                           (const uint8_t *)blob, (uint32_t)sizeof(*blob))) {
-        printf("[save_state_sd] save: fat32_write_file(\"%s\", %u bytes) failed\n",
-               file_name, (unsigned)sizeof(*blob));
         return false;
     }
 
-    printf("[save_state_sd] save: wrote \"%s\" (%u bytes) to dir=%u\n",
-           file_name, (unsigned)sizeof(*blob), (unsigned)st->rom_dir_cluster);
     rescan_entries(st);
     return true;
 }
