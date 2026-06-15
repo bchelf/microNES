@@ -622,6 +622,30 @@ src/common/rom_menu.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/rom_menu.c.s
 .PHONY : src/common/rom_menu.c.s
 
+src/common/save_state.o: src/common/save_state.c.o
+.PHONY : src/common/save_state.o
+
+# target to build an object file
+src/common/save_state.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/save_state.c.o
+.PHONY : src/common/save_state.c.o
+
+src/common/save_state.i: src/common/save_state.c.i
+.PHONY : src/common/save_state.i
+
+# target to preprocess a source file
+src/common/save_state.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/save_state.c.i
+.PHONY : src/common/save_state.c.i
+
+src/common/save_state.s: src/common/save_state.c.s
+.PHONY : src/common/save_state.s
+
+# target to generate assembly for a file
+src/common/save_state.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/micrones_core.dir/build.make CMakeFiles/micrones_core.dir/src/common/save_state.c.s
+.PHONY : src/common/save_state.c.s
+
 src/common/smb1_bg_classifier.o: src/common/smb1_bg_classifier.c.o
 .PHONY : src/common/smb1_bg_classifier.o
 
@@ -764,6 +788,9 @@ help:
 	@echo "... src/common/rom_menu.o"
 	@echo "... src/common/rom_menu.i"
 	@echo "... src/common/rom_menu.s"
+	@echo "... src/common/save_state.o"
+	@echo "... src/common/save_state.i"
+	@echo "... src/common/save_state.s"
 	@echo "... src/common/smb1_bg_classifier.o"
 	@echo "... src/common/smb1_bg_classifier.i"
 	@echo "... src/common/smb1_bg_classifier.s"

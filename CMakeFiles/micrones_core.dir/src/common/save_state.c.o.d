@@ -1,5 +1,6 @@
-CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o: \
-  /home/runner/work/microNES/microNES/src/web/web_main.c \
+CMakeFiles/micrones_core.dir/src/common/save_state.c.o: \
+  /home/runner/work/microNES/microNES/src/common/save_state.c \
+  /home/runner/work/microNES/microNES/src/common/save_state.h \
   /home/runner/work/microNES/microNES/src/common/nes.h \
   /home/runner/work/microNES/microNES/src/common/apu.h \
   /home/runner/work/microNES/microNES/src/common/apu_micrones.h \
@@ -36,16 +37,9 @@ CMakeFiles/micrones_wasm.dir/src/web/web_main.c.o: \
   /home/runner/work/microNES/microNES/src/common/ppu.h \
   /home/runner/work/microNES/microNES/src/common/scanline.h \
   /home/runner/work/microNES/microNES/src/common/uxrom.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/emscripten.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/em_asm.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/em_macros.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/em_types.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/em_js.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/promise.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/stdlib.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/stdlib.h \
+  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/stdio.h \
+  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/wasi/api.h \
   /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/features.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/alloca.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/wget.h \
-  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/emscripten/version.h
+  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/compat/string.h \
+  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/string.h \
+  /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/emscripten/cache/sysroot/include/strings.h

@@ -28,6 +28,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/runner/work/microNES/microNES/src/common/nrom.c" "CMakeFiles/micrones_core.dir/src/common/nrom.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/nrom.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/ppu.c" "CMakeFiles/micrones_core.dir/src/common/ppu.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/ppu.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/rom_menu.c" "CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o.d"
+  "/home/runner/work/microNES/microNES/src/common/save_state.c" "CMakeFiles/micrones_core.dir/src/common/save_state.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/save_state.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/smb1_bg_classifier.c" "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o.d"
   "/home/runner/work/microNES/microNES/src/common/uxrom.c" "CMakeFiles/micrones_core.dir/src/common/uxrom.c.o" "gcc" "CMakeFiles/micrones_core.dir/src/common/uxrom.c.o.d"
   )

@@ -8,7 +8,7 @@ events:
       - "CMakeLists.txt:33 (project)"
     message: |
       The target system is: Emscripten - 1 - x86
-      The host system is: Linux - 6.17.0-1015-azure - x86_64
+      The host system is: Linux - 6.17.0-1018-azure - x86_64
   -
     kind: "message-v1"
     backtrace:
@@ -190,7 +190,7 @@ events:
       clang version 20.0.0git (https:/github.com/llvm/llvm-project 1d810ece2b2c8fab77720493864257f0ea3336a9)
       Target: wasm32-unknown-emscripten
       Thread model: posix
-      InstalledDir: /home/runner/work/_temp/46152bd9-706a-4173-8ff3-1cc8c4b288b2/emsdk-main/upstream/bin
+      InstalledDir: /home/runner/work/_temp/226e8304-2d41-4769-b389-c341bf99d724/emsdk-main/upstream/bin
   -
     kind: "message-v1"
     backtrace:

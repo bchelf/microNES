@@ -39,6 +39,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/micrones_core.dir/src/common/ppu.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o"
   "CMakeFiles/micrones_core.dir/src/common/rom_menu.c.o.d"
+  "CMakeFiles/micrones_core.dir/src/common/save_state.c.o"
+  "CMakeFiles/micrones_core.dir/src/common/save_state.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o"
   "CMakeFiles/micrones_core.dir/src/common/smb1_bg_classifier.c.o.d"
   "CMakeFiles/micrones_core.dir/src/common/uxrom.c.o"
