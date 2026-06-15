@@ -595,6 +595,101 @@ static void test_app_shell_delete_save_state(uint8_t *rom, size_t rom_size) {
     rmdir(tmpdir);
 }
 
+/* Reproduces "while in a save state, returning to the menu selects the next
+ * entry instead of the one currently loaded".  The Down+Start exit combo
+ * leaves Down held on the frame the save menu appears; save_menu_step()
+ * must not mistake that held Down for a fresh "move down" press and bump
+ * the selection away from the entry that was just re-highlighted. */
+static void test_exit_combo_keeps_loaded_entry_selected(uint8_t *rom, size_t rom_size) {
+    char tmpl[] = "/tmp/micrones_ss_repro_XXXXXX";
+    char *tmpdir = mkdtemp(tmpl);
+    EXPECT(tmpdir != NULL, "mkdtemp for exit-combo test");
+    if (tmpdir == NULL) return;
+
+    SaveStateStore store;
+    EXPECT(save_state_store_posix_init(&store, tmpdir), "posix store init (exit-combo test)");
+    store.refresh(&store, "Test Rom");
+
+    {
+        Nes cap_nes;
+        nes_init(&cap_nes);
+        EXPECT(nes_load_cartridge_const_memory(&cap_nes, rom, rom_size), "load rom for exit-combo captures");
+        nes_reset(&cap_nes);
+        uint32_t rom_checksum   = save_state_crc32(rom, rom_size);
+        uint32_t rom_image_size = (uint32_t)rom_size;
+
+        SaveStateBlob blob;
+        save_state_capture(&cap_nes, rom_checksum, rom_image_size, 10u, &blob);
+        EXPECT(store.save(&store, &blob), "save elapsed=10");
+        save_state_capture(&cap_nes, rom_checksum, rom_image_size, 20u, &blob);
+        EXPECT(store.save(&store, &blob), "save elapsed=20");
+        save_state_capture(&cap_nes, rom_checksum, rom_image_size, 30u, &blob);
+        EXPECT(store.save(&store, &blob), "save elapsed=30");
+        nes_destroy(&cap_nes);
+    }
+    EXPECT(store.count(&store) == 3, "three saves present (exit-combo test)");
+
+    FakeSource src;
+    RomSource  rom_source;
+    fake_init(&src, &rom_source, rom, rom_size);
+
+    Nes nes;
+    nes_init(&nes);
+
+    AppShell shell;
+    app_shell_init(&shell, &rom_source, &nes);
+    app_shell_set_save_store(&shell, &store);
+
+    shell_tick(&shell, 0);
+    AppShellFrame f = shell_tick(&shell, NES_BUTTON_START);
+    EXPECT(f.just_entered_run, "start launches rom (exit-combo test)");
+
+    shell_tick(&shell, 0);
+    f = shell_tick(&shell, (uint8_t)(NES_BUTTON_DOWN | NES_BUTTON_START));
+    EXPECT(shell.state == APP_SHELL_STATE_SAVE_MENU, "shell now SAVE_MENU (exit-combo test)");
+    EXPECT(shell.save_menu.selected == 0, "save menu defaults to 0 (exit-combo test)");
+
+    shell_tick(&shell, 0);
+
+    /* Move down to entry index 1 (elapsed=20, "Save 2"). */
+    shell_tick(&shell, NES_BUTTON_DOWN);
+    EXPECT(shell.save_menu.selected == 1, "moved to entry 1 (exit-combo test)");
+    shell_tick(&shell, 0);
+
+    /* Start loads entry 1 (elapsed=20). */
+    f = shell_tick(&shell, NES_BUTTON_START);
+    EXPECT(f.just_entered_run, "load re-enters RUNNING (exit-combo test)");
+    EXPECT(shell.loaded_save_elapsed_seconds == 20u, "loaded elapsed == 20 (exit-combo test)");
+
+    shell_tick(&shell, 0);
+
+    /* Exit again -> SAVE_MENU should highlight the loaded entry (elapsed=20, index 1). */
+    f = shell_tick(&shell, (uint8_t)(NES_BUTTON_DOWN | NES_BUTTON_START));
+    EXPECT(shell.state == APP_SHELL_STATE_SAVE_MENU, "back in SAVE_MENU (exit-combo test)");
+    EXPECT(shell.save_menu.selected == 1, "save menu re-selects entry 1 (elapsed=20) (exit-combo test)");
+
+    /* The exit combo is typically still held for at least one more frame.
+     * That held Down must not be read as a fresh "move down" press. */
+    shell_tick(&shell, (uint8_t)(NES_BUTTON_DOWN | NES_BUTTON_START));
+    EXPECT(shell.save_menu.selected == 1, "selection unchanged while combo still held (exit-combo test)");
+
+    /* Once the combo is released, the selection should still be entry 1. */
+    shell_tick(&shell, 0);
+    EXPECT(shell.save_menu.selected == 1, "selection unchanged after combo released (exit-combo test)");
+
+    app_shell_destroy(&shell);
+    nes_destroy(&nes);
+    EXPECT(store.clear_all(&store), "clear_all (exit-combo test)");
+    save_state_store_posix_destroy(&store);
+
+    char dir_name[9];
+    save_state_store_dir_name("Test Rom", dir_name);
+    char rom_dir_path[1100];
+    snprintf(rom_dir_path, sizeof(rom_dir_path), "%s/%s", tmpdir, dir_name);
+    rmdir(rom_dir_path);
+    rmdir(tmpdir);
+}
+
 int main(void) {
     static uint8_t rom[16 + 32768];
     build_synthetic_rom(rom, sizeof(rom));
@@ -604,6 +699,7 @@ int main(void) {
     test_save_menu_navigation();
     test_app_shell_save_flow(rom, sizeof(rom));
     test_app_shell_delete_save_state(rom, sizeof(rom));
+    test_exit_combo_keeps_loaded_entry_selected(rom, sizeof(rom));
 
     if (g_failures == 0) {
         printf("save_state_smoke: OK\n");

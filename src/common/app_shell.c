@@ -289,6 +289,21 @@ static void shell_exit_running(AppShell *shell, uint8_t buttons) {
     } else {
         save_menu_init(&shell->save_menu);
     }
+    /* The exit combo (Down+Start) is typically still held on the frame the
+     * save menu appears.  save_menu_step() treats a held Up/Down as a fresh
+     * press whenever it differs from hold_dir, which (after the memset above
+     * reset hold_dir to 0) would immediately bump the selection by one --
+     * landing on "the next" entry instead of the one we just selected.  Seed
+     * hold_dir/hold_frames as if that hold had already been registered, so
+     * the next save_menu_step() call treats it as a continuing hold (subject
+     * to the normal repeat delay) instead of a new navigation press. */
+    if ((buttons & NES_BUTTON_DOWN) != 0u) {
+        shell->save_menu.hold_dir = 1;
+        shell->save_menu.hold_frames = 1;
+    } else if ((buttons & NES_BUTTON_UP) != 0u) {
+        shell->save_menu.hold_dir = -1;
+        shell->save_menu.hold_frames = 1;
+    }
     shell->state = APP_SHELL_STATE_SAVE_MENU;
     shell_render_current(shell);
 }
